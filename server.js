@@ -7,9 +7,8 @@ app.use(express.json({ limit: '2mb' }));
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PORT = process.env.PORT || 3000;
 
-if (!BOT_TOKEN) {
-  console.error('BOT_TOKEN is missing');
-}
+console.log('BOT_TOKEN exists:', !!BOT_TOKEN);
+console.log('BOT_TOKEN preview:', BOT_TOKEN ? BOT_TOKEN.slice(0, 12) + '...' : 'MISSING');
 
 const TELEGRAM_API = BOT_TOKEN
   ? `https://api.telegram.org/bot${BOT_TOKEN}`
@@ -33,11 +32,11 @@ async function sendMessage(chatId, text) {
       }
     );
 
-    console.log('sendMessage OK:', resp.data);
+    console.log('sendMessage OK:', JSON.stringify(resp.data));
   } catch (error) {
     console.error(
       'sendMessage ERROR:',
-      error?.response?.data || error?.message || error
+      JSON.stringify(error?.response?.data || error?.message || error)
     );
   }
 }
@@ -50,44 +49,44 @@ app.get('/health', (_req, res) => {
   res.status(200).send('OK');
 });
 
-app.post('/webhook', (req, res) => {
-  // ВАЖЛИВО: віддаємо 200 одразу
-  res.status(200).send('OK');
+app.post('/webhook', async (req, res) => {
+  try {
+    const update = req.body || {};
+    console.log('Webhook update received');
 
-  // Далі обробляємо вже окремо, щоб не валити webhook
-  setImmediate(async () => {
-    try {
-      const update = req.body || {};
-      console.log('Webhook update:', JSON.stringify(update));
+    res.status(200).send('OK');
 
-      if (update.message) {
-        const msg = update.message;
-        const chatId = msg.chat.id;
-        const text = (msg.text || '').trim();
+    if (update.message) {
+      const chatId = update.message.chat.id;
+      const text = (update.message.text || '').trim();
 
-        console.log('Incoming text:', text);
+      console.log('Incoming text:', text);
 
-        if (/^\/ping$/i.test(text)) {
-          await sendMessage(chatId, 'pong ✅');
-          return;
-        }
-
-        if (/^\/start/i.test(text)) {
-          await sendMessage(chatId, '👋 FreshBlack bot на Railway уже живий.');
-          return;
-        }
-
-        await sendMessage(chatId, `Отримала повідомлення: ${text || '(без тексту)'}`);
+      if (/^\/ping$/i.test(text)) {
+        await sendMessage(chatId, 'pong ✅');
         return;
       }
 
-      if (update.callback_query) {
-        console.log('Callback received');
+      if (/^\/start/i.test(text)) {
+        await sendMessage(chatId, '👋 FreshBlack bot на Railway уже живий.');
+        return;
       }
-    } catch (error) {
-      console.error('WEBHOOK PROCESS ERROR:', error?.stack || error?.message || error);
+
+      await sendMessage(chatId, `Отримала повідомлення: ${text || '(без тексту)'}`);
+      return;
     }
-  });
+
+    if (update.callback_query) {
+      console.log('Callback received');
+    }
+  } catch (error) {
+    console.error('WEBHOOK ERROR:', error?.stack || error?.message || error);
+    try {
+      if (!res.headersSent) {
+        res.status(200).send('OK');
+      }
+    } catch (_) {}
+  }
 });
 
 process.on('unhandledRejection', (reason) => {
