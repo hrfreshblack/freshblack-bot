@@ -17,6 +17,6 @@ app.post('/webhook', (_req, res) => {
   return res.sendStatus(200);
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server started on port ${PORT}`);
+app.listen(3000, '0.0.0.0', () => {
+  console.log('Server started on port 3000');
 });
