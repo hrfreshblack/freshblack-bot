@@ -6,7 +6,7 @@ const PORT = 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyKGRJboSTrZBhLVh52e6kSvYl9XoUMz-AQme81bmrQITiqhzmQ5Rpl5US9-t1rZRzGeg/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwkR5-Qpb-nh7hwWcm4AAoeYpmlUh-_XJCiAXPjv4dyYnqT5qyqOg-X20e8PqPeg9a4DA/exec';
 
 app.use(express.text({ type: '*/*' }));
 
