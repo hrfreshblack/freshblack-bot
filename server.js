@@ -10,9 +10,6 @@ const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyKGRJboSTrZBhL
 
 app.use(express.text({ type: '*/*' }));
 
-// =========================
-// Telegram helpers
-// =========================
 async function telegram(method, payload) {
   try {
     const resp = await axios.post(`${TELEGRAM_API}/${method}`, payload, {
@@ -45,9 +42,6 @@ async function answerCallbackQuery(callbackQueryId, text = '') {
   });
 }
 
-// =========================
-// Apps Script bridge
-// =========================
 async function sendToAppsScript(payload) {
   try {
     const resp = await axios.post(APPS_SCRIPT_URL, payload, {
@@ -66,21 +60,16 @@ async function sendToAppsScript(payload) {
   }
 }
 
-// =========================
-// In-memory sessions
-// =========================
+const employeeSessions = new Map();
 // chatId -> {
 //   employee_id,
 //   full_name,
 //   telegram_chat_id,
 //   checked_in,
-//   mode
+//   mode,
+//   flow: null | 'vacation' | 'sick'
 // }
-const employeeSessions = new Map();
 
-// =========================
-// Menus
-// =========================
 function getMainMenu() {
   return {
     inline_keyboard: [
@@ -120,9 +109,6 @@ function getTimeoffMenu() {
   };
 }
 
-// =========================
-// Helpers
-// =========================
 function getSession(chatId) {
   return employeeSessions.get(String(chatId));
 }
@@ -131,9 +117,70 @@ function saveSession(chatId, session) {
   employeeSessions.set(String(chatId), session);
 }
 
-// =========================
-// Routes
-// =========================
+function parseDate(dateStr) {
+  const m = String(dateStr).trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!m) return null;
+
+  const d = Number(m[1]);
+  const mo = Number(m[2]);
+  const y = Number(m[3]);
+
+  const dt = new Date(y, mo - 1, d);
+  if (
+    dt.getFullYear() !== y ||
+    dt.getMonth() !== mo - 1 ||
+    dt.getDate() !== d
+  ) return null;
+
+  return dt;
+}
+
+function parseDateRangePart(rangePart) {
+  const m = String(rangePart).match(/^\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})\s*$/);
+  if (!m) return null;
+
+  const d1 = parseDate(m[1]);
+  const d2 = parseDate(m[2]);
+  if (!d1 || !d2) return null;
+  if (d2 < d1) return null;
+
+  return {
+    date_from: m[1],
+    date_to: m[2]
+  };
+}
+
+function parseVacationInput(text) {
+  const parts = text.split(';');
+  if (parts.length < 2) return null;
+
+  const range = parseDateRangePart(parts[0]);
+  if (!range) return null;
+
+  const replacement = String(parts.slice(1).join(';')).trim();
+  if (!replacement) return null;
+
+  return {
+    ...range,
+    replacement_person: replacement
+  };
+}
+
+function parseSickInput(text) {
+  const parts = text.split(';');
+  if (parts.length < 2) return null;
+
+  const range = parseDateRangePart(parts[0]);
+  if (!range) return null;
+
+  const comment = String(parts.slice(1).join(';')).trim();
+
+  return {
+    ...range,
+    comment: comment === '-' ? '' : comment
+  };
+}
+
 app.get('/', (_req, res) => {
   res.status(200).send('Bot is running');
 });
@@ -174,12 +221,96 @@ app.post('/webhook', async (req, res) => {
           full_name: fullName || prev.full_name || '',
           telegram_chat_id: String(chatId),
           checked_in: prev.checked_in || false,
-          mode: prev.mode || ''
+          mode: prev.mode || '',
+          flow: null
         });
 
         await sendMessage(chatId, '👋 Вітаю! Оберіть дію:', {
           reply_markup: getMainMenu()
         });
+        return;
+      }
+
+      let session = getSession(chatId);
+
+      if (!session) {
+        await sendMessage(chatId, '⚠️ Спочатку відкрийте бота через ваш персональний QR.');
+        return;
+      }
+
+      if (session.flow === 'vacation') {
+        const parsed = parseVacationInput(text);
+
+        if (!parsed) {
+          await sendMessage(
+            chatId,
+            '⚠️ Невірний формат.\nНадішліть так:\n<code>10.04.2026 - 15.04.2026; Іван Петренко</code>'
+          );
+          return;
+        }
+
+        const result = await sendToAppsScript({
+          action: 'timeoff_request',
+          employee_id: session.employee_id,
+          telegram_chat_id: session.telegram_chat_id,
+          full_name: session.full_name,
+          request_type: 'vacation',
+          date_from: parsed.date_from,
+          date_to: parsed.date_to,
+          replacement_person: parsed.replacement_person,
+          replacement_contact: '',
+          comment: ''
+        });
+
+        session.flow = null;
+        saveSession(chatId, session);
+
+        if (result && result.ok) {
+          await sendMessage(
+            chatId,
+            `✅ Заявку на відпустку створено.\nПеріод: ${parsed.date_from} - ${parsed.date_to}\nЗаміщає: ${parsed.replacement_person}\n\nСтатус: очікує погодження`
+          );
+        } else {
+          await sendMessage(chatId, '⚠️ Не вдалося записати заявку на відпустку.');
+        }
+        return;
+      }
+
+      if (session.flow === 'sick') {
+        const parsed = parseSickInput(text);
+
+        if (!parsed) {
+          await sendMessage(
+            chatId,
+            '⚠️ Невірний формат.\nНадішліть так:\n<code>10.04.2026 - 12.04.2026; температура</code>'
+          );
+          return;
+        }
+
+        const result = await sendToAppsScript({
+          action: 'timeoff_request',
+          employee_id: session.employee_id,
+          telegram_chat_id: session.telegram_chat_id,
+          full_name: session.full_name,
+          request_type: 'sick',
+          date_from: parsed.date_from,
+          date_to: parsed.date_to,
+          replacement_person: '',
+          replacement_contact: '',
+          comment: parsed.comment || ''
+        });
+
+        session.flow = null;
+        saveSession(chatId, session);
+
+        if (result && result.ok) {
+          await sendMessage(
+            chatId,
+            `✅ Заявку на лікарняний створено.\nПеріод: ${parsed.date_from} - ${parsed.date_to}\n\nСтатус: очікує погодження`
+          );
+        } else {
+          await sendMessage(chatId, '⚠️ Не вдалося записати заявку на лікарняний.');
+        }
         return;
       }
 
@@ -324,6 +455,11 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'back_main') {
+        if (session) {
+          session.flow = null;
+          saveSession(chatId, session);
+        }
+
         await sendMessage(chatId, '👋 Вітаю! Оберіть дію:', {
           reply_markup: getMainMenu()
         });
@@ -331,12 +467,34 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'vacation') {
-        await sendMessage(chatId, '🏖 Відпустка\n\nНаступним кроком підключимо подачу заявки.');
+        if (!session || !session.employee_id) {
+          await sendMessage(chatId, '⚠️ Спочатку відкрийте бота через ваш персональний QR.');
+          return;
+        }
+
+        session.flow = 'vacation';
+        saveSession(chatId, session);
+
+        await sendMessage(
+          chatId,
+          '🏖 Відпустка\n\nНадішліть одним повідомленням у форматі:\n<code>10.04.2026 - 15.04.2026; Іван Петренко</code>'
+        );
         return;
       }
 
       if (data === 'sick') {
-        await sendMessage(chatId, '🤒 Лікарняний\n\nНаступним кроком підключимо подачу заявки.');
+        if (!session || !session.employee_id) {
+          await sendMessage(chatId, '⚠️ Спочатку відкрийте бота через ваш персональний QR.');
+          return;
+        }
+
+        session.flow = 'sick';
+        saveSession(chatId, session);
+
+        await sendMessage(
+          chatId,
+          '🤒 Лікарняний\n\nНадішліть одним повідомленням у форматі:\n<code>10.04.2026 - 12.04.2026; температура</code>'
+        );
         return;
       }
 
