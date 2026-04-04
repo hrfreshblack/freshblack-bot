@@ -67,11 +67,16 @@ async function sendToAppsScript(payload) {
 }
 
 // =========================
-// In-memory employee binding
-// Тимчасово: employee_id беремо з payload у /start
+// In-memory sessions
 // =========================
+// chatId -> {
+//   employee_id,
+//   full_name,
+//   telegram_chat_id,
+//   checked_in,
+//   mode
+// }
 const employeeSessions = new Map();
-// chatId -> { employee_id, full_name, telegram_chat_id }
 
 // =========================
 // Menus
@@ -116,6 +121,17 @@ function getTimeoffMenu() {
 }
 
 // =========================
+// Helpers
+// =========================
+function getSession(chatId) {
+  return employeeSessions.get(String(chatId));
+}
+
+function saveSession(chatId, session) {
+  employeeSessions.set(String(chatId), session);
+}
+
+// =========================
 // Routes
 // =========================
 app.get('/', (_req, res) => {
@@ -130,14 +146,9 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
   try {
-    console.log('WEBHOOK HIT');
-
     const rawBody = req.body || '{}';
     const update = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
 
-    // =====================
-    // TEXT MESSAGES
-    // =====================
     if (update.message) {
       const msg = update.message;
       const chatId = msg.chat.id;
@@ -153,18 +164,18 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (/^\/start/i.test(text)) {
-        // Тягнемо employee_id із QR payload
-        // Формат очікуємо: /start FB000152
         const m = text.match(/^\/start\s+([A-Za-z0-9\-_]+)/i);
         const employeeId = m ? String(m[1]).trim() : '';
 
-        if (employeeId) {
-          employeeSessions.set(String(chatId), {
-            employee_id: employeeId,
-            full_name: fullName,
-            telegram_chat_id: String(chatId)
-          });
-        }
+        const prev = getSession(chatId) || {};
+
+        saveSession(chatId, {
+          employee_id: employeeId || prev.employee_id || '',
+          full_name: fullName || prev.full_name || '',
+          telegram_chat_id: String(chatId),
+          checked_in: prev.checked_in || false,
+          mode: prev.mode || ''
+        });
 
         await sendMessage(chatId, '👋 Вітаю! Оберіть дію:', {
           reply_markup: getMainMenu()
@@ -176,24 +187,27 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // =====================
-    // CALLBACK BUTTONS
-    // =====================
     if (update.callback_query) {
       const cq = update.callback_query;
       const callbackId = cq.id;
       const chatId = cq.message.chat.id;
       const data = cq.data || '';
 
-      console.log('Callback data:', data);
-
       await answerCallbackQuery(callbackId);
 
-      const session = employeeSessions.get(String(chatId));
+      let session = getSession(chatId);
 
       if (data === 'checkin') {
         if (!session || !session.employee_id) {
           await sendMessage(chatId, '⚠️ Спочатку відкрийте бота через ваш персональний QR.');
+          return;
+        }
+
+        if (session.checked_in) {
+          await sendMessage(
+            chatId,
+            `ℹ️ Початок робочого дня вже зафіксовано${session.mode ? ` (${session.mode === 'office' ? 'Офіс' : 'Віддалено'})` : ''}.`
+          );
           return;
         }
 
@@ -209,6 +223,11 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
+        if (session.checked_in) {
+          await sendMessage(chatId, 'ℹ️ Вхід уже зафіксовано. Повторно натискати не потрібно.');
+          return;
+        }
+
         const result = await sendToAppsScript({
           action: 'checkin',
           employee_id: session.employee_id,
@@ -220,6 +239,10 @@ app.post('/webhook', async (req, res) => {
         });
 
         if (result && result.ok) {
+          session.checked_in = true;
+          session.mode = 'office';
+          saveSession(chatId, session);
+
           await sendMessage(chatId, '✅ Обрано формат роботи: Офіс\nПочаток робочого дня зафіксовано.');
         } else {
           await sendMessage(chatId, '⚠️ Не вдалося записати вхід у таблицю.');
@@ -230,6 +253,11 @@ app.post('/webhook', async (req, res) => {
       if (data === 'mode_remote') {
         if (!session || !session.employee_id) {
           await sendMessage(chatId, '⚠️ Не знайдено employee_id. Відскануйте QR ще раз.');
+          return;
+        }
+
+        if (session.checked_in) {
+          await sendMessage(chatId, 'ℹ️ Вхід уже зафіксовано. Повторно натискати не потрібно.');
           return;
         }
 
@@ -244,6 +272,10 @@ app.post('/webhook', async (req, res) => {
         });
 
         if (result && result.ok) {
+          session.checked_in = true;
+          session.mode = 'remote';
+          saveSession(chatId, session);
+
           await sendMessage(chatId, '✅ Обрано формат роботи: Віддалено\nПочаток робочого дня зафіксовано.');
         } else {
           await sendMessage(chatId, '⚠️ Не вдалося записати вхід у таблицю.');
@@ -254,6 +286,11 @@ app.post('/webhook', async (req, res) => {
       if (data === 'checkout') {
         if (!session || !session.employee_id) {
           await sendMessage(chatId, '⚠️ Не знайдено employee_id. Відскануйте QR ще раз.');
+          return;
+        }
+
+        if (!session.checked_in) {
+          await sendMessage(chatId, 'ℹ️ Спочатку потрібно зафіксувати Вхід.');
           return;
         }
 
@@ -268,6 +305,10 @@ app.post('/webhook', async (req, res) => {
         });
 
         if (result && result.ok) {
+          session.checked_in = false;
+          session.mode = '';
+          saveSession(chatId, session);
+
           await sendMessage(chatId, '🚪 Вихід зафіксовано.');
         } else {
           await sendMessage(chatId, '⚠️ Не вдалося записати вихід у таблицю.');
