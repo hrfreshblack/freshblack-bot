@@ -56,8 +56,27 @@ async function sendToAppsScript(payload) {
       'Apps Script ERROR:',
       JSON.stringify(error?.response?.data || error?.message || error)
     );
-    return null;
+    return {
+      ok: false,
+      error: error?.response?.data || error?.message || 'Unknown bridge error'
+    };
   }
+}
+
+function getBridgeErrorText(result) {
+  if (!result) return 'Bridge нічого не повернув';
+  if (typeof result === 'string') return result;
+  if (result.error) {
+    return typeof result.error === 'string'
+      ? result.error
+      : JSON.stringify(result.error);
+  }
+  if (result.result && result.result.error) {
+    return typeof result.result.error === 'string'
+      ? result.result.error
+      : JSON.stringify(result.result.error);
+  }
+  return JSON.stringify(result);
 }
 
 const employeeSessions = new Map();
@@ -271,7 +290,7 @@ app.post('/webhook', async (req, res) => {
             `✅ Заявку на відпустку створено.\nПеріод: ${parsed.date_from} - ${parsed.date_to}\nЗаміщає: ${parsed.replacement_person}\n\nСтатус: очікує погодження`
           );
         } else {
-          await sendMessage(chatId, '⚠️ Не вдалося записати заявку на відпустку.');
+          await sendMessage(chatId, `⚠️ Не вдалося записати заявку на відпустку.\n${getBridgeErrorText(result)}`);
         }
         return;
       }
@@ -309,7 +328,7 @@ app.post('/webhook', async (req, res) => {
             `✅ Заявку на лікарняний створено.\nПеріод: ${parsed.date_from} - ${parsed.date_to}\n\nСтатус: очікує погодження`
           );
         } else {
-          await sendMessage(chatId, '⚠️ Не вдалося записати заявку на лікарняний.');
+          await sendMessage(chatId, `⚠️ Не вдалося записати заявку на лікарняний.\n${getBridgeErrorText(result)}`);
         }
         return;
       }
