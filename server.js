@@ -453,9 +453,6 @@ app.post('/webhook', async (req, res) => {
     const rawBody = req.body || '{}';
     const update = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
 
-    // -------------------------
-    // TEXT MESSAGES
-    // -------------------------
     if (update.message) {
       const msg = update.message;
       const chatId = String(msg.chat.id);
@@ -503,14 +500,12 @@ app.post('/webhook', async (req, res) => {
           work_format: '',
           remote_reason: '',
           awaiting_remote_reason: false,
-
           production_shift_open: false,
           production_shift_id: '',
           production_opened_at: '',
           awaiting_station_result: false,
           current_station_name: '',
           production_entries: [],
-
           timeoff_flow: null,
           timeoff_step: null,
           request_type: '',
@@ -532,7 +527,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Причина віддаленої роботи
       if (session.awaiting_remote_reason) {
         const reason = text;
 
@@ -578,7 +572,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Результат по станції
       if (session.awaiting_station_result && session.current_station_name) {
         session.awaiting_station_result = false;
         session.production_entries.push({
@@ -594,7 +587,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Відпустка: період
       if (session.timeoff_flow === 'vacation' && session.timeoff_step === 'dates') {
         const parsed = parseDateRangeText(text);
         if (!parsed) {
@@ -611,7 +603,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Відпустка: хто заміняє
       if (session.timeoff_flow === 'vacation' && session.timeoff_step === 'replacement') {
         const replacementPerson = text;
         const dateFrom = session.date_from;
@@ -654,7 +645,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Лікарняний: період
       if (session.timeoff_flow === 'sick' && session.timeoff_step === 'dates') {
         const parsed = parseDateRangeText(text);
         if (!parsed) {
@@ -671,7 +661,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Лікарняний: коментар
       if (session.timeoff_flow === 'sick' && session.timeoff_step === 'comment') {
         const comment = text;
         const dateFrom = session.date_from;
@@ -715,9 +704,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // -------------------------
-    // CALLBACKS
-    // -------------------------
     if (update.callback_query) {
       const cq = update.callback_query;
       const callbackId = cq.id;
@@ -725,7 +711,6 @@ app.post('/webhook', async (req, res) => {
       const fromUserId = String(cq.from?.id || '');
       const data = cq.data || '';
 
-      // approvals can work any time
       if (!data.startsWith('hr_') && !data.startsWith('acc_') && shouldBlockByTime(chatId)) {
         const sleepMsg = getBotSleepMessage();
         if (sleepMsg) {
@@ -739,7 +724,6 @@ app.post('/webhook', async (req, res) => {
 
       const session = getSession(chatId);
 
-      // HRD approve/reject
       if (data.startsWith('hr_approve:') || data.startsWith('hr_reject:')) {
         if (fromUserId !== HRD_USER_ID) {
           await answerCallbackQuery(callbackId, 'Це погодження доступне лише HRD');
@@ -802,7 +786,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Accountant approve/reject
       if (data.startsWith('acc_approve:') || data.startsWith('acc_reject:')) {
         if (fromUserId !== ACCOUNTANT_USER_ID) {
           await answerCallbackQuery(callbackId, 'Це погодження доступне лише головному бухгалтеру');
@@ -883,7 +866,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Main branch
       if (data === 'entry_office') {
         session.current_branch = 'office';
         saveSession(chatId, session);
@@ -904,7 +886,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Office
       if (data === 'office_start') {
         const dayStatusResp = await sendToAppsScript({
           action: 'get_daily_checkin_status',
@@ -1017,7 +998,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Production
       if (data === 'production_open_shift') {
         const dayStatusResp = await sendToAppsScript({
           action: 'get_daily_checkin_status',
@@ -1164,7 +1144,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Time off
       if (data === 'timeoff_menu') {
         await sendMessage(chatId, 'Оберіть тип запиту:', {
           reply_markup: getTimeoffMenu()
