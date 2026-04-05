@@ -6,7 +6,9 @@ const PORT = 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwuo1uepXZcJ9pL1J2CyMaHRGLmeGJBzJjJ4JQAIaGVp95A6RiDTrVY3jPCy-_yMUejNQ/exec';
+
+// ЗАЛИШАЮ URL ПРЯМО В КОДІ, ЯК ТИ ХОТІЛА
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzTojbpGirwQg9pWDLtOtmVJ9GJU0DYWU_Wxx3r70D_E6trms82JSz1LEnDOu_OB0HBnQ/exec';
 
 const HRD_USER_ID = '357796447';
 const ACCOUNTANT_USER_ID = '465734268';
@@ -258,9 +260,10 @@ function parseDate(dateStr) {
   const d = Number(m[1]);
   const mo = Number(m[2]);
   const y = Number(m[3]);
-  const dt = new Date(y, mo - 1, d);
 
+  const dt = new Date(y, mo - 1, d);
   if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+
   return dt;
 }
 
@@ -295,8 +298,7 @@ async function notifyHrdForApproval(requestId) {
     request_id: requestId
   });
 
-  if (!requestResp || !requestResp.ok || !requestResp.result || !requestResp.result.found) return;
-
+  if (!requestResp?.ok || !requestResp?.result?.found) return;
   const req = requestResp.result;
 
   let text =
@@ -328,8 +330,7 @@ async function notifyAccountantForApproval(requestId) {
     request_id: requestId
   });
 
-  if (!requestResp || !requestResp.ok || !requestResp.result || !requestResp.result.found) return;
-
+  if (!requestResp?.ok || !requestResp?.result?.found) return;
   const req = requestResp.result;
 
   let text =
@@ -356,7 +357,7 @@ async function notifyAccountantForApproval(requestId) {
   }
 }
 
-async function sendSecondOpeningReminderBatch(isSecondReminder = false) {
+async function sendOpeningReminderBatch(isSecondReminder = false) {
   const listResp = await sendToAppsScript({
     action: 'list_employees_for_opening_reminder'
   });
@@ -374,6 +375,7 @@ async function sendSecondOpeningReminderBatch(isSecondReminder = false) {
     const text = isSecondReminder
       ? '⏰ Друге нагадування: ти ще не відкрив(ла) робочий день у боті.'
       : '⏰ Нагадування: відкрий робочий день у боті.';
+
     await sendMessage(emp.telegram_chat_id, text);
   }
 }
@@ -389,6 +391,7 @@ async function sendClosingReminderBatch(entryType) {
     const text = entryType === 'office'
       ? '🔔 Нагадування: закрий робочий день у боті.'
       : '🔔 Нагадування: закрий зміну у боті.';
+
     await sendMessage(emp.telegram_chat_id, text);
   }
 }
@@ -408,13 +411,13 @@ async function schedulerTick() {
 
     if (hhmm === '08:30') {
       lastSchedulerKey = key;
-      await sendSecondOpeningReminderBatch(false);
+      await sendOpeningReminderBatch(false);
       return;
     }
 
     if (hhmm === '09:30') {
       lastSchedulerKey = key;
-      await sendSecondOpeningReminderBatch(true);
+      await sendOpeningReminderBatch(true);
       return;
     }
 
@@ -453,9 +456,6 @@ app.post('/webhook', async (req, res) => {
     const rawBody = req.body || '{}';
     const update = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
 
-    // -------------------------
-    // TEXT MESSAGES
-    // -------------------------
     if (update.message) {
       const msg = update.message;
       const chatId = String(msg.chat.id);
@@ -488,10 +488,16 @@ app.post('/webhook', async (req, res) => {
           employee_id: employeeId
         });
 
-        if (!empResp || !empResp.ok || !empResp.result || !empResp.result.found) {
+        if (!empResp?.ok || !empResp?.result?.found) {
           await sendMessage(chatId, '⚠️ Співробітника не знайдено в таблиці employees.');
           return;
         }
+
+        await sendToAppsScript({
+          action: 'upsert_employee_chat',
+          employee_id: employeeId,
+          telegram_chat_id: chatId
+        });
 
         saveSession(chatId, {
           employee_id: employeeId,
@@ -503,14 +509,12 @@ app.post('/webhook', async (req, res) => {
           work_format: '',
           remote_reason: '',
           awaiting_remote_reason: false,
-
           production_shift_open: false,
           production_shift_id: '',
           production_opened_at: '',
           awaiting_station_result: false,
           current_station_name: '',
           production_entries: [],
-
           timeoff_flow: null,
           timeoff_step: null,
           request_type: '',
@@ -532,10 +536,7 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Причина віддаленої роботи
       if (session.awaiting_remote_reason) {
-        const reason = text;
-
         const dayStatusResp = await sendToAppsScript({
           action: 'get_daily_checkin_status',
           employee_id: session.employee_id
@@ -548,6 +549,7 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
+        const reason = text;
         session.awaiting_remote_reason = false;
         session.remote_reason = reason;
         session.checked_in = true;
@@ -568,7 +570,7 @@ app.post('/webhook', async (req, res) => {
           remote_reason: reason
         });
 
-        if (result && result.ok) {
+        if (result?.ok) {
           await sendMessage(chatId, '✅ Вхід зафіксовано.\nФормат роботи: Віддалено\nПричину записано.', {
             reply_markup: getOfficeExitMenu()
           });
@@ -578,7 +580,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Результат по станції
       if (session.awaiting_station_result && session.current_station_name) {
         session.awaiting_station_result = false;
         session.production_entries.push({
@@ -594,7 +595,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Відпустка: період
       if (session.timeoff_flow === 'vacation' && session.timeoff_step === 'dates') {
         const parsed = parseDateRangeText(text);
         if (!parsed) {
@@ -611,7 +611,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Відпустка: хто заміняє
       if (session.timeoff_flow === 'vacation' && session.timeoff_step === 'replacement') {
         const replacementPerson = text;
         const dateFrom = session.date_from;
@@ -639,7 +638,7 @@ app.post('/webhook', async (req, res) => {
         session.date_to = '';
         saveSession(chatId, session);
 
-        if (result && result.ok) {
+        if (result?.ok) {
           const subtypeLabel = subtype === 'unpaid' ? 'За свій рахунок' : 'Щорічна';
           await sendMessage(
             chatId,
@@ -654,7 +653,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Лікарняний: період
       if (session.timeoff_flow === 'sick' && session.timeoff_step === 'dates') {
         const parsed = parseDateRangeText(text);
         if (!parsed) {
@@ -671,7 +669,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Лікарняний: коментар
       if (session.timeoff_flow === 'sick' && session.timeoff_step === 'comment') {
         const comment = text;
         const dateFrom = session.date_from;
@@ -697,7 +694,7 @@ app.post('/webhook', async (req, res) => {
         session.date_to = '';
         saveSession(chatId, session);
 
-        if (result && result.ok) {
+        if (result?.ok) {
           await sendMessage(
             chatId,
             `✅ Заявку на лікарняний створено.\nПеріод: ${dateFrom} - ${dateTo}\n\nСтатус: очікує погодження`
@@ -715,9 +712,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // -------------------------
-    // CALLBACKS
-    // -------------------------
     if (update.callback_query) {
       const cq = update.callback_query;
       const callbackId = cq.id;
@@ -725,7 +719,7 @@ app.post('/webhook', async (req, res) => {
       const fromUserId = String(cq.from?.id || '');
       const data = cq.data || '';
 
-      // approvals can work any time
+      // погодження дозволяємо будь-коли
       if (!data.startsWith('hr_') && !data.startsWith('acc_') && shouldBlockByTime(chatId)) {
         const sleepMsg = getBotSleepMessage();
         if (sleepMsg) {
@@ -737,9 +731,6 @@ app.post('/webhook', async (req, res) => {
 
       await answerCallbackQuery(callbackId);
 
-      const session = getSession(chatId);
-
-      // HRD approve/reject
       if (data.startsWith('hr_approve:') || data.startsWith('hr_reject:')) {
         if (fromUserId !== HRD_USER_ID) {
           await answerCallbackQuery(callbackId, 'Це погодження доступне лише HRD');
@@ -802,7 +793,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Accountant approve/reject
       if (data.startsWith('acc_approve:') || data.startsWith('acc_reject:')) {
         if (fromUserId !== ACCOUNTANT_USER_ID) {
           await answerCallbackQuery(callbackId, 'Це погодження доступне лише головному бухгалтеру');
@@ -864,6 +854,8 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      const session = getSession(chatId);
+
       if (!session) {
         await sendMessage(chatId, '⚠️ Спочатку відкрийте бота через ваш персональний QR.');
         return;
@@ -883,7 +875,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Main branch
       if (data === 'entry_office') {
         session.current_branch = 'office';
         saveSession(chatId, session);
@@ -904,7 +895,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Office
       if (data === 'office_start') {
         const dayStatusResp = await sendToAppsScript({
           action: 'get_daily_checkin_status',
@@ -1017,7 +1007,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Production
       if (data === 'production_open_shift') {
         const dayStatusResp = await sendToAppsScript({
           action: 'get_daily_checkin_status',
@@ -1164,7 +1153,6 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      // Time off
       if (data === 'timeoff_menu') {
         await sendMessage(chatId, 'Оберіть тип запиту:', {
           reply_markup: getTimeoffMenu()
