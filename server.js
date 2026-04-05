@@ -7,7 +7,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-// ЗАЛИШАЮ URL ПРЯМО В КОДІ, ЯК ТИ ХОТІЛА
+// URL bridge лишаю прямо в коді
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzTojbpGirwQg9pWDLtOtmVJ9GJU0DYWU_Wxx3r70D_E6trms82JSz1LEnDOu_OB0HBnQ/exec';
 
 const HRD_USER_ID = '357796447';
@@ -644,6 +644,7 @@ app.post('/webhook', async (req, res) => {
             chatId,
             `✅ Заявку на відпустку створено.\nТип: ${subtypeLabel}\nПеріод: ${dateFrom} - ${dateTo}\nЗаміщає: ${replacementPerson}\n\nСтатус: очікує погодження`
           );
+
           if (result.result?.request_id) {
             await notifyHrdForApproval(result.result.request_id);
           }
@@ -699,6 +700,7 @@ app.post('/webhook', async (req, res) => {
             chatId,
             `✅ Заявку на лікарняний створено.\nПеріод: ${dateFrom} - ${dateTo}\n\nСтатус: очікує погодження`
           );
+
           if (result.result?.request_id) {
             await notifyHrdForApproval(result.result.request_id);
           }
@@ -719,7 +721,6 @@ app.post('/webhook', async (req, res) => {
       const fromUserId = String(cq.from?.id || '');
       const data = cq.data || '';
 
-      // погодження дозволяємо будь-коли
       if (!data.startsWith('hr_') && !data.startsWith('acc_') && shouldBlockByTime(chatId)) {
         const sleepMsg = getBotSleepMessage();
         if (sleepMsg) {
@@ -782,9 +783,9 @@ app.post('/webhook', async (req, res) => {
 
         if (req.telegram_chat_id) {
           if (req.request_type === 'vacation') {
-            await sendMessage(req.telegram_chat_id, 'Напиши заяву у головного бухгалтера');
+            await sendMessage(req.telegram_chat_id, 'HRD відпустку погодила. Напиши заяву у головного бухгалтера.');
           } else {
-            await sendMessage(req.telegram_chat_id, 'HRD погодила лікарняний. Очікуй фінальне погодження.');
+            await sendMessage(req.telegram_chat_id, 'HRD лікарняний погодила. Очікуй фінальне погодження.');
           }
         }
 
@@ -844,9 +845,9 @@ app.post('/webhook', async (req, res) => {
 
         if (req.telegram_chat_id) {
           if (req.request_type === 'vacation') {
-            await sendMessage(req.telegram_chat_id, 'Відпустку погоджено остаточно');
+            await sendMessage(req.telegram_chat_id, 'Відпустку погоджено остаточно.');
           } else {
-            await sendMessage(req.telegram_chat_id, 'Лікарняний погоджено остаточно');
+            await sendMessage(req.telegram_chat_id, 'Лікарняний погоджено остаточно.');
           }
         }
 
@@ -970,12 +971,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'office_checkout') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
-
-        if (!dayStatusResp?.result?.has_in || dayStatusResp?.result?.has_out) {
+        if (!session.checked_in || session.entry_type !== 'office') {
           await sendMessage(chatId, 'Звернись до HRD.');
           return;
         }
@@ -1000,7 +996,7 @@ app.post('/webhook', async (req, res) => {
           session.remote_reason = '';
           saveSession(chatId, session);
 
-          await sendMessage(chatId, '🚪 Вихід зафіксовано.');
+          await sendMessage(chatId, 'Гарного вечора. Вихід записано.');
         } else {
           await sendMessage(chatId, '⚠️ Не вдалося записати вихід.');
         }
@@ -1036,7 +1032,10 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
+        session.checked_in = true;
         session.production_shift_open = true;
+        session.entry_type = 'production';
+        session.work_format = 'production';
         session.production_shift_id = makeShiftId(session.employee_id);
         session.production_opened_at = nowIso();
         session.production_entries = [];
@@ -1090,12 +1089,7 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'production_close_shift') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
-
-        if (!dayStatusResp?.result?.has_in || dayStatusResp?.result?.has_out) {
+        if (!session.production_shift_open || !session.checked_in || session.entry_type !== 'production') {
           await sendMessage(chatId, 'Звернись до HRD.');
           return;
         }
@@ -1141,7 +1135,10 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
+        session.checked_in = false;
         session.production_shift_open = false;
+        session.entry_type = '';
+        session.work_format = '';
         session.production_shift_id = '';
         session.production_opened_at = '';
         session.production_entries = [];
@@ -1149,7 +1146,7 @@ app.post('/webhook', async (req, res) => {
         session.current_station_name = '';
         saveSession(chatId, session);
 
-        await sendMessage(chatId, '🏁 Зміну закрито.\nДані по станціях збережено.');
+        await sendMessage(chatId, 'Гарного вечора. Зміну закрито.');
         return;
       }
 
