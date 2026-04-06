@@ -6,7 +6,9 @@ const PORT = 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyUn7P2SsPc5C9LEQw3AIsE0EsaV4bszBgwd9R3_62IuYtz78bkvsqLWfFPwYnX2MRGrw/exec';
+
+// URL bridge залишаю в коді
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx-cyPBi9RqCE-DB3e_-IA7A_bKbdK54og_Zr92qxbMojNK8NQwleo9IPxQRud6WzIUfA/exec';
 
 const HRD_USER_ID = '357796447';
 const ACCOUNTANT_USER_ID = '465734268';
@@ -27,7 +29,9 @@ app.use(express.text({ type: '*/*' }));
 
 async function telegram(method, payload) {
   try {
-    const resp = await axios.post(`${TELEGRAM_API}/${method}`, payload, { timeout: 20000 });
+    const resp = await axios.post(`${TELEGRAM_API}/${method}`, payload, {
+      timeout: 20000
+    });
     return resp.data;
   } catch (error) {
     console.error(`${method} ERROR:`, JSON.stringify(error?.response?.data || error?.message || error));
@@ -288,6 +292,26 @@ function displayRequestType(req) {
   return req.request_type || 'Запит';
 }
 
+async function hasTodayIn(session) {
+  const resp = await sendToAppsScript({
+    action: 'has_today_in',
+    employee_id: session.employee_id,
+    telegram_chat_id: session.telegram_chat_id,
+    full_name: session.full_name
+  });
+  return !!resp?.result?.exists;
+}
+
+async function hasTodayOut(session) {
+  const resp = await sendToAppsScript({
+    action: 'has_today_out',
+    employee_id: session.employee_id,
+    telegram_chat_id: session.telegram_chat_id,
+    full_name: session.full_name
+  });
+  return !!resp?.result?.exists;
+}
+
 async function isEmployeeAbsent(employeeId, dateIso) {
   const resp = await sendToAppsScript({
     action: 'is_employee_absent_on_date',
@@ -374,15 +398,14 @@ async function sendOpeningReminderBatch(isSecondReminder = false) {
     const absent = await isEmployeeAbsent(emp.employee_id, today);
     if (absent) continue;
 
-    const statusResp = await sendToAppsScript({
-      action: 'get_daily_checkin_status',
-      employee_id: emp.employee_id
-    });
+    const sessionLike = {
+      employee_id: emp.employee_id,
+      telegram_chat_id: emp.telegram_chat_id,
+      full_name: emp.full_name
+    };
 
-    const s = statusResp?.result || {};
-
-    if (s.has_out) continue;
-    if (s.has_in) continue;
+    if (await hasTodayOut(sessionLike)) continue;
+    if (await hasTodayIn(sessionLike)) continue;
 
     const text = isSecondReminder
       ? '⏰ Друге нагадування: ти ще не відкрив(ла) робочий день у боті.'
@@ -560,15 +583,17 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (session.awaiting_remote_reason) {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
-
-        if (dayStatusResp?.result?.has_any) {
+        if (await hasTodayIn(session)) {
           session.awaiting_remote_reason = false;
           saveSession(chatId, session);
-          await sendMessage(chatId, 'Звернись до HRD.');
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
+
+        if (await hasTodayOut(session)) {
+          session.awaiting_remote_reason = false;
+          saveSession(chatId, session);
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -918,13 +943,13 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'office_start') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
+        if (await hasTodayIn(session)) {
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
 
-        if (dayStatusResp?.result?.has_any) {
-          await sendMessage(chatId, 'Звернись до HRD.');
+        if (await hasTodayOut(session)) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -935,13 +960,13 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'office_format_office') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
+        if (await hasTodayIn(session)) {
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
 
-        if (dayStatusResp?.result?.has_any) {
-          await sendMessage(chatId, 'Звернись до HRD.');
+        if (await hasTodayOut(session)) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -974,13 +999,13 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'office_format_remote') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
+        if (await hasTodayIn(session)) {
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
 
-        if (dayStatusResp?.result?.has_any) {
-          await sendMessage(chatId, 'Звернись до HRD.');
+        if (await hasTodayOut(session)) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -994,6 +1019,11 @@ app.post('/webhook', async (req, res) => {
       if (data === 'office_checkout') {
         if (!session.checked_in || session.entry_type !== 'office') {
           await sendMessage(chatId, 'Звернись до HRD.');
+          return;
+        }
+
+        if (await hasTodayOut(session)) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -1025,13 +1055,13 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'production_open_shift') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
+        if (await hasTodayIn(session)) {
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
 
-        if (dayStatusResp?.result?.has_any) {
-          await sendMessage(chatId, 'Звернись до HRD.');
+        if (await hasTodayOut(session)) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -1112,6 +1142,11 @@ app.post('/webhook', async (req, res) => {
       if (data === 'production_close_shift') {
         if (!session.production_shift_open || !session.checked_in || session.entry_type !== 'production') {
           await sendMessage(chatId, 'Звернись до HRD.');
+          return;
+        }
+
+        if (await hasTodayOut(session)) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
