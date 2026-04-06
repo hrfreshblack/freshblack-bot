@@ -2,13 +2,11 @@ import express from 'express';
 import axios from 'axios';
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-
-// URL bridge залишаю в коді
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx-cyPBi9RqCE-DB3e_-IA7A_bKbdK54og_Zr92qxbMojNK8NQwleo9IPxQRud6WzIUfA/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwLjV6i6ISdQ6TTJLBDGnAyABmD-B3VL9V2SIgtIUwYyDF_Mg_n-uwnyz5cLirjp0E9Sg/exec';
 
 const HRD_USER_ID = '357796447';
 const ACCOUNTANT_USER_ID = '465734268';
@@ -151,9 +149,7 @@ function getMainMenu() {
         { text: '🏢 Офіс', callback_data: 'entry_office' },
         { text: '🏭 Виробництво', callback_data: 'entry_production' }
       ],
-      [
-        { text: '📅 Подати запит', callback_data: 'timeoff_menu' }
-      ]
+      [{ text: '📅 Подати запит', callback_data: 'timeoff_menu' }]
     ]
   };
 }
@@ -180,9 +176,7 @@ function getOfficeFormatMenu() {
 
 function getOfficeExitMenu() {
   return {
-    inline_keyboard: [
-      [{ text: '🚪 Вихід', callback_data: 'office_checkout' }]
-    ]
+    inline_keyboard: [[{ text: '🚪 Вихід', callback_data: 'office_checkout' }]]
   };
 }
 
@@ -214,9 +208,7 @@ function getAddMoreStationMenu() {
 
 function getProductionCloseMenu() {
   return {
-    inline_keyboard: [
-      [{ text: '🏁 Закрити зміну', callback_data: 'production_close_shift' }]
-    ]
+    inline_keyboard: [[{ text: '🏁 Закрити зміну', callback_data: 'production_close_shift' }]]
   };
 }
 
@@ -296,6 +288,7 @@ async function hasTodayIn(session) {
   const resp = await sendToAppsScript({
     action: 'has_today_in',
     employee_id: session.employee_id,
+    telegram_user_id: session.telegram_user_id,
     telegram_chat_id: session.telegram_chat_id,
     full_name: session.full_name
   });
@@ -306,6 +299,7 @@ async function hasTodayOut(session) {
   const resp = await sendToAppsScript({
     action: 'has_today_out',
     employee_id: session.employee_id,
+    telegram_user_id: session.telegram_user_id,
     telegram_chat_id: session.telegram_chat_id,
     full_name: session.full_name
   });
@@ -400,6 +394,7 @@ async function sendOpeningReminderBatch(isSecondReminder = false) {
 
     const sessionLike = {
       employee_id: emp.employee_id,
+      telegram_user_id: emp.telegram_user_id || '',
       telegram_chat_id: emp.telegram_chat_id,
       full_name: emp.full_name
     };
@@ -505,6 +500,7 @@ app.post('/webhook', async (req, res) => {
     if (update.message) {
       const msg = update.message;
       const chatId = String(msg.chat.id);
+      const fromUserId = String(msg.from?.id || '');
       const text = (msg.text || '').trim();
 
       if (shouldBlockByTime(chatId)) {
@@ -542,13 +538,15 @@ app.post('/webhook', async (req, res) => {
         await sendToAppsScript({
           action: 'upsert_employee_chat',
           employee_id: employeeId,
-          telegram_chat_id: chatId
+          telegram_chat_id: chatId,
+          telegram_user_id: fromUserId
         });
 
         saveSession(chatId, {
           employee_id: employeeId,
-          full_name: empResp.result.full_name || '',
+          telegram_user_id: fromUserId,
           telegram_chat_id: chatId,
+          full_name: empResp.result.full_name || '',
           current_branch: null,
           checked_in: false,
           entry_type: '',
@@ -582,6 +580,11 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      // оновлюємо user id, якщо треба
+      session.telegram_user_id = fromUserId || session.telegram_user_id;
+      session.telegram_chat_id = chatId;
+      saveSession(chatId, session);
+
       if (session.awaiting_remote_reason) {
         if (await hasTodayIn(session)) {
           session.awaiting_remote_reason = false;
@@ -608,6 +611,7 @@ app.post('/webhook', async (req, res) => {
         const result = await sendToAppsScript({
           action: 'checkin',
           employee_id: session.employee_id,
+          telegram_user_id: session.telegram_user_id,
           telegram_chat_id: session.telegram_chat_id,
           full_name: session.full_name,
           type: 'in',
@@ -668,6 +672,7 @@ app.post('/webhook', async (req, res) => {
         const result = await sendToAppsScript({
           action: 'timeoff_request',
           employee_id: session.employee_id,
+          telegram_user_id: session.telegram_user_id,
           telegram_chat_id: session.telegram_chat_id,
           full_name: session.full_name,
           request_type: 'vacation',
@@ -725,6 +730,7 @@ app.post('/webhook', async (req, res) => {
         const result = await sendToAppsScript({
           action: 'timeoff_request',
           employee_id: session.employee_id,
+          telegram_user_id: session.telegram_user_id,
           telegram_chat_id: session.telegram_chat_id,
           full_name: session.full_name,
           request_type: 'sick',
@@ -908,6 +914,10 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      session.telegram_user_id = fromUserId || session.telegram_user_id;
+      session.telegram_chat_id = chatId;
+      saveSession(chatId, session);
+
       if (data === 'back_main') {
         session.timeoff_flow = null;
         session.timeoff_step = null;
@@ -973,6 +983,7 @@ app.post('/webhook', async (req, res) => {
         const result = await sendToAppsScript({
           action: 'checkin',
           employee_id: session.employee_id,
+          telegram_user_id: session.telegram_user_id,
           telegram_chat_id: session.telegram_chat_id,
           full_name: session.full_name,
           type: 'in',
@@ -1030,6 +1041,7 @@ app.post('/webhook', async (req, res) => {
         const result = await sendToAppsScript({
           action: 'checkin',
           employee_id: session.employee_id,
+          telegram_user_id: session.telegram_user_id,
           telegram_chat_id: session.telegram_chat_id,
           full_name: session.full_name,
           type: 'out',
@@ -1068,6 +1080,7 @@ app.post('/webhook', async (req, res) => {
         const inResult = await sendToAppsScript({
           action: 'checkin',
           employee_id: session.employee_id,
+          telegram_user_id: session.telegram_user_id,
           telegram_chat_id: session.telegram_chat_id,
           full_name: session.full_name,
           type: 'in',
@@ -1157,25 +1170,41 @@ app.post('/webhook', async (req, res) => {
 
         const closedAt = nowIso();
 
-        const shiftResult = await sendToAppsScript({
+        console.log('PRODUCTION SAVE PAYLOAD:', JSON.stringify({
           action: 'production_shift',
           shift_id: session.production_shift_id,
           opened_at: session.production_opened_at,
           closed_at: closedAt,
           employee_id: session.employee_id,
+          telegram_user_id: session.telegram_user_id,
+          telegram_chat_id: session.telegram_chat_id,
+          full_name: session.full_name,
+          entries: session.production_entries
+        }));
+
+        const shiftResp = await sendToAppsScript({
+          action: 'production_shift',
+          shift_id: session.production_shift_id,
+          opened_at: session.production_opened_at,
+          closed_at: closedAt,
+          employee_id: session.employee_id,
+          telegram_user_id: session.telegram_user_id,
           telegram_chat_id: session.telegram_chat_id,
           full_name: session.full_name,
           entries: session.production_entries
         });
 
-        if (!shiftResult?.ok) {
-          await sendMessage(chatId, '⚠️ Не вдалося записати виробничу зміну.');
+        console.log('PRODUCTION SAVE RESPONSE:', JSON.stringify(shiftResp));
+
+        if (!shiftResp?.ok || !shiftResp?.result?.saved) {
+          await sendMessage(chatId, '⚠️ Не вдалося записати результати зміни у таблицю.');
           return;
         }
 
-        const outResult = await sendToAppsScript({
+        const outResp = await sendToAppsScript({
           action: 'checkin',
           employee_id: session.employee_id,
+          telegram_user_id: session.telegram_user_id,
           telegram_chat_id: session.telegram_chat_id,
           full_name: session.full_name,
           type: 'out',
@@ -1186,8 +1215,8 @@ app.post('/webhook', async (req, res) => {
           remote_reason: ''
         });
 
-        if (!outResult?.ok) {
-          await sendMessage(chatId, '⚠️ Зміну записано, але не вдалося зафіксувати вихід.');
+        if (!outResp?.ok) {
+          await sendMessage(chatId, '⚠️ Результати зміни записано, але не вдалося зафіксувати вихід.');
           return;
         }
 
