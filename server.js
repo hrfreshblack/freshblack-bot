@@ -1,12 +1,11 @@
-const express = require('express');
-const axios = require('axios');
+import express from 'express';
+import axios from 'axios';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 
 const TELEGRAM_API = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : '';
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyz6u4aEJv0FOY5Jbk85wc4OC88Tq8sdDXiSG_JhqW3VAYLggQHWB7F7ur179NPha3kuQ/exec';
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.text({ type: '*/*', limit: '2mb' }));
@@ -21,13 +20,14 @@ app.get('/health', (_req, res) => {
 
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
-  try {
-    console.log('WEBHOOK HIT');
-    const update = typeof req.body === 'string'
-      ? JSON.parse(req.body || '{}')
-      : (req.body || {});
 
-    if (update.message && update.message.text === '/ping') {
+  try {
+    let update = req.body || {};
+    if (typeof update === 'string') {
+      update = update.trim() ? JSON.parse(update) : {};
+    }
+
+    if (update.message?.text === '/ping') {
       const chatId = String(update.message.chat.id);
 
       if (BOT_TOKEN) {
@@ -38,7 +38,7 @@ app.post('/webhook', async (req, res) => {
       }
     }
   } catch (e) {
-    console.error('WEBHOOK ERROR:', e && e.stack ? e.stack : e);
+    console.error('WEBHOOK ERROR:', e?.stack || e?.message || e);
   }
 });
 
