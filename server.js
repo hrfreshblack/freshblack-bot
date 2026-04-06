@@ -5,8 +5,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwLjV6i6ISdQ6TTJLBDGnAyABmD-B3VL9V2SIgtIUwYyDF_Mg_n-uwnyz5cLirjp0E9Sg/exec';
+if (!BOT_TOKEN) {
+  console.error('BOT_TOKEN is missing');
+}
+
+const TELEGRAM_API = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : null;
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyz6u4aEJv0FOY5Jbk85wc4OC88Tq8sdDXiSG_JhqW3VAYLggQHWB7F7ur179NPha3kuQ/exec';
 
 const HRD_USER_ID = '357796447';
 const ACCOUNTANT_USER_ID = '465734268';
@@ -23,49 +27,8 @@ const STATIONS = [
   'Комірник'
 ];
 
-app.use(express.text({ type: '*/*' }));
-
-async function telegram(method, payload) {
-  try {
-    const resp = await axios.post(`${TELEGRAM_API}/${method}`, payload, {
-      timeout: 20000
-    });
-    return resp.data;
-  } catch (error) {
-    console.error(`${method} ERROR:`, JSON.stringify(error?.response?.data || error?.message || error));
-    return null;
-  }
-}
-
-async function sendMessage(chatId, text, extra = {}) {
-  return telegram('sendMessage', {
-    chat_id: chatId,
-    text,
-    parse_mode: 'HTML',
-    ...extra
-  });
-}
-
-async function answerCallbackQuery(callbackQueryId, text = '') {
-  return telegram('answerCallbackQuery', {
-    callback_query_id: callbackQueryId,
-    text,
-    show_alert: false
-  });
-}
-
-async function sendToAppsScript(payload) {
-  try {
-    const resp = await axios.post(APPS_SCRIPT_URL, payload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 20000
-    });
-    return resp.data;
-  } catch (error) {
-    console.error('Apps Script ERROR:', JSON.stringify(error?.response?.data || error?.message || error));
-    return { ok: false, error: error?.response?.data || error?.message || 'Bridge error' };
-  }
-}
+app.use(express.json({ limit: '2mb' }));
+app.use(express.text({ type: '*/*', limit: '2mb' }));
 
 const sessions = new Map();
 
@@ -91,9 +54,9 @@ function getKyivNowParts() {
 
   const parts = dtf.formatToParts(new Date());
   const out = {};
-  parts.forEach((p) => {
+  for (const p of parts) {
     if (p.type !== 'literal') out[p.type] = p.value;
-  });
+  }
 
   return {
     year: Number(out.year),
@@ -142,6 +105,41 @@ function makeShiftId(employeeId) {
   return `SHIFT-${employeeId}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
+function parseDate(dateStr) {
+  const m = String(dateStr).trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!m) return null;
+
+  const d = Number(m[1]);
+  const mo = Number(m[2]);
+  const y = Number(m[3]);
+
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  return dt;
+}
+
+function parseDateRangeText(text) {
+  const m = String(text).match(/^\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})\s*$/);
+  if (!m) return null;
+
+  const d1 = parseDate(m[1]);
+  const d2 = parseDate(m[2]);
+  if (!d1 || !d2 || d2 < d1) return null;
+
+  return { date_from: m[1], date_to: m[2] };
+}
+
+function displayRequesterName(req) {
+  return req.full_name || req.employee_id || 'співробітник';
+}
+
+function displayRequestType(req) {
+  if (req.request_type === 'sick') return 'Лікарняний';
+  if (req.request_type === 'vacation' && req.request_subtype === 'unpaid') return 'Відпустка за свій рахунок';
+  if (req.request_type === 'vacation') return 'Щорічна відпустка';
+  return req.request_type || 'Запит';
+}
+
 function getMainMenu() {
   return {
     inline_keyboard: [
@@ -165,12 +163,10 @@ function getOfficeStartMenu() {
 
 function getOfficeFormatMenu() {
   return {
-    inline_keyboard: [
-      [
-        { text: '🏢 Офіс', callback_data: 'office_format_office' },
-        { text: '🏠 Віддалено', callback_data: 'office_format_remote' }
-      ]
-    ]
+    inline_keyboard: [[
+      { text: '🏢 Офіс', callback_data: 'office_format_office' },
+      { text: '🏠 Віддалено', callback_data: 'office_format_remote' }
+    ]]
   };
 }
 
@@ -190,9 +186,7 @@ function getProductionStartMenu() {
 }
 
 function getStationMenu() {
-  const rows = STATIONS.map((station, index) => [
-    { text: station, callback_data: `station_${index}` }
-  ]);
+  const rows = STATIONS.map((station, index) => [{ text: station, callback_data: `station_${index}` }]);
   rows.push([{ text: '✅ Завершити введення станцій', callback_data: 'production_finish_entries' }]);
   return { inline_keyboard: rows };
 }
@@ -225,63 +219,65 @@ function getTimeoffMenu() {
 
 function getHrdApprovalMenu(requestId) {
   return {
-    inline_keyboard: [
-      [
-        { text: '✅ Погодити HRD', callback_data: `hr_approve:${requestId}` },
-        { text: '❌ Відхилити HRD', callback_data: `hr_reject:${requestId}` }
-      ]
-    ]
+    inline_keyboard: [[
+      { text: '✅ Погодити HRD', callback_data: `hr_approve:${requestId}` },
+      { text: '❌ Відхилити HRD', callback_data: `hr_reject:${requestId}` }
+    ]]
   };
 }
 
 function getAccountantApprovalMenu(requestId) {
   return {
-    inline_keyboard: [
-      [
-        { text: '✅ Погодити бухгалтер', callback_data: `acc_approve:${requestId}` },
-        { text: '❌ Відхилити бухгалтер', callback_data: `acc_reject:${requestId}` }
-      ]
-    ]
+    inline_keyboard: [[
+      { text: '✅ Погодити бухгалтер', callback_data: `acc_approve:${requestId}` },
+      { text: '❌ Відхилити бухгалтер', callback_data: `acc_reject:${requestId}` }
+    ]]
   };
 }
 
-function parseDate(dateStr) {
-  const m = String(dateStr).trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-  if (!m) return null;
+async function telegram(method, payload) {
+  if (!TELEGRAM_API) {
+    console.error('Telegram API unavailable: BOT_TOKEN missing');
+    return null;
+  }
 
-  const d = Number(m[1]);
-  const mo = Number(m[2]);
-  const y = Number(m[3]);
-
-  const dt = new Date(y, mo - 1, d);
-  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
-
-  return dt;
+  try {
+    const resp = await axios.post(`${TELEGRAM_API}/${method}`, payload, { timeout: 20000 });
+    return resp.data;
+  } catch (error) {
+    console.error(`${method} ERROR:`, JSON.stringify(error?.response?.data || error?.message || error));
+    return null;
+  }
 }
 
-function parseDateRangeText(text) {
-  const m = String(text).match(/^\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})\s*$/);
-  if (!m) return null;
-
-  const d1 = parseDate(m[1]);
-  const d2 = parseDate(m[2]);
-  if (!d1 || !d2 || d2 < d1) return null;
-
-  return {
-    date_from: m[1],
-    date_to: m[2]
-  };
+async function sendMessage(chatId, text, extra = {}) {
+  return telegram('sendMessage', {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML',
+    ...extra
+  });
 }
 
-function displayRequesterName(req) {
-  return req.full_name || req.employee_id || 'співробітник';
+async function answerCallbackQuery(callbackQueryId, text = '') {
+  return telegram('answerCallbackQuery', {
+    callback_query_id: callbackQueryId,
+    text,
+    show_alert: false
+  });
 }
 
-function displayRequestType(req) {
-  if (req.request_type === 'sick') return 'Лікарняний';
-  if (req.request_type === 'vacation' && req.request_subtype === 'unpaid') return 'Відпустка за свій рахунок';
-  if (req.request_type === 'vacation') return 'Щорічна відпустка';
-  return req.request_type || 'Запит';
+async function sendToAppsScript(payload) {
+  try {
+    const resp = await axios.post(APPS_SCRIPT_URL, payload, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 20000
+    });
+    return resp.data;
+  } catch (error) {
+    console.error('Apps Script ERROR:', JSON.stringify(error?.response?.data || error?.message || error));
+    return { ok: false, error: error?.response?.data || error?.message || 'Bridge error' };
+  }
 }
 
 async function hasTodayIn(session) {
@@ -312,7 +308,7 @@ async function isEmployeeAbsent(employeeId, dateIso) {
     employee_id: employeeId,
     date: dateIso
   });
-  return resp?.result?.absent || false;
+  return !!resp?.result?.absent;
 }
 
 async function notifyHrdForApproval(requestId) {
@@ -381,16 +377,12 @@ async function notifyAccountantForApproval(requestId) {
 }
 
 async function sendOpeningReminderBatch(isSecondReminder = false) {
-  const listResp = await sendToAppsScript({
-    action: 'list_employees_for_opening_reminder'
-  });
-
+  const listResp = await sendToAppsScript({ action: 'list_employees_for_opening_reminder' });
   const employees = listResp?.result?.employees || [];
   const today = getTodayKeyKyiv();
 
   for (const emp of employees) {
-    const absent = await isEmployeeAbsent(emp.employee_id, today);
-    if (absent) continue;
+    if (await isEmployeeAbsent(emp.employee_id, today)) continue;
 
     const sessionLike = {
       employee_id: emp.employee_id,
@@ -420,14 +412,11 @@ async function sendClosingReminderBatch(entryType) {
   const today = getTodayKeyKyiv();
 
   for (const emp of employees) {
-    const absent = await isEmployeeAbsent(emp.employee_id, today);
-    if (absent) continue;
+    if (await isEmployeeAbsent(emp.employee_id, today)) continue;
 
     if (entryType === 'office') {
       await sendMessage(emp.telegram_chat_id, '🔔 Нагадування: закрий робочий день у боті.');
-    }
-
-    if (entryType === 'production') {
+    } else if (entryType === 'production') {
       await sendMessage(
         emp.telegram_chat_id,
         '🔔 Нагадування: внеси результати по станціях та закрий зміну.',
@@ -471,7 +460,6 @@ async function schedulerTick() {
     if (hhmm === '18:00') {
       lastSchedulerKey = key;
       await sendClosingReminderBatch('production');
-      return;
     }
   } catch (error) {
     console.error('schedulerTick ERROR:', error?.stack || error?.message || error);
@@ -494,8 +482,10 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
   try {
-    const rawBody = req.body || '{}';
-    const update = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
+    let update = req.body || {};
+    if (typeof update === 'string') {
+      update = update.trim() ? JSON.parse(update) : {};
+    }
 
     if (update.message) {
       const msg = update.message;
@@ -574,13 +564,11 @@ app.post('/webhook', async (req, res) => {
       }
 
       const session = getSession(chatId);
-
       if (!session) {
         await sendMessage(chatId, '⚠️ Спочатку відкрийте бота через ваш персональний QR.');
         return;
       }
 
-      // оновлюємо user id, якщо треба
       session.telegram_user_id = fromUserId || session.telegram_user_id;
       session.telegram_chat_id = chatId;
       saveSession(chatId, session);
@@ -697,6 +685,7 @@ app.post('/webhook', async (req, res) => {
             chatId,
             `✅ Заявку на відпустку створено.\nТип: ${subtypeLabel}\nПеріод: ${dateFrom} - ${dateTo}\nЗаміщає: ${replacementPerson}\n\nСтатус: очікує погодження`
           );
+
           if (result.result?.request_id) {
             await notifyHrdForApproval(result.result.request_id);
           }
@@ -739,7 +728,7 @@ app.post('/webhook', async (req, res) => {
           date_to: dateTo,
           replacement_person: '',
           replacement_contact: '',
-          comment: comment
+          comment
         });
 
         session.timeoff_flow = null;
@@ -753,6 +742,7 @@ app.post('/webhook', async (req, res) => {
             chatId,
             `✅ Заявку на лікарняний створено.\nПеріод: ${dateFrom} - ${dateTo}\n\nСтатус: очікує погодження`
           );
+
           if (result.result?.request_id) {
             await notifyHrdForApproval(result.result.request_id);
           }
@@ -908,7 +898,6 @@ app.post('/webhook', async (req, res) => {
       }
 
       const session = getSession(chatId);
-
       if (!session) {
         await sendMessage(chatId, '⚠️ Спочатку відкрийте бота через ваш персональний QR.');
         return;
@@ -1232,47 +1221,6 @@ app.post('/webhook', async (req, res) => {
         saveSession(chatId, session);
 
         await sendMessage(chatId, 'Гарного вечора. Зміну закрито.');
-        return;
-      }
-
-      if (data === 'timeoff_menu') {
-        await sendMessage(chatId, 'Оберіть тип запиту:', {
-          reply_markup: getTimeoffMenu()
-        });
-        return;
-      }
-
-      if (data === 'vacation_annual') {
-        session.timeoff_flow = 'vacation';
-        session.timeoff_step = 'dates';
-        session.request_type = 'vacation';
-        session.request_subtype = 'annual';
-        saveSession(chatId, session);
-
-        await sendMessage(chatId, 'Щорічна відпустка.\nВкажіть період у форматі:\n<code>15.04.2026 - 17.04.2026</code>');
-        return;
-      }
-
-      if (data === 'vacation_unpaid') {
-        session.timeoff_flow = 'vacation';
-        session.timeoff_step = 'dates';
-        session.request_type = 'vacation';
-        session.request_subtype = 'unpaid';
-        saveSession(chatId, session);
-
-        await sendMessage(chatId, 'Відпустка за свій рахунок.\nВкажіть період у форматі:\n<code>15.04.2026 - 17.04.2026</code>');
-        return;
-      }
-
-      if (data === 'sick') {
-        session.timeoff_flow = 'sick';
-        session.timeoff_step = 'dates';
-        session.request_type = 'sick';
-        session.request_subtype = '';
-        saveSession(chatId, session);
-
-        await sendMessage(chatId, 'Лікарняний.\nВкажіть період у форматі:\n<code>18.04.2026 - 20.04.2026</code>');
-        return;
       }
     }
   } catch (error) {
