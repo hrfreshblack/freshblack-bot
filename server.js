@@ -6,9 +6,7 @@ const PORT = 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-
-// URL bridge лишаю прямо в коді
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzTojbpGirwQg9pWDLtOtmVJ9GJU0DYWU_Wxx3r70D_E6trms82JSz1LEnDOu_OB0HBnQ/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyUn7P2SsPc5C9LEQw3AIsE0EsaV4bszBgwd9R3_62IuYtz78bkvsqLWfFPwYnX2MRGrw/exec';
 
 const HRD_USER_ID = '357796447';
 const ACCOUNTANT_USER_ID = '465734268';
@@ -29,9 +27,7 @@ app.use(express.text({ type: '*/*' }));
 
 async function telegram(method, payload) {
   try {
-    const resp = await axios.post(`${TELEGRAM_API}/${method}`, payload, {
-      timeout: 20000
-    });
+    const resp = await axios.post(`${TELEGRAM_API}/${method}`, payload, { timeout: 20000 });
     return resp.data;
   } catch (error) {
     console.error(`${method} ERROR:`, JSON.stringify(error?.response?.data || error?.message || error));
@@ -292,6 +288,15 @@ function displayRequestType(req) {
   return req.request_type || 'Запит';
 }
 
+async function isEmployeeAbsent(employeeId, dateIso) {
+  const resp = await sendToAppsScript({
+    action: 'is_employee_absent_on_date',
+    employee_id: employeeId,
+    date: dateIso
+  });
+  return resp?.result?.absent || false;
+}
+
 async function notifyHrdForApproval(requestId) {
   const requestResp = await sendToAppsScript({
     action: 'get_timeoff_request',
@@ -363,14 +368,21 @@ async function sendOpeningReminderBatch(isSecondReminder = false) {
   });
 
   const employees = listResp?.result?.employees || [];
+  const today = getTodayKeyKyiv();
+
   for (const emp of employees) {
+    const absent = await isEmployeeAbsent(emp.employee_id, today);
+    if (absent) continue;
+
     const statusResp = await sendToAppsScript({
       action: 'get_daily_checkin_status',
       employee_id: emp.employee_id
     });
 
     const s = statusResp?.result || {};
-    if (s.has_any) continue;
+
+    if (s.has_out) continue;
+    if (s.has_in) continue;
 
     const text = isSecondReminder
       ? '⏰ Друге нагадування: ти ще не відкрив(ла) робочий день у боті.'
@@ -387,12 +399,23 @@ async function sendClosingReminderBatch(entryType) {
   });
 
   const employees = listResp?.result?.employees || [];
-  for (const emp of employees) {
-    const text = entryType === 'office'
-      ? '🔔 Нагадування: закрий робочий день у боті.'
-      : '🔔 Нагадування: закрий зміну у боті.';
+  const today = getTodayKeyKyiv();
 
-    await sendMessage(emp.telegram_chat_id, text);
+  for (const emp of employees) {
+    const absent = await isEmployeeAbsent(emp.employee_id, today);
+    if (absent) continue;
+
+    if (entryType === 'office') {
+      await sendMessage(emp.telegram_chat_id, '🔔 Нагадування: закрий робочий день у боті.');
+    }
+
+    if (entryType === 'production') {
+      await sendMessage(
+        emp.telegram_chat_id,
+        '🔔 Нагадування: внеси результати по станціях та закрий зміну.',
+        { reply_markup: getStationMenu() }
+      );
+    }
   }
 }
 
@@ -644,7 +667,6 @@ app.post('/webhook', async (req, res) => {
             chatId,
             `✅ Заявку на відпустку створено.\nТип: ${subtypeLabel}\nПеріод: ${dateFrom} - ${dateTo}\nЗаміщає: ${replacementPerson}\n\nСтатус: очікує погодження`
           );
-
           if (result.result?.request_id) {
             await notifyHrdForApproval(result.result.request_id);
           }
@@ -700,7 +722,6 @@ app.post('/webhook', async (req, res) => {
             chatId,
             `✅ Заявку на лікарняний створено.\nПеріод: ${dateFrom} - ${dateTo}\n\nСтатус: очікує погодження`
           );
-
           if (result.result?.request_id) {
             await notifyHrdForApproval(result.result.request_id);
           }
