@@ -6,9 +6,7 @@ const PORT = 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-
-// URL bridge лишаю прямо в коді
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyz6u4aEJv0FOY5Jbk85wc4OC88Tq8sdDXiSG_JhqW3VAYLggQHWB7F7ur179NPha3kuQ/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxr_dyTufDl0EFjpmJVRl_K4VIjohz5YDcXw8iqJlmHKhRFwIrK_ViEb77kbrdJbhwwew/exec';
 
 const HRD_USER_ID = '357796447';
 const ACCOUNTANT_USER_ID = '465734268';
@@ -189,7 +187,7 @@ function getOfficeExitMenu() {
 function getProductionStartMenu() {
   return {
     inline_keyboard: [
-      [{ text: '▶️ Відкрити зміну', callback_data: 'production_open_shift' }],
+      [{ text: '▶️ Почати зміну', callback_data: 'production_open_shift' }],
       [{ text: '⬅️ Назад', callback_data: 'back_main' }]
     ]
   };
@@ -292,6 +290,50 @@ function displayRequestType(req) {
   return req.request_type || 'Запит';
 }
 
+async function getDailyStatus(sessionOrEmp) {
+  return sendToAppsScript({
+    action: 'get_daily_checkin_status',
+    employee_id: sessionOrEmp.employee_id || '',
+    telegram_chat_id: sessionOrEmp.telegram_chat_id || '',
+    telegram_user_id: sessionOrEmp.telegram_user_id || '',
+    full_name: sessionOrEmp.full_name || ''
+  });
+}
+
+async function hasTodayIn(sessionOrEmp) {
+  const resp = await sendToAppsScript({
+    action: 'has_today_in',
+    employee_id: sessionOrEmp.employee_id || '',
+    telegram_chat_id: sessionOrEmp.telegram_chat_id || '',
+    telegram_user_id: sessionOrEmp.telegram_user_id || '',
+    full_name: sessionOrEmp.full_name || ''
+  });
+  return !!resp?.result?.exists;
+}
+
+async function hasTodayOut(sessionOrEmp) {
+  const resp = await sendToAppsScript({
+    action: 'has_today_out',
+    employee_id: sessionOrEmp.employee_id || '',
+    telegram_chat_id: sessionOrEmp.telegram_chat_id || '',
+    telegram_user_id: sessionOrEmp.telegram_user_id || '',
+    full_name: sessionOrEmp.full_name || ''
+  });
+  return !!resp?.result?.exists;
+}
+
+async function isEmployeeAbsent(empOrSession, dateIso) {
+  const resp = await sendToAppsScript({
+    action: 'is_employee_absent_on_date',
+    employee_id: empOrSession.employee_id || '',
+    date: dateIso,
+    telegram_chat_id: empOrSession.telegram_chat_id || '',
+    telegram_user_id: empOrSession.telegram_user_id || '',
+    full_name: empOrSession.full_name || ''
+  });
+  return resp?.result?.absent || false;
+}
+
 async function notifyHrdForApproval(requestId) {
   const requestResp = await sendToAppsScript({
     action: 'get_timeoff_request',
@@ -363,36 +405,63 @@ async function sendOpeningReminderBatch(isSecondReminder = false) {
   });
 
   const employees = listResp?.result?.employees || [];
-  for (const emp of employees) {
-    const statusResp = await sendToAppsScript({
-      action: 'get_daily_checkin_status',
-      employee_id: emp.employee_id
-    });
+  const today = getTodayKeyKyiv();
 
+  for (const emp of employees) {
+    if (await isEmployeeAbsent(emp, today)) continue;
+
+    const statusResp = await getDailyStatus(emp);
     const s = statusResp?.result || {};
-    if (s.has_any) continue;
+
+    if (s.has_in) continue;
 
     const text = isSecondReminder
-      ? '⏰ Друге нагадування: ти ще не відкрив(ла) робочий день у боті.'
-      : '⏰ Нагадування: відкрий робочий день у боті.';
+      ? '⏰ Друге нагадування: ти ще не почав(ла) робочий день у боті.'
+      : '⏰ Нагадування: почни робочий день у боті.';
 
     await sendMessage(emp.telegram_chat_id, text);
   }
 }
 
-async function sendClosingReminderBatch(entryType) {
+async function sendProductionClosingReminderBatch() {
   const listResp = await sendToAppsScript({
     action: 'list_open_shifts_for_closing_reminder',
-    entry_type: entryType
+    entry_type: 'production'
   });
 
   const employees = listResp?.result?.employees || [];
-  for (const emp of employees) {
-    const text = entryType === 'office'
-      ? '🔔 Нагадування: закрий робочий день у боті.'
-      : '🔔 Нагадування: закрий зміну у боті.';
+  const today = getTodayKeyKyiv();
 
-    await sendMessage(emp.telegram_chat_id, text);
+  for (const emp of employees) {
+    if (await isEmployeeAbsent(emp, today)) continue;
+
+    await sendMessage(
+      emp.telegram_chat_id,
+      '🔔 Час закрити зміну. Обери станції та подай звіт по виробництву.',
+      { reply_markup: getStationMenu() }
+    );
+  }
+}
+
+async function sendOfficeClosingReminderBatch(isSecondReminder = false) {
+  const listResp = await sendToAppsScript({
+    action: 'list_open_shifts_for_closing_reminder',
+    entry_type: 'office'
+  });
+
+  const employees = listResp?.result?.employees || [];
+  const today = getTodayKeyKyiv();
+
+  for (const emp of employees) {
+    if (await isEmployeeAbsent(emp, today)) continue;
+
+    const text = isSecondReminder
+      ? '⏰ Ти забув завершити робочий день.'
+      : '🔔 Заверши робочий день.';
+
+    await sendMessage(emp.telegram_chat_id, text, {
+      reply_markup: getOfficeExitMenu()
+    });
   }
 }
 
@@ -423,13 +492,19 @@ async function schedulerTick() {
 
     if (hhmm === '17:45') {
       lastSchedulerKey = key;
-      await sendClosingReminderBatch('office');
+      await sendProductionClosingReminderBatch();
       return;
     }
 
     if (hhmm === '18:00') {
       lastSchedulerKey = key;
-      await sendClosingReminderBatch('production');
+      await sendOfficeClosingReminderBatch(false);
+      return;
+    }
+
+    if (hhmm === '19:30') {
+      lastSchedulerKey = key;
+      await sendOfficeClosingReminderBatch(true);
       return;
     }
   } catch (error) {
@@ -459,6 +534,7 @@ app.post('/webhook', async (req, res) => {
     if (update.message) {
       const msg = update.message;
       const chatId = String(msg.chat.id);
+      const fromUserId = String(msg.from?.id || '');
       const text = (msg.text || '').trim();
 
       if (shouldBlockByTime(chatId)) {
@@ -496,13 +572,15 @@ app.post('/webhook', async (req, res) => {
         await sendToAppsScript({
           action: 'upsert_employee_chat',
           employee_id: employeeId,
-          telegram_chat_id: chatId
+          telegram_chat_id: chatId,
+          telegram_user_id: fromUserId
         });
 
         saveSession(chatId, {
           employee_id: employeeId,
           full_name: empResp.result.full_name || '',
           telegram_chat_id: chatId,
+          telegram_user_id: fromUserId,
           current_branch: null,
           checked_in: false,
           entry_type: '',
@@ -536,16 +614,25 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
-      if (session.awaiting_remote_reason) {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
+      session.telegram_user_id = fromUserId || session.telegram_user_id;
+      session.telegram_chat_id = chatId;
+      saveSession(chatId, session);
 
-        if (dayStatusResp?.result?.has_any) {
+      if (session.awaiting_remote_reason) {
+        const dayStatusResp = await getDailyStatus(session);
+        const dayStatus = dayStatusResp?.result || {};
+
+        if (dayStatus.has_in) {
           session.awaiting_remote_reason = false;
           saveSession(chatId, session);
-          await sendMessage(chatId, 'Звернись до HRD.');
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
+
+        if (dayStatus.has_out) {
+          session.awaiting_remote_reason = false;
+          saveSession(chatId, session);
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -561,6 +648,7 @@ app.post('/webhook', async (req, res) => {
           action: 'checkin',
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
+          telegram_user_id: session.telegram_user_id,
           full_name: session.full_name,
           type: 'in',
           mode: 'remote',
@@ -621,6 +709,7 @@ app.post('/webhook', async (req, res) => {
           action: 'timeoff_request',
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
+          telegram_user_id: session.telegram_user_id,
           full_name: session.full_name,
           request_type: 'vacation',
           request_subtype: subtype,
@@ -679,6 +768,7 @@ app.post('/webhook', async (req, res) => {
           action: 'timeoff_request',
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
+          telegram_user_id: session.telegram_user_id,
           full_name: session.full_name,
           request_type: 'sick',
           request_subtype: '',
@@ -862,6 +952,10 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      session.telegram_user_id = fromUserId || session.telegram_user_id;
+      session.telegram_chat_id = chatId;
+      saveSession(chatId, session);
+
       if (data === 'back_main') {
         session.timeoff_flow = null;
         session.timeoff_step = null;
@@ -890,20 +984,23 @@ app.post('/webhook', async (req, res) => {
         session.current_branch = 'production';
         saveSession(chatId, session);
 
-        await sendMessage(chatId, 'Виробництво.\nНатисніть Відкрити зміну.', {
+        await sendMessage(chatId, 'Виробництво.\nНатисніть Почати зміну.', {
           reply_markup: getProductionStartMenu()
         });
         return;
       }
 
       if (data === 'office_start') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
+        const dayStatusResp = await getDailyStatus(session);
+        const dayStatus = dayStatusResp?.result || {};
 
-        if (dayStatusResp?.result?.has_any) {
-          await sendMessage(chatId, 'Звернись до HRD.');
+        if (dayStatus.has_in) {
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
+
+        if (dayStatus.has_out) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -914,13 +1011,16 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'office_format_office') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
+        const dayStatusResp = await getDailyStatus(session);
+        const dayStatus = dayStatusResp?.result || {};
 
-        if (dayStatusResp?.result?.has_any) {
-          await sendMessage(chatId, 'Звернись до HRD.');
+        if (dayStatus.has_in) {
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
+
+        if (dayStatus.has_out) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -928,6 +1028,7 @@ app.post('/webhook', async (req, res) => {
           action: 'checkin',
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
+          telegram_user_id: session.telegram_user_id,
           full_name: session.full_name,
           type: 'in',
           mode: 'office',
@@ -953,13 +1054,16 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'office_format_remote') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
+        const dayStatusResp = await getDailyStatus(session);
+        const dayStatus = dayStatusResp?.result || {};
 
-        if (dayStatusResp?.result?.has_any) {
-          await sendMessage(chatId, 'Звернись до HRD.');
+        if (dayStatus.has_in) {
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
+
+        if (dayStatus.has_out) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -971,8 +1075,16 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'office_checkout') {
-        if (!session.checked_in || session.entry_type !== 'office') {
+        const dayStatusResp = await getDailyStatus(session);
+        const dayStatus = dayStatusResp?.result || {};
+
+        if (!dayStatus.has_in) {
           await sendMessage(chatId, 'Звернись до HRD.');
+          return;
+        }
+
+        if (dayStatus.has_out) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -980,6 +1092,7 @@ app.post('/webhook', async (req, res) => {
           action: 'checkin',
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
+          telegram_user_id: session.telegram_user_id,
           full_name: session.full_name,
           type: 'out',
           mode: '',
@@ -1004,13 +1117,16 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'production_open_shift') {
-        const dayStatusResp = await sendToAppsScript({
-          action: 'get_daily_checkin_status',
-          employee_id: session.employee_id
-        });
+        const dayStatusResp = await getDailyStatus(session);
+        const dayStatus = dayStatusResp?.result || {};
 
-        if (dayStatusResp?.result?.has_any) {
-          await sendMessage(chatId, 'Звернись до HRD.');
+        if (dayStatus.has_in) {
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+          return;
+        }
+
+        if (dayStatus.has_out) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -1018,6 +1134,7 @@ app.post('/webhook', async (req, res) => {
           action: 'checkin',
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
+          telegram_user_id: session.telegram_user_id,
           full_name: session.full_name,
           type: 'in',
           mode: 'production',
@@ -1041,7 +1158,7 @@ app.post('/webhook', async (req, res) => {
         session.production_entries = [];
         saveSession(chatId, session);
 
-        await sendMessage(chatId, '✅ Зміну відкрито.\nОберіть станцію:', {
+        await sendMessage(chatId, '✅ Початок зміни зафіксовано.', {
           reply_markup: getStationMenu()
         });
         return;
@@ -1049,7 +1166,7 @@ app.post('/webhook', async (req, res) => {
 
       if (data.startsWith('station_')) {
         if (!session.production_shift_open) {
-          await sendMessage(chatId, '⚠️ Спочатку відкрийте зміну.');
+          await sendMessage(chatId, '⚠️ Спочатку почни зміну.');
           return;
         }
 
@@ -1089,8 +1206,21 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'production_close_shift') {
-        if (!session.production_shift_open || !session.checked_in || session.entry_type !== 'production') {
+        if (!session.production_shift_open) {
           await sendMessage(chatId, 'Звернись до HRD.');
+          return;
+        }
+
+        const dayStatusResp = await getDailyStatus(session);
+        const dayStatus = dayStatusResp?.result || {};
+
+        if (!dayStatus.has_in) {
+          await sendMessage(chatId, 'Звернись до HRD.');
+          return;
+        }
+
+        if (dayStatus.has_out) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
@@ -1108,6 +1238,7 @@ app.post('/webhook', async (req, res) => {
           closed_at: closedAt,
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
+          telegram_user_id: session.telegram_user_id,
           full_name: session.full_name,
           entries: session.production_entries
         });
@@ -1121,6 +1252,7 @@ app.post('/webhook', async (req, res) => {
           action: 'checkin',
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
+          telegram_user_id: session.telegram_user_id,
           full_name: session.full_name,
           type: 'out',
           mode: '',
