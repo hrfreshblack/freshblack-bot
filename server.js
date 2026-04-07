@@ -6,7 +6,7 @@ const PORT = 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxr_dyTufDl0EFjpmJVRl_K4VIjohz5YDcXw8iqJlmHKhRFwIrK_ViEb77kbrdJbhwwew/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwEWXfKx3g2qf2CzWjVKZ_2QBvgSPOIKNbF6LpiCd1-JnwmUmyOinwLP-VIKup4dL1HHA/exec';
 
 const HRD_USER_ID = '357796447';
 const ACCOUNTANT_USER_ID = '465734268';
@@ -25,6 +25,10 @@ const STATIONS = [
 
 app.use(express.text({ type: '*/*' }));
 
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function telegram(method, payload) {
   try {
     const resp = await axios.post(`${TELEGRAM_API}/${method}`, payload, {
@@ -32,7 +36,15 @@ async function telegram(method, payload) {
     });
     return resp.data;
   } catch (error) {
-    console.error(`${method} ERROR:`, JSON.stringify(error?.response?.data || error?.message || error));
+    const errData = error?.response?.data || error?.message || error;
+
+    // не вважаємо блокування бота критичною аварією
+    if (error?.response?.status === 403) {
+      console.warn(`${method} BLOCKED:`, JSON.stringify(errData));
+      return { ok: false, blocked: true, error: errData };
+    }
+
+    console.error(`${method} ERROR:`, JSON.stringify(errData));
     return null;
   }
 }
@@ -58,7 +70,7 @@ async function sendToAppsScript(payload) {
   try {
     const resp = await axios.post(APPS_SCRIPT_URL, payload, {
       headers: { 'Content-Type': 'application/json' },
-      timeout: 20000
+      timeout: 60000
     });
     return resp.data;
   } catch (error) {
@@ -119,8 +131,8 @@ function getBotSleepMessage() {
   const now = getKyivNowParts();
   const minutes = now.hour * 60 + now.minute;
 
-  if (minutes < 7 * 60) return 'Я ще сплю';
-  if (minutes > 22 * 60 + 30) return 'Я стомився і сьогодні більше не працюю';
+  if (minutes < 7 * 60 + 30) return 'Я ще сплю 😴';
+  if (minutes >= 23 * 60) return 'Я стомився і сьогодні більше не працюю 🥱';
   return '';
 }
 
@@ -408,6 +420,8 @@ async function sendOpeningReminderBatch(isSecondReminder = false) {
   const today = getTodayKeyKyiv();
 
   for (const emp of employees) {
+    await sleep(120);
+
     if (await isEmployeeAbsent(emp, today)) continue;
 
     const statusResp = await getDailyStatus(emp);
@@ -433,11 +447,13 @@ async function sendProductionClosingReminderBatch() {
   const today = getTodayKeyKyiv();
 
   for (const emp of employees) {
+    await sleep(120);
+
     if (await isEmployeeAbsent(emp, today)) continue;
 
     await sendMessage(
       emp.telegram_chat_id,
-      '🔔 Час закрити зміну. Обери станції та подай звіт по виробництву.',
+      '🔔 Час закрити зміну.\nПодай звіт за зміну та обери станції.',
       { reply_markup: getStationMenu() }
     );
   }
@@ -453,11 +469,13 @@ async function sendOfficeClosingReminderBatch(isSecondReminder = false) {
   const today = getTodayKeyKyiv();
 
   for (const emp of employees) {
+    await sleep(120);
+
     if (await isEmployeeAbsent(emp, today)) continue;
 
     const text = isSecondReminder
       ? '⏰ Ти забув завершити робочий день.'
-      : '🔔 Заверши робочий день.';
+      : '🔔 Не забудь завершити робочий день.';
 
     await sendMessage(emp.telegram_chat_id, text, {
       reply_markup: getOfficeExitMenu()
@@ -598,7 +616,9 @@ app.post('/webhook', async (req, res) => {
           request_type: '',
           request_subtype: '',
           date_from: '',
-          date_to: ''
+          date_to: '',
+          _last_action: '',
+          _last_action_ts: 0
         });
 
         await sendMessage(chatId, `👋 Вітаю, <b>${empResp.result.full_name || ''}</b>.\nОберіть напрям роботи:`, {
@@ -659,7 +679,7 @@ app.post('/webhook', async (req, res) => {
         });
 
         if (result?.ok) {
-          await sendMessage(chatId, '✅ Вхід зафіксовано.\nФормат роботи: Віддалено\nПричину записано.', {
+          await sendMessage(chatId, 'Дякую, робочий день розпочато. Вдалого дня 😉', {
             reply_markup: getOfficeExitMenu()
           });
         } else {
@@ -952,6 +972,14 @@ app.post('/webhook', async (req, res) => {
         return;
       }
 
+      // антидубль callback
+      const nowTs = Date.now();
+      if (session._last_action === data && nowTs - (session._last_action_ts || 0) < 2000) {
+        return;
+      }
+      session._last_action = data;
+      session._last_action_ts = nowTs;
+
       session.telegram_user_id = fromUserId || session.telegram_user_id;
       session.telegram_chat_id = chatId;
       saveSession(chatId, session);
@@ -991,6 +1019,12 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'office_start') {
+        const today = getTodayKeyKyiv();
+        if (await isEmployeeAbsent(session, today)) {
+          await sendMessage(chatId, 'Ти зараз у відпустці або на лікарняному 😉');
+          return;
+        }
+
         const dayStatusResp = await getDailyStatus(session);
         const dayStatus = dayStatusResp?.result || {};
 
@@ -1044,7 +1078,7 @@ app.post('/webhook', async (req, res) => {
           session.work_format = 'office';
           saveSession(chatId, session);
 
-          await sendMessage(chatId, '✅ Вхід зафіксовано.\nФормат роботи: Офіс', {
+          await sendMessage(chatId, 'Дякую, робочий день розпочато. Вдалого дня 😉', {
             reply_markup: getOfficeExitMenu()
           });
         } else {
@@ -1070,7 +1104,7 @@ app.post('/webhook', async (req, res) => {
         session.awaiting_remote_reason = true;
         saveSession(chatId, session);
 
-        await sendMessage(chatId, 'Вкажіть причину віддаленої роботи.\nНаприклад: на дегустаціях / працюю на виїзді');
+        await sendMessage(chatId, 'Оберіть причину віддаленої роботи:\n• Працюю на виїзді\n• За погодженням із керівником');
         return;
       }
 
@@ -1109,7 +1143,7 @@ app.post('/webhook', async (req, res) => {
           session.remote_reason = '';
           saveSession(chatId, session);
 
-          await sendMessage(chatId, 'Гарного вечора. Вихід записано.');
+          await sendMessage(chatId, 'Вихід зафіксовано. Гарного вечора 🤗');
         } else {
           await sendMessage(chatId, '⚠️ Не вдалося записати вихід.');
         }
@@ -1117,6 +1151,12 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'production_open_shift') {
+        const today = getTodayKeyKyiv();
+        if (await isEmployeeAbsent(session, today)) {
+          await sendMessage(chatId, 'Ти зараз у відпустці або на лікарняному 😉');
+          return;
+        }
+
         const dayStatusResp = await getDailyStatus(session);
         const dayStatus = dayStatusResp?.result || {};
 
@@ -1153,14 +1193,14 @@ app.post('/webhook', async (req, res) => {
         session.production_shift_open = true;
         session.entry_type = 'production';
         session.work_format = 'production';
-        session.production_shift_id = makeShiftId(session.employee_id);
+        if (!session.production_shift_id) {
+          session.production_shift_id = makeShiftId(session.employee_id);
+        }
         session.production_opened_at = nowIso();
         session.production_entries = [];
         saveSession(chatId, session);
 
-        await sendMessage(chatId, '✅ Початок зміни зафіксовано.', {
-          reply_markup: getStationMenu()
-        });
+        await sendMessage(chatId, 'Зміну розпочато. Вдалого дня 😉');
         return;
       }
 
@@ -1278,7 +1318,7 @@ app.post('/webhook', async (req, res) => {
         session.current_station_name = '';
         saveSession(chatId, session);
 
-        await sendMessage(chatId, 'Гарного вечора. Зміну закрито.');
+        await sendMessage(chatId, 'Зміну завершено. Гарного вечора 🤗');
         return;
       }
 
