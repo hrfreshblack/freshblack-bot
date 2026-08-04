@@ -1,16 +1,23 @@
 import express from 'express';
 import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwEWXfKx3g2qf2CzWjVKZ_2QBvgSPOIKNbF6LpiCd1-JnwmUmyOinwLP-VIKup4dL1HHA/exec';
+const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL ||
+  'https://script.google.com/macros/s/AKfycbwEWXfKx3g2qf2CzWjVKZ_2QBvgSPOIKNbF6LpiCd1-JnwmUmyOinwLP-VIKup4dL1HHA/exec';
 
-const HRD_USER_ID = '357796447';
-const ACCOUNTANT_USER_ID = '465734268';
-const APPROVAL_CHAT_ID = '-5036148503';
+const HRD_USER_ID = process.env.HRD_USER_ID || '357796447';
+const ACCOUNTANT_USER_ID = process.env.ACCOUNTANT_USER_ID || '465734268';
+const APPROVAL_CHAT_ID = process.env.APPROVAL_CHAT_ID || '-5036148503';
+
+const SESSIONS_FILE = process.env.SESSIONS_FILE || path.join(process.cwd(), 'data', 'sessions.json');
+const SCHEDULER_STATE_FILE = process.env.SCHEDULER_STATE_FILE || path.join(process.cwd(), 'data', 'scheduler-state.json');
 
 const STATIONS = [
   'Автомат 1кг',
@@ -29,11 +36,27 @@ async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function withRetry(fn, { retries = 2, baseDelayMs = 300 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const status = error?.response?.status;
+      const isRetryable = !status || status >= 500 || error.code === 'ECONNABORTED' || error.code === 'ECONNRESET';
+      if (!isRetryable || attempt === retries) throw error;
+      await sleep(baseDelayMs * Math.pow(2, attempt));
+    }
+  }
+  throw lastError;
+}
+
 async function telegram(method, payload) {
   try {
-    const resp = await axios.post(`${TELEGRAM_API}/${method}`, payload, {
+    const resp = await withRetry(() => axios.post(`${TELEGRAM_API}/${method}`, payload, {
       timeout: 20000
-    });
+    }));
     return resp.data;
   } catch (error) {
     const errData = error?.response?.data || error?.message || error;
@@ -66,12 +89,19 @@ async function answerCallbackQuery(callbackQueryId, text = '') {
   });
 }
 
-async function sendToAppsScript(payload) {
+// retry: true лише для запитів на ЧИТАННЯ. Дії, що пишуть у таблицю
+// (checkin, timeoff_request, production_shift, update_timeoff_status,
+// upsert_employee_chat), НІКОЛИ не повторюємо автоматично — якщо перший
+// запит фактично записався, а відповідь просто не дійшла, повтор створив би
+// дублікат рядка в Google Таблиці. Це свідомий компроміс: для читання трохи
+// стійкості важливіше, для запису — точність важливіша за стійкість.
+async function sendToAppsScript(payload, { retry = false } = {}) {
   try {
-    const resp = await axios.post(APPS_SCRIPT_URL, payload, {
+    const doRequest = () => axios.post(APPS_SCRIPT_URL, payload, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 60000
     });
+    const resp = retry ? await withRetry(doRequest) : await doRequest();
     return resp.data;
   } catch (error) {
     console.error('Apps Script ERROR:', JSON.stringify(error?.response?.data || error?.message || error));
@@ -81,13 +111,45 @@ async function sendToAppsScript(payload) {
 
 const sessions = new Map();
 
+function loadSessionsFromDisk() {
+  try {
+    if (!fs.existsSync(SESSIONS_FILE)) return;
+    const raw = fs.readFileSync(SESSIONS_FILE, 'utf8');
+    const obj = JSON.parse(raw || '{}');
+    Object.entries(obj).forEach(([chatId, session]) => sessions.set(chatId, session));
+    console.log(`Sessions restored from disk: ${sessions.size}`);
+  } catch (error) {
+    console.error('Failed to load sessions from disk:', error?.message || error);
+  }
+}
+
+let sessionsSaveScheduled = false;
+function persistSessionsToDisk() {
+  if (sessionsSaveScheduled) return;
+  sessionsSaveScheduled = true;
+  setImmediate(() => {
+    sessionsSaveScheduled = false;
+    try {
+      const dir = path.dirname(SESSIONS_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const obj = Object.fromEntries(sessions);
+      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(obj));
+    } catch (error) {
+      console.error('Failed to persist sessions to disk:', error?.message || error);
+    }
+  });
+}
+
 function getSession(chatId) {
   return sessions.get(String(chatId));
 }
 
 function saveSession(chatId, session) {
   sessions.set(String(chatId), session);
+  persistSessionsToDisk();
 }
+
+loadSessionsFromDisk();
 
 function getKyivNowParts() {
   const dtf = new Intl.DateTimeFormat('en-GB', {
@@ -309,48 +371,28 @@ async function getDailyStatus(sessionOrEmp) {
     telegram_chat_id: sessionOrEmp.telegram_chat_id || '',
     telegram_user_id: sessionOrEmp.telegram_user_id || '',
     full_name: sessionOrEmp.full_name || ''
-  });
+  }, { retry: true });
 }
 
-async function hasTodayIn(sessionOrEmp) {
-  const resp = await sendToAppsScript({
-    action: 'has_today_in',
+// Об'єднує стару пару викликів (is_employee_absent_on_date + get_daily_checkin_status)
+// в один запит до bridge — рівно та сама перевірка, але один round-trip
+// замість двох. Використовується там, де раніше викликались обидві перевірки
+// підряд (office_start, production_open_shift).
+async function getDayContext(sessionOrEmp) {
+  return sendToAppsScript({
+    action: 'get_employee_day_context',
     employee_id: sessionOrEmp.employee_id || '',
     telegram_chat_id: sessionOrEmp.telegram_chat_id || '',
     telegram_user_id: sessionOrEmp.telegram_user_id || '',
     full_name: sessionOrEmp.full_name || ''
-  });
-  return !!resp?.result?.exists;
-}
-
-async function hasTodayOut(sessionOrEmp) {
-  const resp = await sendToAppsScript({
-    action: 'has_today_out',
-    employee_id: sessionOrEmp.employee_id || '',
-    telegram_chat_id: sessionOrEmp.telegram_chat_id || '',
-    telegram_user_id: sessionOrEmp.telegram_user_id || '',
-    full_name: sessionOrEmp.full_name || ''
-  });
-  return !!resp?.result?.exists;
-}
-
-async function isEmployeeAbsent(empOrSession, dateIso) {
-  const resp = await sendToAppsScript({
-    action: 'is_employee_absent_on_date',
-    employee_id: empOrSession.employee_id || '',
-    date: dateIso,
-    telegram_chat_id: empOrSession.telegram_chat_id || '',
-    telegram_user_id: empOrSession.telegram_user_id || '',
-    full_name: empOrSession.full_name || ''
-  });
-  return resp?.result?.absent || false;
+  }, { retry: true });
 }
 
 async function notifyHrdForApproval(requestId) {
   const requestResp = await sendToAppsScript({
     action: 'get_timeoff_request',
     request_id: requestId
-  });
+  }, { retry: true });
 
   if (!requestResp?.ok || !requestResp?.result?.found) return;
   const req = requestResp.result;
@@ -382,7 +424,7 @@ async function notifyAccountantForApproval(requestId) {
   const requestResp = await sendToAppsScript({
     action: 'get_timeoff_request',
     request_id: requestId
-  });
+  }, { retry: true });
 
   if (!requestResp?.ok || !requestResp?.result?.found) return;
   const req = requestResp.result;
@@ -411,119 +453,133 @@ async function notifyAccountantForApproval(requestId) {
   }
 }
 
-async function sendOpeningReminderBatch(isSecondReminder = false) {
-  const listResp = await sendToAppsScript({
-    action: 'list_employees_for_opening_reminder'
-  });
+// Надсилає повідомлення багатьом людям паралельно (обмеженою кількістю
+// одночасних відправок), замість повністю послідовного циклу з паузою.
+// Одна людина, що заблокувала бота чи має проблему з мережею, більше не
+// сповільнює розсилку всім іншим.
+async function sendToManyInBatches(items, sendFn, concurrency = 20) {
+  let index = 0;
 
-  const employees = listResp?.result?.employees || [];
-  const today = getTodayKeyKyiv();
-
-  for (const emp of employees) {
-    await sleep(120);
-
-    if (await isEmployeeAbsent(emp, today)) continue;
-
-    const statusResp = await getDailyStatus(emp);
-    const s = statusResp?.result || {};
-
-    if (s.has_in) continue;
-
-    const text = isSecondReminder
-      ? '⏰ Друге нагадування: ти ще не почав(ла) робочий день у боті.'
-      : '⏰ Нагадування: почни робочий день у боті.';
-
-    await sendMessage(emp.telegram_chat_id, text);
+  async function worker() {
+    while (index < items.length) {
+      const current = items[index++];
+      try {
+        await sendFn(current);
+      } catch (error) {
+        console.error('Reminder send failed:', error?.message || error);
+      }
+    }
   }
+
+  const workerCount = Math.min(concurrency, items.length) || 0;
+  const workers = Array.from({ length: workerCount }, () => worker());
+  await Promise.all(workers);
+}
+
+async function sendOpeningReminderBatch(isSecondReminder = false) {
+  const listResp = await sendToAppsScript({ action: 'list_opening_reminder_targets' }, { retry: true });
+  const employees = listResp?.result?.employees || [];
+
+  const text = isSecondReminder
+    ? '⏰ Друге нагадування: ти ще не почав(ла) робочий день у боті.'
+    : '⏰ Нагадування: почни робочий день у боті.';
+
+  await sendToManyInBatches(employees, (emp) => sendMessage(emp.telegram_chat_id, text));
 }
 
 async function sendProductionClosingReminderBatch() {
   const listResp = await sendToAppsScript({
-    action: 'list_open_shifts_for_closing_reminder',
+    action: 'list_closing_reminder_targets',
     entry_type: 'production'
-  });
+  }, { retry: true });
 
   const employees = listResp?.result?.employees || [];
-  const today = getTodayKeyKyiv();
 
-  for (const emp of employees) {
-    await sleep(120);
-
-    if (await isEmployeeAbsent(emp, today)) continue;
-
-    await sendMessage(
-      emp.telegram_chat_id,
-      '🔔 Час закрити зміну.\nПодай звіт за зміну та обери станції.',
-      { reply_markup: getStationMenu() }
-    );
-  }
+  await sendToManyInBatches(employees, (emp) => sendMessage(
+    emp.telegram_chat_id,
+    '🔔 Час закрити зміну.\nПодай звіт за зміну та обери станції.',
+    { reply_markup: getStationMenu() }
+  ));
 }
 
 async function sendOfficeClosingReminderBatch(isSecondReminder = false) {
   const listResp = await sendToAppsScript({
-    action: 'list_open_shifts_for_closing_reminder',
+    action: 'list_closing_reminder_targets',
     entry_type: 'office'
-  });
+  }, { retry: true });
 
   const employees = listResp?.result?.employees || [];
-  const today = getTodayKeyKyiv();
 
-  for (const emp of employees) {
-    await sleep(120);
+  const text = isSecondReminder
+    ? '⏰ Ти забув завершити робочий день.'
+    : '🔔 Не забудь завершити робочий день.';
 
-    if (await isEmployeeAbsent(emp, today)) continue;
+  await sendToManyInBatches(employees, (emp) => sendMessage(emp.telegram_chat_id, text, {
+    reply_markup: getOfficeExitMenu()
+  }));
+}
 
-    const text = isSecondReminder
-      ? '⏰ Ти забув завершити робочий день.'
-      : '🔔 Не забудь завершити робочий день.';
+// Розклад нагадувань. Кожен слот спрацьовує РІВНО один раз на добу, як тільки
+// поточний час його досягнув (а не лише в точну хвилину, як було раніше) —
+// тож затримка event loop саме на потрібній хвилині більше не "з'їдає" ціле
+// нагадування на весь день.
+const REMINDER_SCHEDULE = [
+  { id: 'opening_1', minutes: 8 * 60 + 30, run: () => sendOpeningReminderBatch(false) },
+  { id: 'opening_2', minutes: 9 * 60 + 30, run: () => sendOpeningReminderBatch(true) },
+  { id: 'production_close', minutes: 17 * 60 + 45, run: () => sendProductionClosingReminderBatch() },
+  { id: 'office_close_1', minutes: 18 * 60, run: () => sendOfficeClosingReminderBatch(false) },
+  { id: 'office_close_2', minutes: 19 * 60 + 30, run: () => sendOfficeClosingReminderBatch(true) }
+];
 
-    await sendMessage(emp.telegram_chat_id, text, {
-      reply_markup: getOfficeExitMenu()
-    });
+let firedToday = new Set();
+let firedDateKey = '';
+
+function loadSchedulerState() {
+  try {
+    if (!fs.existsSync(SCHEDULER_STATE_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(SCHEDULER_STATE_FILE, 'utf8') || '{}');
+    firedDateKey = raw.dateKey || '';
+    firedToday = new Set(raw.fired || []);
+  } catch (error) {
+    console.error('Failed to load scheduler state:', error?.message || error);
   }
 }
 
-let lastSchedulerKey = '';
+function persistSchedulerState() {
+  try {
+    const dir = path.dirname(SCHEDULER_STATE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(SCHEDULER_STATE_FILE, JSON.stringify({
+      dateKey: firedDateKey,
+      fired: Array.from(firedToday)
+    }));
+  } catch (error) {
+    console.error('Failed to persist scheduler state:', error?.message || error);
+  }
+}
+
+loadSchedulerState();
 
 async function schedulerTick() {
   try {
     if (!isWeekdayKyiv()) return;
 
     const now = getKyivNowParts();
-    const hhmm = `${String(now.hour).padStart(2, '0')}:${String(now.minute).padStart(2, '0')}`;
     const todayKey = getTodayKeyKyiv();
-    const key = `${todayKey}-${hhmm}`;
+    const nowMinutes = now.hour * 60 + now.minute;
 
-    if (key === lastSchedulerKey) return;
-
-    if (hhmm === '08:30') {
-      lastSchedulerKey = key;
-      await sendOpeningReminderBatch(false);
-      return;
+    if (todayKey !== firedDateKey) {
+      firedDateKey = todayKey;
+      firedToday = new Set();
     }
 
-    if (hhmm === '09:30') {
-      lastSchedulerKey = key;
-      await sendOpeningReminderBatch(true);
-      return;
-    }
+    for (const slot of REMINDER_SCHEDULE) {
+      if (firedToday.has(slot.id)) continue;
+      if (nowMinutes < slot.minutes) continue;
 
-    if (hhmm === '17:45') {
-      lastSchedulerKey = key;
-      await sendProductionClosingReminderBatch();
-      return;
-    }
-
-    if (hhmm === '18:00') {
-      lastSchedulerKey = key;
-      await sendOfficeClosingReminderBatch(false);
-      return;
-    }
-
-    if (hhmm === '19:30') {
-      lastSchedulerKey = key;
-      await sendOfficeClosingReminderBatch(true);
-      return;
+      firedToday.add(slot.id);
+      persistSchedulerState();
+      await slot.run();
     }
   } catch (error) {
     console.error('schedulerTick ERROR:', error?.stack || error?.message || error);
@@ -543,6 +599,14 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/webhook', async (req, res) => {
+  if (WEBHOOK_SECRET) {
+    const provided = req.get('X-Telegram-Bot-Api-Secret-Token');
+    if (provided !== WEBHOOK_SECRET) {
+      res.sendStatus(401);
+      return;
+    }
+  }
+
   res.sendStatus(200);
 
   try {
@@ -580,7 +644,7 @@ app.post('/webhook', async (req, res) => {
         const empResp = await sendToAppsScript({
           action: 'get_employee',
           employee_id: employeeId
-        });
+        }, { retry: true });
 
         if (!empResp?.ok || !empResp?.result?.found) {
           await sendMessage(chatId, '⚠️ Співробітника не знайдено в таблиці employees.');
@@ -852,7 +916,7 @@ app.post('/webhook', async (req, res) => {
         const reqResp = await sendToAppsScript({
           action: 'get_timeoff_request',
           request_id: requestId
-        });
+        }, { retry: true });
 
         if (!reqResp?.ok || !reqResp?.result?.found) {
           await sendMessage(chatId, '⚠️ Заявку не знайдено.');
@@ -914,7 +978,7 @@ app.post('/webhook', async (req, res) => {
         const reqResp = await sendToAppsScript({
           action: 'get_timeoff_request',
           request_id: requestId
-        });
+        }, { retry: true });
 
         if (!reqResp?.ok || !reqResp?.result?.found) {
           await sendMessage(chatId, '⚠️ Заявку не знайдено.');
@@ -1019,21 +1083,20 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'office_start') {
-        const today = getTodayKeyKyiv();
-        if (await isEmployeeAbsent(session, today)) {
+        const ctxResp = await getDayContext(session);
+        const ctx = ctxResp?.result || {};
+
+        if (ctx.absent) {
           await sendMessage(chatId, 'Ти зараз у відпустці або на лікарняному 😉');
           return;
         }
 
-        const dayStatusResp = await getDailyStatus(session);
-        const dayStatus = dayStatusResp?.result || {};
-
-        if (dayStatus.has_in) {
+        if (ctx.has_in) {
           await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
           return;
         }
 
-        if (dayStatus.has_out) {
+        if (ctx.has_out) {
           await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
@@ -1151,21 +1214,20 @@ app.post('/webhook', async (req, res) => {
       }
 
       if (data === 'production_open_shift') {
-        const today = getTodayKeyKyiv();
-        if (await isEmployeeAbsent(session, today)) {
+        const ctxResp = await getDayContext(session);
+        const ctx = ctxResp?.result || {};
+
+        if (ctx.absent) {
           await sendMessage(chatId, 'Ти зараз у відпустці або на лікарняному 😉');
           return;
         }
 
-        const dayStatusResp = await getDailyStatus(session);
-        const dayStatus = dayStatusResp?.result || {};
-
-        if (dayStatus.has_in) {
+        if (ctx.has_in) {
           await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
           return;
         }
 
-        if (dayStatus.has_out) {
+        if (ctx.has_out) {
           await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
