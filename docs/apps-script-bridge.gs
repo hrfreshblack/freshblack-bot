@@ -130,6 +130,16 @@ function doPost(e) {
           result: listClosingReminderTargets_(data.entry_type || '')
         });
 
+      // ---- Нижче: дії для синхронізації з локальною базою бота (Postgres на
+      // Railway). Таблиця лишається місцем перегляду/табеля, але живі
+      // перевірки бот тепер робить у своїй базі, а сюди лише дзеркалить дані.
+
+      case 'list_all_employees':
+        return jsonResponse_({ ok: true, result: listAllEmployees_() });
+
+      case 'list_all_timeoff_requests':
+        return jsonResponse_({ ok: true, result: listAllTimeoffRequests_() });
+
       default:
         return jsonResponse_({ ok: false, error: 'Unknown action' });
     }
@@ -219,6 +229,80 @@ function upsertEmployeeChat_(employeeIdRaw, chatIdRaw, userIdRaw) {
   }
 
   return { updated: false, error: 'Employee not found' };
+}
+
+// Повний дамп employees (усі рядки, незалежно від active/chat_id) для
+// періодичної синхронізації в локальну базу бота.
+function listAllEmployees_() {
+  const sh = getOrCreateSheet_(EMPLOYEES_SHEET);
+  const lastRow = sh.getLastRow();
+  const lastCol = sh.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return { employees: [] };
+
+  const headers = getHeaders_(sh);
+  const rows = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  const result = [];
+  rows.forEach(function(row) {
+    const employeeId = String(getCellByHeader_(row, headers, 'employee_id') || '').trim();
+    if (!employeeId) return;
+
+    const activeRaw = String(getCellByHeader_(row, headers, 'active') || '').trim().toLowerCase();
+
+    result.push({
+      employee_id: employeeId,
+      full_name: String(getCellByHeader_(row, headers, 'full_name') || '').trim(),
+      active: !['false', '0', 'no', 'inactive', 'ні'].includes(activeRaw)
+    });
+  });
+
+  return { employees: result };
+}
+
+// Повний дамп timeoff_requests для одноразового первинного наповнення
+// локальної бази бота (щоб уже подані/погоджені заявки одразу враховувались
+// у перевірках відсутності, а не тільки нові, подані після переходу).
+function listAllTimeoffRequests_() {
+  const sh = getOrCreateSheet_(TIMEOFF_SHEET);
+  const lastRow = sh.getLastRow();
+  const lastCol = sh.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return { requests: [] };
+
+  const headers = getHeaders_(sh);
+  const rows = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  const result = [];
+  rows.forEach(function(row) {
+    const requestId = String(getCellByHeader_(row, headers, 'request_id') || '').trim();
+    if (!requestId) return;
+
+    const dateFrom = String(getCellByHeader_(row, headers, 'date_from') || '').trim();
+    const dateTo = String(getCellByHeader_(row, headers, 'date_to') || '').trim();
+
+    result.push({
+      request_id: requestId,
+      employee_id: String(getCellByHeader_(row, headers, 'employee_id') || '').trim(),
+      telegram_chat_id: String(getCellByHeader_(row, headers, 'telegram_chat_id') || '').trim(),
+      telegram_user_id: String(getCellByHeader_(row, headers, 'telegram_user_id') || '').trim(),
+      full_name: String(getCellByHeader_(row, headers, 'full_name') || '').trim(),
+      request_type: String(getCellByHeader_(row, headers, 'request_type') || '').trim(),
+      request_subtype: String(getCellByHeader_(row, headers, 'request_subtype') || '').trim(),
+      date_from: dateFrom,
+      date_to: dateTo,
+      date_from_iso: ukrDateToIso_(dateFrom),
+      date_to_iso: ukrDateToIso_(dateTo),
+      replacement_person: String(getCellByHeader_(row, headers, 'replacement_person') || '').trim(),
+      comment: String(getCellByHeader_(row, headers, 'comment') || '').trim(),
+      status: String(getCellByHeader_(row, headers, 'status') || '').trim(),
+      status_hr: String(getCellByHeader_(row, headers, 'status_hr') || '').trim(),
+      status_chief_acc: String(getCellByHeader_(row, headers, 'status_chief_acc') || '').trim(),
+      final_status: String(getCellByHeader_(row, headers, 'final_status') || '').trim(),
+      hr_message_id: String(getCellByHeader_(row, headers, 'hr_message_id') || '').trim(),
+      accountant_message_id: String(getCellByHeader_(row, headers, 'accountant_message_id') || '').trim()
+    });
+  });
+
+  return { requests: result };
 }
 
 function listEmployeesForOpeningReminder_() {
@@ -539,7 +623,13 @@ function saveTimeoffRequest_(data) {
     data.full_name || ''
   );
 
+  // Якщо запит уже прийшов з готовим request_id (бот генерує його сам, бо
+  // request_id тепер потрібен одразу, ще до звернення до Таблиці) —
+  // використовуємо його, щоб рядок у Таблиці й запис у локальній базі бота
+  // лишались одним і тим самим request_id. Інакше (прямий виклик без
+  // request_id) — генеруємо, як і раніше.
   const requestId =
+    String(data.request_id || '').trim() ||
     'REQ-' +
     Utilities.formatDate(new Date(), TZ, 'yyyyMMdd-HHmmss') +
     '-' +

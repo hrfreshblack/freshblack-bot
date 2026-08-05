@@ -2,6 +2,12 @@ import express from 'express';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import db from './db.js';
+
+if (!process.env.DATABASE_URL) {
+  console.error('DATABASE_URL is not set. The bot now needs its own Postgres database to run — see docs/DEPLOYMENT.md.');
+  process.exit(1);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -89,12 +95,15 @@ async function answerCallbackQuery(callbackQueryId, text = '') {
   });
 }
 
-// retry: true лише для запитів на ЧИТАННЯ. Дії, що пишуть у таблицю
-// (checkin, timeoff_request, production_shift, update_timeoff_status,
-// upsert_employee_chat), НІКОЛИ не повторюємо автоматично — якщо перший
-// запит фактично записався, а відповідь просто не дійшла, повтор створив би
-// дублікат рядка в Google Таблиці. Це свідомий компроміс: для читання трохи
-// стійкості важливіше, для запису — точність важливіша за стійкість.
+// Живі дії бота (checkin, timeoff_request, production_shift,
+// update_timeoff_status, upsert_employee_chat) більше НЕ йдуть сюди напряму —
+// вони пишуться в локальну базу (миттєво) і чергою (outbox) прилітають в
+// Таблицю у фоні через ці самі дії bridge. sendToAppsScript лишається для:
+// 1) періодичної синхронізації читання (employees/timeoff_requests),
+// 2) саме черги outbox, коли вона надсилає накопичені записи.
+// retry: true — лише для читання; чергу outbox свідомо не обгортаємо
+// повтором тут (щоб не здвоїти рядок, якщо запис фактично пройшов, а
+// відповідь просто не дійшла) — вона й так retry'їться на наступному тіку.
 async function sendToAppsScript(payload, { retry = false } = {}) {
   try {
     const doRequest = () => axios.post(APPS_SCRIPT_URL, payload, {
@@ -107,6 +116,31 @@ async function sendToAppsScript(payload, { retry = false } = {}) {
     console.error('Apps Script ERROR:', JSON.stringify(error?.response?.data || error?.message || error));
     return { ok: false, error: error?.response?.data || error?.message || 'Bridge error' };
   }
+}
+
+// Записує в локальну базу і одразу повертає керування (не чекаючи Таблиці) —
+// саме тому кнопки в боті тепер відповідають миттєво. Той самий payload іде
+// в чергу outbox, звідки фоновий воркер (flushOutbox) занесе його в Google
+// Таблицю окремо, без затримки для співробітника.
+async function recordCheckin(payload) {
+  await db.insertCheckin({ ...payload, kyiv_date: getTodayKeyKyiv() });
+  await db.enqueueOutbox('checkin', payload);
+}
+
+async function recordProductionShift(payload) {
+  const rows = (payload.entries || []).map((entry) => ({
+    shift_id: payload.shift_id,
+    opened_at: payload.opened_at,
+    closed_at: payload.closed_at,
+    employee_id: payload.employee_id,
+    telegram_chat_id: payload.telegram_chat_id,
+    telegram_user_id: payload.telegram_user_id,
+    full_name: payload.full_name,
+    station_name: entry.station_name,
+    result_text: entry.result_text
+  }));
+  await db.insertProductionShiftEntries(rows);
+  await db.enqueueOutbox('production_shift', payload);
 }
 
 const sessions = new Map();
@@ -160,6 +194,7 @@ function getKyivNowParts() {
     weekday: 'short',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hourCycle: 'h23'
   });
 
@@ -175,7 +210,8 @@ function getKyivNowParts() {
     day: Number(out.day),
     weekday: out.weekday,
     hour: Number(out.hour),
-    minute: Number(out.minute)
+    minute: Number(out.minute),
+    second: Number(out.second)
   };
 }
 
@@ -214,6 +250,40 @@ function makeShiftId(employeeId) {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   return `SHIFT-${employeeId}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function generateRequestId() {
+  const n = getKyivNowParts();
+  const pad = (v) => String(v).padStart(2, '0');
+  const stamp = `${n.year}${pad(n.month)}${pad(n.day)}-${pad(n.hour)}${pad(n.minute)}${pad(n.second)}`;
+  return `REQ-${stamp}-${Math.floor(Math.random() * 1000)}`;
+}
+
+function ukrDateToIso(str) {
+  const m = String(str || '').trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (!m) return '';
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
+
+// Так само, як recordCheckin: пишемо локально й одразу продовжуємо, id
+// заявки генерується тут же (він потрібен негайно — для кнопок
+// погодження), Таблиця наздоганяє в фоні через ту саму чергу outbox.
+async function recordTimeoffRequest(payload) {
+  const requestId = generateRequestId();
+  const row = {
+    ...payload,
+    request_id: requestId,
+    date_from_iso: ukrDateToIso(payload.date_from),
+    date_to_iso: ukrDateToIso(payload.date_to)
+  };
+  await db.insertTimeoffRequest(row);
+  await db.enqueueOutbox('timeoff_request', { ...payload, request_id: requestId });
+  return requestId;
+}
+
+async function applyTimeoffStatus(requestId, fields) {
+  await db.updateTimeoffStatus(requestId, fields);
+  await db.enqueueOutbox('update_timeoff_status', { request_id: requestId, ...fields });
 }
 
 function getMainMenu() {
@@ -364,38 +434,52 @@ function displayRequestType(req) {
   return req.request_type || 'Запит';
 }
 
-async function getDailyStatus(sessionOrEmp) {
-  return sendToAppsScript({
-    action: 'get_daily_checkin_status',
+// Усі перевірки нижче раніше йшли в Google Таблицю через Apps Script (кожна
+// — окремий мережевий round-trip у сотні мілісекунд-секунди, і що більше
+// накопичувалось рядків у checkins/timeoff_requests, то повільніше). Тепер
+// вони читають локальну Postgres-базу бота (мілісекунди), а в Таблицю дані
+// потрапляють окремо, у фоні (див. enqueueOutbox нижче). Форма відповіді
+// (`{ result: {...} }`) лишена такою ж, як була в sendToAppsScript, щоб не
+// чіпати виклики нижче по коду.
+
+function identityFromSession(sessionOrEmp) {
+  return {
     employee_id: sessionOrEmp.employee_id || '',
     telegram_chat_id: sessionOrEmp.telegram_chat_id || '',
     telegram_user_id: sessionOrEmp.telegram_user_id || '',
-    full_name: sessionOrEmp.full_name || ''
-  }, { retry: true });
+    full_name: String(sessionOrEmp.full_name || '').trim().toLowerCase()
+  };
 }
 
-// Об'єднує стару пару викликів (is_employee_absent_on_date + get_daily_checkin_status)
-// в один запит до bridge — рівно та сама перевірка, але один round-trip
-// замість двох. Використовується там, де раніше викликались обидві перевірки
-// підряд (office_start, production_open_shift).
+async function getDailyStatus(sessionOrEmp) {
+  const result = await db.getTodayCheckinStatus(identityFromSession(sessionOrEmp), getTodayKeyKyiv());
+  return { result };
+}
+
 async function getDayContext(sessionOrEmp) {
-  return sendToAppsScript({
-    action: 'get_employee_day_context',
-    employee_id: sessionOrEmp.employee_id || '',
-    telegram_chat_id: sessionOrEmp.telegram_chat_id || '',
-    telegram_user_id: sessionOrEmp.telegram_user_id || '',
-    full_name: sessionOrEmp.full_name || ''
-  }, { retry: true });
+  const identity = identityFromSession(sessionOrEmp);
+  const today = getTodayKeyKyiv();
+  const [dailyStatus, absence] = await Promise.all([
+    db.getTodayCheckinStatus(identity, today),
+    db.isAbsentOnDate(identity, today)
+  ]);
+
+  return {
+    result: {
+      has_any: dailyStatus.has_any,
+      has_in: dailyStatus.has_in,
+      has_out: dailyStatus.has_out,
+      last_entry_type: dailyStatus.last_entry_type,
+      last_work_format: dailyStatus.last_work_format,
+      absent: absence.absent,
+      absent_reason: absence.reason
+    }
+  };
 }
 
 async function notifyHrdForApproval(requestId) {
-  const requestResp = await sendToAppsScript({
-    action: 'get_timeoff_request',
-    request_id: requestId
-  }, { retry: true });
-
-  if (!requestResp?.ok || !requestResp?.result?.found) return;
-  const req = requestResp.result;
+  const req = await db.getTimeoffRequestById(requestId);
+  if (!req) return;
 
   let text =
     `📝 <b>Потрібне погодження HRD</b>\n` +
@@ -412,22 +496,14 @@ async function notifyHrdForApproval(requestId) {
 
   const messageId = msg?.result?.message_id;
   if (messageId) {
-    await sendToAppsScript({
-      action: 'update_timeoff_status',
-      request_id: requestId,
-      hr_message_id: String(messageId)
-    });
+    await db.updateTimeoffStatus(requestId, { hr_message_id: String(messageId) });
+    await db.enqueueOutbox('update_timeoff_status', { request_id: requestId, hr_message_id: String(messageId) });
   }
 }
 
 async function notifyAccountantForApproval(requestId) {
-  const requestResp = await sendToAppsScript({
-    action: 'get_timeoff_request',
-    request_id: requestId
-  }, { retry: true });
-
-  if (!requestResp?.ok || !requestResp?.result?.found) return;
-  const req = requestResp.result;
+  const req = await db.getTimeoffRequestById(requestId);
+  if (!req) return;
 
   let text =
     `💼 <b>Потрібне погодження головного бухгалтера</b>\n` +
@@ -444,8 +520,8 @@ async function notifyAccountantForApproval(requestId) {
 
   const messageId = msg?.result?.message_id;
   if (messageId) {
-    await sendToAppsScript({
-      action: 'update_timeoff_status',
+    await db.updateTimeoffStatus(requestId, { accountant_message_id: String(messageId) });
+    await db.enqueueOutbox('update_timeoff_status', {
       request_id: requestId,
       accountant_message_id: String(messageId),
       notified_finance: 'yes'
@@ -477,8 +553,7 @@ async function sendToManyInBatches(items, sendFn, concurrency = 20) {
 }
 
 async function sendOpeningReminderBatch(isSecondReminder = false) {
-  const listResp = await sendToAppsScript({ action: 'list_opening_reminder_targets' }, { retry: true });
-  const employees = listResp?.result?.employees || [];
+  const employees = await db.listOpeningReminderTargets(getTodayKeyKyiv());
 
   const text = isSecondReminder
     ? '⏰ Друге нагадування: ти ще не почав(ла) робочий день у боті.'
@@ -488,12 +563,7 @@ async function sendOpeningReminderBatch(isSecondReminder = false) {
 }
 
 async function sendProductionClosingReminderBatch() {
-  const listResp = await sendToAppsScript({
-    action: 'list_closing_reminder_targets',
-    entry_type: 'production'
-  }, { retry: true });
-
-  const employees = listResp?.result?.employees || [];
+  const employees = await db.listClosingReminderTargets('production', getTodayKeyKyiv());
 
   await sendToManyInBatches(employees, (emp) => sendMessage(
     emp.telegram_chat_id,
@@ -503,12 +573,7 @@ async function sendProductionClosingReminderBatch() {
 }
 
 async function sendOfficeClosingReminderBatch(isSecondReminder = false) {
-  const listResp = await sendToAppsScript({
-    action: 'list_closing_reminder_targets',
-    entry_type: 'office'
-  }, { retry: true });
-
-  const employees = listResp?.result?.employees || [];
+  const employees = await db.listClosingReminderTargets('office', getTodayKeyKyiv());
 
   const text = isSecondReminder
     ? '⏰ Ти забув завершити робочий день.'
@@ -590,6 +655,70 @@ setInterval(() => {
   schedulerTick();
 }, 60000);
 
+// Періодично тягне employees з Таблиці в локальну базу (лише full_name і
+// active — telegram_chat_id/telegram_user_id залишаються місцевими, бот сам
+// їх записує через upsertEmployeeChat і ніколи не перезаписує їх звідси).
+// Це дає змогу HR редагувати список співробітників у Таблиці як і раніше.
+async function syncEmployeesFromSheet() {
+  const resp = await sendToAppsScript({ action: 'list_all_employees' }, { retry: true });
+  const employees = resp?.result?.employees || [];
+  for (const emp of employees) {
+    await db.upsertEmployeeFromSheet(emp.employee_id, emp.full_name, emp.active !== false);
+  }
+}
+
+// Одноразово (лише якщо локальна база порожня) підтягує вже наявні заявки на
+// відпустку/лікарняний з Таблиці — щоб уже подані/погоджені заявки одразу
+// враховувались у перевірках відсутності після переходу на нову архітектуру,
+// а не тільки ті, що подані заново.
+async function backfillTimeoffRequestsIfNeeded() {
+  const existing = await db.countTimeoffRequests();
+  if (existing > 0) return;
+
+  const resp = await sendToAppsScript({ action: 'list_all_timeoff_requests' }, { retry: true });
+  const requests = resp?.result?.requests || [];
+  if (requests.length) await db.backfillTimeoffRequests(requests);
+}
+
+// Черга записів, які ще треба донести в Google Таблицю (checkin,
+// timeoff_request, production_shift, update_timeoff_status,
+// upsert_employee_chat) — заповнюється миттєво в момент дії користувача,
+// а сюди фоново "здогонятиметься" без затримки для співробітника. Якщо
+// Apps Script тимчасово недоступний — рядки лишаються в черзі й підуть
+// наступного тіку, нічого не губиться.
+let outboxFlushInProgress = false;
+async function flushOutbox() {
+  if (outboxFlushInProgress) return;
+  outboxFlushInProgress = true;
+  try {
+    const batch = await db.getPendingOutbox(20);
+    for (const row of batch) {
+      try {
+        const resp = await sendToAppsScript({ action: row.action, ...row.payload });
+        if (resp?.ok) {
+          await db.markOutboxSynced(row.id);
+        } else {
+          await db.markOutboxFailed(row.id, JSON.stringify(resp?.error || 'unknown error'));
+        }
+      } catch (error) {
+        await db.markOutboxFailed(row.id, error?.message || error);
+      }
+    }
+  } catch (error) {
+    console.error('flushOutbox ERROR:', error?.stack || error?.message || error);
+  } finally {
+    outboxFlushInProgress = false;
+  }
+}
+
+setInterval(() => {
+  flushOutbox();
+}, 5000);
+
+setInterval(() => {
+  syncEmployeesFromSheet().catch((error) => console.error('syncEmployeesFromSheet ERROR:', error?.message || error));
+}, 5 * 60 * 1000);
+
 app.get('/', (_req, res) => {
   res.status(200).send('Bot is running');
 });
@@ -641,18 +770,28 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        const empResp = await sendToAppsScript({
-          action: 'get_employee',
-          employee_id: employeeId
-        }, { retry: true });
+        // Спершу дивимось у локальній базі (миттєво). Якщо співробітника там
+        // ще немає — це або новий QR, або ще не наздогнала періодична
+        // синхронізація зі Таблицею (раз на 5 хв) — тоді один раз звертаємось
+        // напряму до Apps Script як запасний варіант.
+        let employee = await db.getEmployeeById(employeeId);
 
-        if (!empResp?.ok || !empResp?.result?.found) {
-          await sendMessage(chatId, '⚠️ Співробітника не знайдено в таблиці employees.');
-          return;
+        if (!employee) {
+          const empResp = await sendToAppsScript({
+            action: 'get_employee',
+            employee_id: employeeId
+          }, { retry: true });
+
+          if (!empResp?.ok || !empResp?.result?.found) {
+            await sendMessage(chatId, '⚠️ Співробітника не знайдено в таблиці employees.');
+            return;
+          }
+
+          employee = { employee_id: employeeId, full_name: empResp.result.full_name || '' };
         }
 
-        await sendToAppsScript({
-          action: 'upsert_employee_chat',
+        await db.upsertEmployeeChat(employeeId, employee.full_name || '', chatId, fromUserId);
+        await db.enqueueOutbox('upsert_employee_chat', {
           employee_id: employeeId,
           telegram_chat_id: chatId,
           telegram_user_id: fromUserId
@@ -660,7 +799,7 @@ app.post('/webhook', async (req, res) => {
 
         saveSession(chatId, {
           employee_id: employeeId,
-          full_name: empResp.result.full_name || '',
+          full_name: employee.full_name || '',
           telegram_chat_id: chatId,
           telegram_user_id: fromUserId,
           current_branch: null,
@@ -685,7 +824,7 @@ app.post('/webhook', async (req, res) => {
           _last_action_ts: 0
         });
 
-        await sendMessage(chatId, `👋 Вітаю, <b>${empResp.result.full_name || ''}</b>.\nОберіть напрям роботи:`, {
+        await sendMessage(chatId, `👋 Вітаю, <b>${employee.full_name || ''}</b>.\nОберіть напрям роботи:`, {
           reply_markup: getMainMenu()
         });
         return;
@@ -728,8 +867,7 @@ app.post('/webhook', async (req, res) => {
         session.work_format = 'remote';
         saveSession(chatId, session);
 
-        const result = await sendToAppsScript({
-          action: 'checkin',
+        await recordCheckin({
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
           telegram_user_id: session.telegram_user_id,
@@ -742,13 +880,9 @@ app.post('/webhook', async (req, res) => {
           remote_reason: reason
         });
 
-        if (result?.ok) {
-          await sendMessage(chatId, 'Дякую, робочий день розпочато. Вдалого дня 😉', {
-            reply_markup: getOfficeExitMenu()
-          });
-        } else {
-          await sendMessage(chatId, '⚠️ Не вдалося записати вхід.');
-        }
+        await sendMessage(chatId, 'Дякую, робочий день розпочато. Вдалого дня 😉', {
+          reply_markup: getOfficeExitMenu()
+        });
         return;
       }
 
@@ -789,8 +923,7 @@ app.post('/webhook', async (req, res) => {
         const dateTo = session.date_to;
         const subtype = session.request_subtype;
 
-        const result = await sendToAppsScript({
-          action: 'timeoff_request',
+        const requestId = await recordTimeoffRequest({
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
           telegram_user_id: session.telegram_user_id,
@@ -811,19 +944,13 @@ app.post('/webhook', async (req, res) => {
         session.date_to = '';
         saveSession(chatId, session);
 
-        if (result?.ok) {
-          const subtypeLabel = subtype === 'unpaid' ? 'За свій рахунок' : 'Щорічна';
-          await sendMessage(
-            chatId,
-            `✅ Заявку на відпустку створено.\nТип: ${subtypeLabel}\nПеріод: ${dateFrom} - ${dateTo}\nЗаміщає: ${replacementPerson}\n\nСтатус: очікує погодження`
-          );
+        const subtypeLabel = subtype === 'unpaid' ? 'За свій рахунок' : 'Щорічна';
+        await sendMessage(
+          chatId,
+          `✅ Заявку на відпустку створено.\nТип: ${subtypeLabel}\nПеріод: ${dateFrom} - ${dateTo}\nЗаміщає: ${replacementPerson}\n\nСтатус: очікує погодження`
+        );
 
-          if (result.result?.request_id) {
-            await notifyHrdForApproval(result.result.request_id);
-          }
-        } else {
-          await sendMessage(chatId, '⚠️ Не вдалося створити заявку на відпустку.');
-        }
+        await notifyHrdForApproval(requestId);
         return;
       }
 
@@ -848,8 +975,7 @@ app.post('/webhook', async (req, res) => {
         const dateFrom = session.date_from;
         const dateTo = session.date_to;
 
-        const result = await sendToAppsScript({
-          action: 'timeoff_request',
+        const requestId = await recordTimeoffRequest({
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
           telegram_user_id: session.telegram_user_id,
@@ -869,18 +995,12 @@ app.post('/webhook', async (req, res) => {
         session.date_to = '';
         saveSession(chatId, session);
 
-        if (result?.ok) {
-          await sendMessage(
-            chatId,
-            `✅ Заявку на лікарняний створено.\nПеріод: ${dateFrom} - ${dateTo}\n\nСтатус: очікує погодження`
-          );
+        await sendMessage(
+          chatId,
+          `✅ Заявку на лікарняний створено.\nПеріод: ${dateFrom} - ${dateTo}\n\nСтатус: очікує погодження`
+        );
 
-          if (result.result?.request_id) {
-            await notifyHrdForApproval(result.result.request_id);
-          }
-        } else {
-          await sendMessage(chatId, '⚠️ Не вдалося створити заявку на лікарняний.');
-        }
+        await notifyHrdForApproval(requestId);
         return;
       }
 
@@ -913,23 +1033,17 @@ app.post('/webhook', async (req, res) => {
         }
 
         const requestId = data.split(':')[1];
-        const reqResp = await sendToAppsScript({
-          action: 'get_timeoff_request',
-          request_id: requestId
-        }, { retry: true });
+        const req = await db.getTimeoffRequestById(requestId);
 
-        if (!reqResp?.ok || !reqResp?.result?.found) {
+        if (!req) {
           await sendMessage(chatId, '⚠️ Заявку не знайдено.');
           return;
         }
 
-        const req = reqResp.result;
         const approverName = [cq.from?.first_name || '', cq.from?.last_name || ''].join(' ').trim() || 'HRD';
 
         if (data.startsWith('hr_reject:')) {
-          await sendToAppsScript({
-            action: 'update_timeoff_status',
-            request_id: requestId,
+          await applyTimeoffStatus(requestId, {
             status: 'rejected',
             status_hr: 'rejected',
             final_status: 'rejected',
@@ -945,9 +1059,7 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        await sendToAppsScript({
-          action: 'update_timeoff_status',
-          request_id: requestId,
+        await applyTimeoffStatus(requestId, {
           status: 'pending_accountant',
           status_hr: 'approved',
           final_status: 'pending_accountant',
@@ -975,23 +1087,17 @@ app.post('/webhook', async (req, res) => {
         }
 
         const requestId = data.split(':')[1];
-        const reqResp = await sendToAppsScript({
-          action: 'get_timeoff_request',
-          request_id: requestId
-        }, { retry: true });
+        const req = await db.getTimeoffRequestById(requestId);
 
-        if (!reqResp?.ok || !reqResp?.result?.found) {
+        if (!req) {
           await sendMessage(chatId, '⚠️ Заявку не знайдено.');
           return;
         }
 
-        const req = reqResp.result;
         const approverName = [cq.from?.first_name || '', cq.from?.last_name || ''].join(' ').trim() || 'Головний бухгалтер';
 
         if (data.startsWith('acc_reject:')) {
-          await sendToAppsScript({
-            action: 'update_timeoff_status',
-            request_id: requestId,
+          await applyTimeoffStatus(requestId, {
             status: 'rejected',
             status_chief_acc: 'rejected',
             final_status: 'rejected',
@@ -1007,9 +1113,7 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        await sendToAppsScript({
-          action: 'update_timeoff_status',
-          request_id: requestId,
+        await applyTimeoffStatus(requestId, {
           status: 'approved',
           status_chief_acc: 'approved',
           final_status: 'approved',
@@ -1121,8 +1225,7 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        const result = await sendToAppsScript({
-          action: 'checkin',
+        await recordCheckin({
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
           telegram_user_id: session.telegram_user_id,
@@ -1135,18 +1238,14 @@ app.post('/webhook', async (req, res) => {
           remote_reason: ''
         });
 
-        if (result?.ok) {
-          session.checked_in = true;
-          session.entry_type = 'office';
-          session.work_format = 'office';
-          saveSession(chatId, session);
+        session.checked_in = true;
+        session.entry_type = 'office';
+        session.work_format = 'office';
+        saveSession(chatId, session);
 
-          await sendMessage(chatId, 'Дякую, робочий день розпочато. Вдалого дня 😉', {
-            reply_markup: getOfficeExitMenu()
-          });
-        } else {
-          await sendMessage(chatId, '⚠️ Не вдалося записати вхід.');
-        }
+        await sendMessage(chatId, 'Дякую, робочий день розпочато. Вдалого дня 😉', {
+          reply_markup: getOfficeExitMenu()
+        });
         return;
       }
 
@@ -1185,8 +1284,7 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        const result = await sendToAppsScript({
-          action: 'checkin',
+        await recordCheckin({
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
           telegram_user_id: session.telegram_user_id,
@@ -1199,17 +1297,13 @@ app.post('/webhook', async (req, res) => {
           remote_reason: session.remote_reason || ''
         });
 
-        if (result?.ok) {
-          session.checked_in = false;
-          session.entry_type = '';
-          session.work_format = '';
-          session.remote_reason = '';
-          saveSession(chatId, session);
+        session.checked_in = false;
+        session.entry_type = '';
+        session.work_format = '';
+        session.remote_reason = '';
+        saveSession(chatId, session);
 
-          await sendMessage(chatId, 'Вихід зафіксовано. Гарного вечора 🤗');
-        } else {
-          await sendMessage(chatId, '⚠️ Не вдалося записати вихід.');
-        }
+        await sendMessage(chatId, 'Вихід зафіксовано. Гарного вечора 🤗');
         return;
       }
 
@@ -1232,8 +1326,7 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        const inResult = await sendToAppsScript({
-          action: 'checkin',
+        await recordCheckin({
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
           telegram_user_id: session.telegram_user_id,
@@ -1245,11 +1338,6 @@ app.post('/webhook', async (req, res) => {
           work_format: 'production',
           remote_reason: ''
         });
-
-        if (!inResult?.ok) {
-          await sendMessage(chatId, '⚠️ Не вдалося відкрити зміну.');
-          return;
-        }
 
         session.checked_in = true;
         session.production_shift_open = true;
@@ -1333,8 +1421,7 @@ app.post('/webhook', async (req, res) => {
 
         const closedAt = nowIso();
 
-        const shiftResult = await sendToAppsScript({
-          action: 'production_shift',
+        await recordProductionShift({
           shift_id: session.production_shift_id,
           opened_at: session.production_opened_at,
           closed_at: closedAt,
@@ -1345,13 +1432,7 @@ app.post('/webhook', async (req, res) => {
           entries: session.production_entries
         });
 
-        if (!shiftResult?.ok) {
-          await sendMessage(chatId, '⚠️ Не вдалося записати виробничу зміну.');
-          return;
-        }
-
-        const outResult = await sendToAppsScript({
-          action: 'checkin',
+        await recordCheckin({
           employee_id: session.employee_id,
           telegram_chat_id: session.telegram_chat_id,
           telegram_user_id: session.telegram_user_id,
@@ -1363,11 +1444,6 @@ app.post('/webhook', async (req, res) => {
           work_format: 'production',
           remote_reason: ''
         });
-
-        if (!outResult?.ok) {
-          await sendMessage(chatId, '⚠️ Зміну записано, але не вдалося зафіксувати вихід.');
-          return;
-        }
 
         session.checked_in = false;
         session.production_shift_open = false;
@@ -1429,6 +1505,17 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server started on port ${PORT}`);
-});
+(async () => {
+  try {
+    await db.initSchema();
+    await syncEmployeesFromSheet();
+    await backfillTimeoffRequestsIfNeeded();
+  } catch (error) {
+    console.error('Startup DB init ERROR:', error?.stack || error?.message || error);
+    process.exit(1);
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server started on port ${PORT}`);
+  });
+})();
