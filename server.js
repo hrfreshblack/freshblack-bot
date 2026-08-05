@@ -10,7 +10,7 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL ||
-  'https://script.google.com/macros/s/AKfycbwEWXfKx3g2qf2CzWjVKZ_2QBvgSPOIKNbF6LpiCd1-JnwmUmyOinwLP-VIKup4dL1HHA/exec';
+  'https://script.google.com/macros/s/AKfycbzbyROT7oVCMMjKgOaZutacWxzBy9BAmCGD-NVGaJhMb_43n8pi-7TjpItGih0YAzjjtw/exec';
 
 const HRD_USER_ID = process.env.HRD_USER_ID || '357796447';
 const ACCOUNTANT_USER_ID = process.env.ACCOUNTANT_USER_ID || '465734268';
