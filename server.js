@@ -1158,13 +1158,25 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        if (ctx.has_in) {
-          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+        if (ctx.has_out) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
-        if (ctx.has_out) {
-          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
+        if (ctx.has_in) {
+          // Сесія могла загубитись (перезапуск бота, нове відкриття QR) уже
+          // після того, як людина зафіксувала вхід сьогодні — тоді власні
+          // поля сесії (entry_type/work_format) з тим ще не синхронізовані.
+          // Синхронізуємо їх з тим, що реально є в базі, і одразу даємо
+          // кнопку "Вихід", а не глухий кут.
+          session.checked_in = true;
+          session.entry_type = ctx.last_entry_type || 'office';
+          session.work_format = ctx.last_work_format || session.work_format || '';
+          saveSession(chatId, session);
+
+          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.', {
+            reply_markup: getOfficeExitMenu()
+          });
           return;
         }
 
@@ -1256,7 +1268,7 @@ app.post('/webhook', async (req, res) => {
           mode: '',
           note: 'railway',
           entry_type: 'office',
-          work_format: session.work_format || '',
+          work_format: session.work_format || dayStatus.last_work_format || '',
           remote_reason: session.remote_reason || ''
         });
 
@@ -1279,13 +1291,31 @@ app.post('/webhook', async (req, res) => {
           return;
         }
 
-        if (ctx.has_in) {
-          await sendMessage(chatId, 'Дякую. Сьогодні вхід вже зафіксовано.');
+        if (ctx.has_out) {
+          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
           return;
         }
 
-        if (ctx.has_out) {
-          await sendMessage(chatId, 'Сьогодні вихід уже зафіксовано.');
+        if (ctx.has_in) {
+          // Зміна вже відкрита в базі. Якщо сесія це "пам'ятає" —
+          // production_shift_open лишається як є. Якщо сесія загубилась
+          // (перезапуск/нове відкриття QR) — відновлюємо мінімальний стан,
+          // щоб людина могла продовжити вносити станції й закрити зміну.
+          // Станції, введені до втрати сесії й ще не надіслані одним
+          // запитом наприкінці зміни, відновити не можна — їх доведеться
+          // ввести заново.
+          session.checked_in = true;
+          session.production_shift_open = true;
+          session.entry_type = 'production';
+          session.work_format = 'production';
+          session.production_shift_id = session.production_shift_id || makeShiftId(session.employee_id);
+          session.production_opened_at = session.production_opened_at || nowIso();
+          session.production_entries = session.production_entries || [];
+          saveSession(chatId, session);
+
+          await sendMessage(chatId, 'Зміну вже відкрито сьогодні. Обери станцію, щоб продовжити внесення результатів.', {
+            reply_markup: getStationMenu()
+          });
           return;
         }
 
