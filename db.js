@@ -65,11 +65,22 @@ async function initSchema() {
       status_hr TEXT NOT NULL DEFAULT 'pending_hrd',
       status_chief_acc TEXT NOT NULL DEFAULT '',
       final_status TEXT NOT NULL DEFAULT 'pending_hrd',
+      approved_by_hrd TEXT NOT NULL DEFAULT '',
+      approved_at_hrd TEXT NOT NULL DEFAULT '',
+      approved_by_accountant TEXT NOT NULL DEFAULT '',
+      approved_at_accountant TEXT NOT NULL DEFAULT '',
       hr_message_id TEXT NOT NULL DEFAULT '',
       accountant_message_id TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_timeoff_employee ON timeoff_requests(employee_id);
+
+    -- Патч для баз, де таблицю timeoff_requests вже створено без цих колонок
+    -- (CREATE TABLE IF NOT EXISTS вище не додає колонки в уже існуючу таблицю).
+    ALTER TABLE timeoff_requests ADD COLUMN IF NOT EXISTS approved_by_hrd TEXT NOT NULL DEFAULT '';
+    ALTER TABLE timeoff_requests ADD COLUMN IF NOT EXISTS approved_at_hrd TEXT NOT NULL DEFAULT '';
+    ALTER TABLE timeoff_requests ADD COLUMN IF NOT EXISTS approved_by_accountant TEXT NOT NULL DEFAULT '';
+    ALTER TABLE timeoff_requests ADD COLUMN IF NOT EXISTS approved_at_accountant TEXT NOT NULL DEFAULT '';
 
     CREATE TABLE IF NOT EXISTS outbox (
       id SERIAL PRIMARY KEY,
