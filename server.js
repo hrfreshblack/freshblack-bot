@@ -1,7 +1,5 @@
 import express from 'express';
 import axios from 'axios';
-import fs from 'fs';
-import path from 'path';
 import db from './db.js';
 
 if (!process.env.DATABASE_URL) {
@@ -21,9 +19,6 @@ const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL ||
 const HRD_USER_ID = process.env.HRD_USER_ID || '357796447';
 const ACCOUNTANT_USER_ID = process.env.ACCOUNTANT_USER_ID || '465734268';
 const APPROVAL_CHAT_ID = process.env.APPROVAL_CHAT_ID || '-5036148503';
-
-const SESSIONS_FILE = process.env.SESSIONS_FILE || path.join(process.cwd(), 'data', 'sessions.json');
-const SCHEDULER_STATE_FILE = process.env.SCHEDULER_STATE_FILE || path.join(process.cwd(), 'data', 'scheduler-state.json');
 
 const STATIONS = [
   'Автомат 1кг',
@@ -145,33 +140,13 @@ async function recordProductionShift(payload) {
 
 const sessions = new Map();
 
-function loadSessionsFromDisk() {
-  try {
-    if (!fs.existsSync(SESSIONS_FILE)) return;
-    const raw = fs.readFileSync(SESSIONS_FILE, 'utf8');
-    const obj = JSON.parse(raw || '{}');
-    Object.entries(obj).forEach(([chatId, session]) => sessions.set(chatId, session));
-    console.log(`Sessions restored from disk: ${sessions.size}`);
-  } catch (error) {
-    console.error('Failed to load sessions from disk:', error?.message || error);
-  }
-}
-
-let sessionsSaveScheduled = false;
-function persistSessionsToDisk() {
-  if (sessionsSaveScheduled) return;
-  sessionsSaveScheduled = true;
-  setImmediate(() => {
-    sessionsSaveScheduled = false;
-    try {
-      const dir = path.dirname(SESSIONS_FILE);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      const obj = Object.fromEntries(sessions);
-      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(obj));
-    } catch (error) {
-      console.error('Failed to persist sessions to disk:', error?.message || error);
-    }
-  });
+// Постгрес — єдине надійне сховище розмовного стану. In-memory Map лишається
+// як швидкий кеш для читання, але кожен запис одразу йде у фоні в базу, тож
+// рестарт/деплой контейнера більше не губить, на якому кроці була людина.
+async function loadSessionsFromDb() {
+  const rows = await db.loadAllSessions();
+  rows.forEach((row) => sessions.set(row.chat_id, row.data));
+  console.log(`Sessions restored from Postgres: ${sessions.size}`);
 }
 
 function getSession(chatId) {
@@ -180,10 +155,10 @@ function getSession(chatId) {
 
 function saveSession(chatId, session) {
   sessions.set(String(chatId), session);
-  persistSessionsToDisk();
+  db.saveSession(String(chatId), session).catch((error) => {
+    console.error('Failed to persist session to Postgres:', error?.message || error);
+  });
 }
-
-loadSessionsFromDisk();
 
 function getKyivNowParts() {
   const dtf = new Intl.DateTimeFormat('en-GB', {
@@ -599,31 +574,19 @@ const REMINDER_SCHEDULE = [
 let firedToday = new Set();
 let firedDateKey = '';
 
-function loadSchedulerState() {
-  try {
-    if (!fs.existsSync(SCHEDULER_STATE_FILE)) return;
-    const raw = JSON.parse(fs.readFileSync(SCHEDULER_STATE_FILE, 'utf8') || '{}');
-    firedDateKey = raw.dateKey || '';
-    firedToday = new Set(raw.fired || []);
-  } catch (error) {
-    console.error('Failed to load scheduler state:', error?.message || error);
+async function loadSchedulerStateFromDb() {
+  const state = await db.loadSchedulerState();
+  if (state) {
+    firedDateKey = state.date_key || '';
+    firedToday = new Set(state.fired || []);
   }
 }
 
 function persistSchedulerState() {
-  try {
-    const dir = path.dirname(SCHEDULER_STATE_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(SCHEDULER_STATE_FILE, JSON.stringify({
-      dateKey: firedDateKey,
-      fired: Array.from(firedToday)
-    }));
-  } catch (error) {
+  db.saveSchedulerState(firedDateKey, Array.from(firedToday)).catch((error) => {
     console.error('Failed to persist scheduler state:', error?.message || error);
-  }
+  });
 }
-
-loadSchedulerState();
 
 async function schedulerTick() {
   try {
@@ -1508,6 +1471,8 @@ app.post('/webhook', async (req, res) => {
 (async () => {
   try {
     await db.initSchema();
+    await loadSessionsFromDb();
+    await loadSchedulerStateFromDb();
     await syncEmployeesFromSheet();
     await backfillTimeoffRequestsIfNeeded();
   } catch (error) {

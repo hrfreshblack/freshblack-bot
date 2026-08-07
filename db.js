@@ -82,6 +82,24 @@ async function initSchema() {
     ALTER TABLE timeoff_requests ADD COLUMN IF NOT EXISTS approved_by_accountant TEXT NOT NULL DEFAULT '';
     ALTER TABLE timeoff_requests ADD COLUMN IF NOT EXISTS approved_at_accountant TEXT NOT NULL DEFAULT '';
 
+    -- Розмовний стан бота (на якому кроці людина, що вже обрано) — раніше
+    -- жив у файлі на диску Railway, який стирається при кожному деплої.
+    -- Тепер тут, разом з усім іншим, переживає будь-який деплой/рестарт.
+    CREATE TABLE IF NOT EXISTS bot_sessions (
+      chat_id TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Який слот нагадувань уже спрацював сьогодні — той самий case: раніше
+    -- файл на диску, тепер один рядок тут.
+    CREATE TABLE IF NOT EXISTS scheduler_state (
+      id INT PRIMARY KEY DEFAULT 1,
+      date_key TEXT NOT NULL DEFAULT '',
+      fired JSONB NOT NULL DEFAULT '[]',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS outbox (
       id SERIAL PRIMARY KEY,
       action TEXT NOT NULL,
@@ -429,6 +447,38 @@ async function markOutboxFailed(id, errorMessage) {
   await pool.query('UPDATE outbox SET attempts = attempts + 1, last_error = $2 WHERE id = $1', [id, String(errorMessage || '').slice(0, 500)]);
 }
 
+// ---- bot sessions ----
+
+async function loadAllSessions() {
+  const { rows } = await pool.query('SELECT chat_id, data FROM bot_sessions');
+  return rows;
+}
+
+async function saveSession(chatId, data) {
+  await pool.query(
+    `INSERT INTO bot_sessions (chat_id, data, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (chat_id) DO UPDATE SET data = excluded.data, updated_at = now()`,
+    [chatId, JSON.stringify(data)]
+  );
+}
+
+// ---- scheduler state (which reminder slots already fired today) ----
+
+async function loadSchedulerState() {
+  const { rows } = await pool.query('SELECT date_key, fired FROM scheduler_state WHERE id = 1');
+  return rows[0] || null;
+}
+
+async function saveSchedulerState(dateKey, fired) {
+  await pool.query(
+    `INSERT INTO scheduler_state (id, date_key, fired, updated_at)
+     VALUES (1, $1, $2, now())
+     ON CONFLICT (id) DO UPDATE SET date_key = excluded.date_key, fired = excluded.fired, updated_at = now()`,
+    [dateKey, JSON.stringify(fired)]
+  );
+}
+
 export default {
   initSchema,
   getEmployeeById,
@@ -449,5 +499,9 @@ export default {
   enqueueOutbox,
   getPendingOutbox,
   markOutboxSynced,
-  markOutboxFailed
+  markOutboxFailed,
+  loadAllSessions,
+  saveSession,
+  loadSchedulerState,
+  saveSchedulerState
 };
