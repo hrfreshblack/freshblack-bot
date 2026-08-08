@@ -69,7 +69,7 @@ app.get('/api/products', async (req, res) => {
 
 app.post('/api/products', async (req, res) => {
   try {
-    const { code, name, short_name, unit, station, is_stock_item, min_stock, active } = req.body || {};
+    const { code, name, short_name, unit, station, is_stock_item, min_stock, active, status } = req.body || {};
     if (!code || !String(code).trim()) {
       res.status(400).json({ ok: false, error: 'Код товару обов’язковий' });
       return;
@@ -82,12 +82,94 @@ app.post('/api/products', async (req, res) => {
       station,
       is_stock_item,
       min_stock,
-      active
+      active,
+      status
     });
     res.json({ ok: true, product });
   } catch (error) {
     console.error('POST /api/products ERROR:', error?.message || error);
     res.status(500).json({ ok: false, error: 'Не вдалося зберегти товар' });
+  }
+});
+
+app.post('/api/products/:code', async (req, res) => {
+  try {
+    const { status, station, min_stock, unit } = req.body || {};
+    const product = await db.updateProductFields(req.params.code, { status, station, min_stock, unit });
+    if (!product) {
+      res.status(404).json({ ok: false, error: 'Товар не знайдено' });
+      return;
+    }
+    res.json({ ok: true, product });
+  } catch (error) {
+    console.error('POST /api/products/:code ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити товар' });
+  }
+});
+
+app.get('/api/stock', async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const stock = await db.listStock({ search });
+    res.json({ ok: true, stock });
+  } catch (error) {
+    console.error('GET /api/stock ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати склад' });
+  }
+});
+
+app.get('/api/stations', async (req, res) => {
+  try {
+    const stations = await db.listStations();
+    res.json({ ok: true, stations });
+  } catch (error) {
+    console.error('GET /api/stations ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати список станцій' });
+  }
+});
+
+app.post('/api/tasks', async (req, res) => {
+  try {
+    const { station, product_code, product_name, planned_qty, unit, task_date, reason, comment } = req.body || {};
+    if (!station || !task_date) {
+      res.status(400).json({ ok: false, error: 'Станція і дата обов’язкові' });
+      return;
+    }
+    const task = await db.createTask({ station, product_code, product_name, planned_qty, unit, task_date, reason, comment });
+    res.json({ ok: true, task });
+  } catch (error) {
+    console.error('POST /api/tasks ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити задачу' });
+  }
+});
+
+app.get('/api/tasks', async (req, res) => {
+  try {
+    const { station = '', dateFrom = '', dateTo = '', status = '' } = req.query;
+    const tasks = await db.listTasks({ station, dateFrom, dateTo, status });
+    res.json({ ok: true, tasks });
+  } catch (error) {
+    console.error('GET /api/tasks ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати задачі' });
+  }
+});
+
+app.post('/api/tasks/:id/status', async (req, res) => {
+  try {
+    const { status, actual_qty, comment } = req.body || {};
+    if (!db.TASK_STATUSES.includes(status)) {
+      res.status(400).json({ ok: false, error: 'Невідомий статус' });
+      return;
+    }
+    const task = await db.updateTaskStatus(Number(req.params.id), { status, actual_qty, comment });
+    if (!task) {
+      res.status(404).json({ ok: false, error: 'Задачу не знайдено' });
+      return;
+    }
+    res.json({ ok: true, task });
+  } catch (error) {
+    console.error('POST /api/tasks/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
   }
 });
 

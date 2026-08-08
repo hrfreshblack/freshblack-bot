@@ -36,7 +36,7 @@
     padding-bottom: 12px;
   }
   h1 { font-size: 16px; margin: 0; font-weight: 700; display: flex; align-items: center; gap: 8px; }
-  nav.tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); }
+  nav.tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   nav.tabs button {
     background: none;
     border: none;
@@ -62,6 +62,7 @@
     padding: 8px 10px;
   }
   input[type="search"] { min-width: 220px; }
+  input[type="date"] { min-width: 0; }
   button {
     cursor: pointer;
     background: var(--accent);
@@ -94,6 +95,13 @@
   .recipeCard .recipeName { font-weight: 700; margin-bottom: 6px; }
   .recipeCard .recipeComponents { display: flex; flex-wrap: wrap; gap: 6px; }
   .recipeCard .comp { background: rgba(79,140,255,0.12); color: var(--accent); border-radius: 6px; padding: 3px 9px; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chips button {
+    padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+  }
+  .chips button.active { background: var(--accent); border-color: var(--accent); color: white; }
 
   .menuWrap { position: relative; }
   .menuDropdown {
@@ -153,6 +161,8 @@
   </div>
   <nav class="tabs">
     <button id="tabProducts" onclick="showTab('products')" class="active">Товари</button>
+    <button id="tabStock" onclick="showTab('stock')">Склад</button>
+    <button id="tabStations" onclick="showTab('stations')">Станції</button>
     <button id="tabRecipes" onclick="showTab('recipes')">Рецептури блендів</button>
     <button id="tabOrders" onclick="showTab('orders')">Замовлення</button>
     <button id="tabClients" onclick="showTab('clients')">Клієнти</button>
@@ -165,6 +175,7 @@
       <input type="search" id="search" placeholder="Пошук за кодом чи назвою…">
       <button class="secondary" id="btnAddProduct">+ Товар</button>
     </div>
+    <p style="color: var(--muted); margin: 0 0 14px;">Довідник усіх позицій — код, станція, статус. Залишки й рухи — на вкладці "Склад".</p>
     <table id="productsTable">
       <thead>
         <tr>
@@ -172,16 +183,66 @@
           <th>Назва</th>
           <th>Станція</th>
           <th>Одиниця</th>
+          <th>Складський</th>
+          <th>Статус</th>
+        </tr>
+      </thead>
+      <tbody id="productsBody"></tbody>
+    </table>
+    <div class="empty" id="emptyState" style="display:none;">Товарів ще немає — додай перший кнопкою "+ Товар".</div>
+  </div>
+
+  <div id="viewStock" style="display:none;">
+    <div class="viewToolbar">
+      <input type="search" id="stockSearch" placeholder="Пошук за кодом чи назвою…">
+    </div>
+    <table id="stockTable">
+      <thead>
+        <tr>
+          <th>Код</th>
+          <th>Назва</th>
+          <th>Станція</th>
           <th>Залишок</th>
+          <th>Надійшло</th>
+          <th>Видано</th>
           <th>Мін. запас</th>
           <th>Стан</th>
           <th>Останній рух</th>
           <th></th>
         </tr>
       </thead>
-      <tbody id="productsBody"></tbody>
+      <tbody id="stockBody"></tbody>
     </table>
-    <div class="empty" id="emptyState" style="display:none;">Товарів ще немає — додай перший кнопкою "+ Товар".</div>
+    <div class="empty" id="stockEmpty" style="display:none;">Складських товарів ще немає.</div>
+  </div>
+
+  <div id="viewStations" style="display:none;">
+    <div class="viewToolbar">
+      <div class="chips" id="stationChips"></div>
+    </div>
+    <div class="viewToolbar">
+      <label style="color: var(--muted); font-size: 12px;">З</label>
+      <input type="date" id="taskDateFrom">
+      <label style="color: var(--muted); font-size: 12px;">по</label>
+      <input type="date" id="taskDateTo">
+      <button class="secondary" id="btnAddTask">+ Задача</button>
+    </div>
+    <table id="tasksTable">
+      <thead>
+        <tr>
+          <th>Дата</th>
+          <th>Станція</th>
+          <th>Товар</th>
+          <th>План</th>
+          <th>Од.</th>
+          <th>Причина</th>
+          <th>Статус</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tasksBody"></tbody>
+    </table>
+    <div class="empty" id="tasksEmpty" style="display:none;">Задач немає за обраний період.</div>
   </div>
 
   <div id="viewRecipes" style="display:none;">
@@ -348,6 +409,82 @@
   </div>
 </div>
 
+<!-- Модалка: нова задача станції -->
+<div class="overlay" id="taskOverlay">
+  <div class="modal">
+    <h2>Нова задача</h2>
+    <div class="field">
+      <label>Станція</label>
+      <input type="text" id="tStation" list="stationsList" placeholder="Центршов / Ручна / ...">
+      <datalist id="stationsList"></datalist>
+    </div>
+    <div class="field">
+      <label>Товар</label>
+      <input type="text" id="tProduct" list="taskProductsList" placeholder="код або назва">
+      <datalist id="taskProductsList"></datalist>
+    </div>
+    <div class="field">
+      <label>Планова кількість</label>
+      <input type="number" id="tPlannedQty" min="0" step="any" placeholder="0">
+    </div>
+    <div class="field">
+      <label>Одиниця</label>
+      <input type="text" id="tUnit" placeholder="кг / пачки / дріпи">
+    </div>
+    <div class="field">
+      <label>Дата виробництва</label>
+      <input type="date" id="tDate">
+    </div>
+    <div class="field">
+      <label>Причина</label>
+      <select id="tReason">
+        <option value="ручне">ручне</option>
+        <option value="замовлення">замовлення</option>
+        <option value="прогноз">прогноз</option>
+        <option value="мінімум">мінімум</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Коментар</label>
+      <input type="text" id="tComment" placeholder="необов'язково">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelTask">Скасувати</button>
+      <button id="btnSaveTask">Створити</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: зміна статусу задачі -->
+<div class="overlay" id="taskStatusOverlay">
+  <div class="modal">
+    <h2 id="taskStatusTitle">Задача</h2>
+    <div class="field">
+      <label>Статус</label>
+      <select id="taskNewStatus">
+        <option value="заплановано">заплановано</option>
+        <option value="виконується">виконується</option>
+        <option value="пауза">пауза</option>
+        <option value="завершено">завершено</option>
+        <option value="заблоковано">заблоковано</option>
+        <option value="скасовано">скасовано</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Фактична кількість (якщо завершено)</label>
+      <input type="number" id="taskActualQty" min="0" step="any" placeholder="необов'язково">
+    </div>
+    <div class="field">
+      <label>Коментар</label>
+      <input type="text" id="taskStatusComment" placeholder="необов'язково">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelTaskStatus">Закрити</button>
+      <button id="btnSaveTaskStatus">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -365,11 +502,22 @@ function showToast(text, duration) {
   window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, duration || 3000);
 }
 
-function statusTag(row) {
-  if (!row.is_stock_item) return '<span class="tag neutral">під замовлення</span>';
-  if (row.balance < 0) return '<span class="tag bad">від’ємний</span>';
-  if (row.balance < row.min_stock) return '<span class="tag warn">поповнити</span>';
-  return '<span class="tag ok">ОК</span>';
+function productStatusTag(status) {
+  if (status === 'немає в наявності') return '<span class="tag warn">немає в наявності</span>';
+  if (status === 'знято з виробництва') return '<span class="tag bad">знято з виробництва</span>';
+  return '<span class="tag ok">активний</span>';
+}
+
+const PRODUCT_STATUSES = ['активний', 'немає в наявності', 'знято з виробництва'];
+
+async function saveProductStatus(code, value) {
+  const resp = await fetch('/api/products/' + encodeURIComponent(code), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: value })
+  });
+  const data = await resp.json();
+  if (!data.ok) showToast(data.error || 'Не вдалося зберегти статус');
 }
 
 async function loadProducts() {
@@ -380,6 +528,7 @@ async function loadProducts() {
   const empty = document.getElementById('emptyState');
 
   if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  window._productsCache = data.products;
 
   if (!data.products.length) {
     body.innerHTML = '';
@@ -394,9 +543,48 @@ async function loadProducts() {
       <td>${row.name || row.short_name || ''}</td>
       <td>${row.station || '—'}</td>
       <td>${row.unit || ''}</td>
-      <td class="balance">${row.is_stock_item ? fmt(row.balance) : '—'}</td>
-      <td>${row.is_stock_item ? fmt(row.min_stock) : '—'}</td>
-      <td>${statusTag(row)}</td>
+      <td>${row.is_stock_item ? 'так' : 'під замовлення'}</td>
+      <td>
+        <select onchange="saveProductStatus('${row.code}', this.value)">
+          ${PRODUCT_STATUSES.map((s) => `<option value="${s}" ${s === row.status ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function stockStatusTag(row) {
+  if (row.balance < 0) return '<span class="tag bad">від’ємний</span>';
+  if (row.balance < row.min_stock) return '<span class="tag warn">поповнити</span>';
+  return '<span class="tag ok">ОК</span>';
+}
+
+async function loadStock() {
+  const search = document.getElementById('stockSearch').value.trim();
+  const resp = await fetch('/api/stock?search=' + encodeURIComponent(search));
+  const data = await resp.json();
+  const body = document.getElementById('stockBody');
+  const empty = document.getElementById('stockEmpty');
+
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  if (!data.stock.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  body.innerHTML = data.stock.map((row) => `
+    <tr>
+      <td>${row.code}</td>
+      <td>${row.name || row.short_name || ''}</td>
+      <td>${row.station || '—'}</td>
+      <td class="balance">${fmt(row.balance)}</td>
+      <td>${fmt(row.received)}</td>
+      <td>${fmt(row.issued)}</td>
+      <td>${fmt(row.min_stock)}</td>
+      <td>${stockStatusTag(row)}</td>
       <td>${row.last_movement_date ? new Date(row.last_movement_date).toLocaleDateString('uk-UA') : '—'}</td>
       <td class="row-actions"><button class="secondary" onclick="openMovement('${row.code}', '${(row.name || row.code).replace(/'/g, "\\'")}')">+ Рух</button></td>
     </tr>
@@ -435,7 +623,7 @@ document.getElementById('btnSaveMovement').onclick = async () => {
 
   document.getElementById('movementOverlay').classList.remove('open');
   showToast('Збережено. Новий залишок: ' + fmt(data.balance));
-  loadProducts();
+  loadStock();
 };
 
 document.getElementById('btnAddProduct').onclick = () => {
@@ -483,18 +671,29 @@ document.getElementById('search').addEventListener('input', () => {
   clearTimeout(window._searchTimer);
   window._searchTimer = setTimeout(loadProducts, 250);
 });
+document.getElementById('stockSearch').addEventListener('input', () => {
+  clearTimeout(window._stockSearchTimer);
+  window._stockSearchTimer = setTimeout(loadStock, 250);
+});
 
 let recipesLoaded = false;
+let stationsLoaded = false;
 
 function showTab(tab) {
   document.getElementById('viewProducts').style.display = tab === 'products' ? '' : 'none';
+  document.getElementById('viewStock').style.display = tab === 'stock' ? '' : 'none';
+  document.getElementById('viewStations').style.display = tab === 'stations' ? '' : 'none';
   document.getElementById('viewRecipes').style.display = tab === 'recipes' ? '' : 'none';
   document.getElementById('viewOrders').style.display = tab === 'orders' ? '' : 'none';
   document.getElementById('viewClients').style.display = tab === 'clients' ? '' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', tab === 'products');
+  document.getElementById('tabStock').classList.toggle('active', tab === 'stock');
+  document.getElementById('tabStations').classList.toggle('active', tab === 'stations');
   document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
   document.getElementById('tabOrders').classList.toggle('active', tab === 'orders');
   document.getElementById('tabClients').classList.toggle('active', tab === 'clients');
+  if (tab === 'stock') loadStock();
+  if (tab === 'stations') initStations();
   if (tab === 'recipes' && !recipesLoaded) loadRecipes();
   if (tab === 'orders') loadOrders();
   if (tab === 'clients') loadClients();
@@ -695,6 +894,173 @@ document.getElementById('clientSearch').addEventListener('input', () => {
   clearTimeout(window._clientSearchTimer);
   window._clientSearchTimer = setTimeout(loadClients, 250);
 });
+
+// ---- Станції ----
+let currentStationFilter = '';
+
+function isoDate(d) { return d.toISOString().slice(0, 10); }
+
+async function initStations() {
+  if (!document.getElementById('taskDateFrom').value) {
+    const today = new Date();
+    const weekAhead = new Date(today.getTime() + 6 * 86400000);
+    document.getElementById('taskDateFrom').value = isoDate(today);
+    document.getElementById('taskDateTo').value = isoDate(weekAhead);
+  }
+  await loadStationChips();
+  await loadTasks();
+}
+
+async function loadStationChips() {
+  const resp = await fetch('/api/stations');
+  const data = await resp.json();
+  if (!data.ok) return;
+
+  const container = document.getElementById('stationChips');
+  const stations = ['', ...data.stations];
+  container.innerHTML = stations.map((s) => `
+    <button class="${s === currentStationFilter ? 'active' : ''}" onclick="setStationFilter('${s.replace(/'/g, "\\'")}')">${s || 'Всі станції'}</button>
+  `).join('');
+
+  const datalist = document.getElementById('stationsList');
+  datalist.innerHTML = data.stations.map((s) => `<option value="${s}">`).join('');
+}
+
+function setStationFilter(station) {
+  currentStationFilter = station;
+  loadStationChips();
+  loadTasks();
+}
+
+function taskStatusTag(status) {
+  if (status === 'завершено') return '<span class="tag ok">завершено</span>';
+  if (status === 'скасовано' || status === 'заблоковано') return '<span class="tag bad">' + status + '</span>';
+  if (status === 'виконується' || status === 'пауза') return '<span class="tag warn">' + status + '</span>';
+  return '<span class="tag neutral">заплановано</span>';
+}
+
+async function loadTasks() {
+  const dateFrom = document.getElementById('taskDateFrom').value;
+  const dateTo = document.getElementById('taskDateTo').value;
+  const params = new URLSearchParams({ dateFrom, dateTo, station: currentStationFilter });
+  const resp = await fetch('/api/tasks?' + params.toString());
+  const data = await resp.json();
+  const body = document.getElementById('tasksBody');
+  const empty = document.getElementById('tasksEmpty');
+
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  if (!data.tasks.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  body.innerHTML = data.tasks.map((t) => `
+    <tr>
+      <td>${new Date(t.task_date).toLocaleDateString('uk-UA')}</td>
+      <td>${t.station}</td>
+      <td>${t.product_name || t.product_code || '—'}</td>
+      <td class="balance">${fmt(t.planned_qty)}${t.actual_qty !== null ? ' (факт ' + fmt(t.actual_qty) + ')' : ''}</td>
+      <td>${t.unit || ''}</td>
+      <td>${t.reason}</td>
+      <td>${taskStatusTag(t.status)}</td>
+      <td class="row-actions"><button class="secondary" onclick="openTaskStatus(${t.id}, '${t.status}')">Статус</button></td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('taskDateFrom').addEventListener('change', loadTasks);
+document.getElementById('taskDateTo').addEventListener('change', loadTasks);
+
+document.getElementById('btnAddTask').onclick = async () => {
+  document.getElementById('tStation').value = currentStationFilter;
+  document.getElementById('tProduct').value = '';
+  document.getElementById('tPlannedQty').value = '';
+  document.getElementById('tUnit').value = '';
+  document.getElementById('tDate').value = document.getElementById('taskDateFrom').value || isoDate(new Date());
+  document.getElementById('tReason').value = 'ручне';
+  document.getElementById('tComment').value = '';
+
+  const products = window._productsCache || (await (await fetch('/api/products')).json()).products || [];
+  window._productsCache = products;
+  document.getElementById('taskProductsList').innerHTML = products.map((p) => `<option value="${p.code} — ${(p.name || '').replace(/"/g, '&quot;')}">`).join('');
+
+  document.getElementById('taskOverlay').classList.add('open');
+};
+
+document.getElementById('btnCancelTask').onclick = () => {
+  document.getElementById('taskOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveTask').onclick = async () => {
+  const station = document.getElementById('tStation').value.trim();
+  const task_date = document.getElementById('tDate').value;
+  if (!station || !task_date) { showToast('Станція і дата обов’язкові'); return; }
+
+  const productInput = document.getElementById('tProduct').value.trim();
+  const [maybeCode, ...rest] = productInput.split(' — ');
+  const products = window._productsCache || [];
+  const matched = products.find((p) => p.code === maybeCode);
+  const product_code = matched ? matched.code : '';
+  const product_name = matched ? matched.name : productInput;
+
+  const resp = await fetch('/api/tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      station,
+      product_code,
+      product_name,
+      planned_qty: document.getElementById('tPlannedQty').value || 0,
+      unit: document.getElementById('tUnit').value.trim(),
+      task_date,
+      reason: document.getElementById('tReason').value,
+      comment: document.getElementById('tComment').value.trim()
+    })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити задачу'); return; }
+
+  document.getElementById('taskOverlay').classList.remove('open');
+  showToast('Задачу створено');
+  loadStationChips();
+  loadTasks();
+};
+
+let currentTaskId = null;
+
+function openTaskStatus(id, status) {
+  currentTaskId = id;
+  document.getElementById('taskStatusTitle').textContent = 'Задача #' + id;
+  document.getElementById('taskNewStatus').value = status;
+  document.getElementById('taskActualQty').value = '';
+  document.getElementById('taskStatusComment').value = '';
+  document.getElementById('taskStatusOverlay').classList.add('open');
+}
+
+document.getElementById('btnCancelTaskStatus').onclick = () => {
+  document.getElementById('taskStatusOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveTaskStatus').onclick = async () => {
+  const status = document.getElementById('taskNewStatus').value;
+  const actualQtyRaw = document.getElementById('taskActualQty').value;
+  const comment = document.getElementById('taskStatusComment').value;
+
+  const resp = await fetch('/api/tasks/' + currentTaskId + '/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status, actual_qty: actualQtyRaw === '' ? null : Number(actualQtyRaw), comment })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+
+  document.getElementById('taskStatusOverlay').classList.remove('open');
+  showToast('Статус оновлено');
+  loadTasks();
+};
 
 loadProducts();
 </script>

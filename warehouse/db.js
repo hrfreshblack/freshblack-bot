@@ -32,10 +32,12 @@ async function initSchema() {
       is_stock_item BOOLEAN NOT NULL DEFAULT true,
       min_stock NUMERIC NOT NULL DEFAULT 0,
       active BOOLEAN NOT NULL DEFAULT true,
+      status TEXT NOT NULL DEFAULT 'активний',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     ALTER TABLE products ADD COLUMN IF NOT EXISTS station TEXT NOT NULL DEFAULT '';
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'активний';
 
     CREATE TABLE IF NOT EXISTS stock_movements (
       id SERIAL PRIMARY KEY,
@@ -105,13 +107,32 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    CREATE TABLE IF NOT EXISTS production_tasks (
+      id SERIAL PRIMARY KEY,
+      station TEXT NOT NULL,
+      product_code TEXT NOT NULL DEFAULT '',
+      product_name TEXT NOT NULL DEFAULT '',
+      planned_qty NUMERIC NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT '',
+      task_date DATE NOT NULL,
+      reason TEXT NOT NULL DEFAULT 'ручне',
+      comment TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'заплановано',
+      actual_qty NUMERIC,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_station_date ON production_tasks(station, task_date);
   `);
 }
 
+const PRODUCT_STATUSES = ['активний', 'немає в наявності', 'знято з виробництва'];
+
 async function upsertProduct(product) {
   const { rows } = await pool.query(
-    `INSERT INTO products (code, name, short_name, unit, station, is_stock_item, min_stock, active, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+    `INSERT INTO products (code, name, short_name, unit, station, is_stock_item, min_stock, active, status, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
      ON CONFLICT (code) DO UPDATE SET
        name = excluded.name,
        short_name = excluded.short_name,
@@ -120,6 +141,7 @@ async function upsertProduct(product) {
        is_stock_item = excluded.is_stock_item,
        min_stock = excluded.min_stock,
        active = excluded.active,
+       status = excluded.status,
        updated_at = now()
      RETURNING *`,
     [
@@ -130,10 +152,28 @@ async function upsertProduct(product) {
       product.station || '',
       product.is_stock_item !== false,
       product.min_stock || 0,
-      product.active !== false
+      product.active !== false,
+      product.status || 'активний'
     ]
   );
   return rows[0];
+}
+
+// Часткове оновлення без ризику затерти інші поля (наприклад, зміна лише
+// статусу з таблиці не повинна очистити назву чи станцію).
+async function updateProductFields(code, { status, station, min_stock, unit } = {}) {
+  const { rows } = await pool.query(
+    `UPDATE products SET
+       status = COALESCE($2, status),
+       station = COALESCE($3, station),
+       min_stock = COALESCE($4, min_stock),
+       unit = COALESCE($5, unit),
+       updated_at = now()
+     WHERE code = $1
+     RETURNING *`,
+    [code, status ?? null, station ?? null, min_stock ?? null, unit ?? null]
+  );
+  return rows[0] || null;
 }
 
 async function getProduct(code) {
@@ -171,13 +211,13 @@ async function listProducts({ search = '', activeOnly = true } = {}) {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const { rows } = await pool.query(
-    `SELECT p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active,
+    `SELECT p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active, p.status,
             COALESCE(SUM(m.signed_qty), 0) AS balance,
             MAX(m.movement_date) AS last_movement_date
      FROM products p
      LEFT JOIN stock_movements m ON m.product_code = p.code
      ${where}
-     GROUP BY p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active
+     GROUP BY p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active, p.status
      ORDER BY p.name ASC`,
     params
   );
@@ -185,6 +225,42 @@ async function listProducts({ search = '', activeOnly = true } = {}) {
   return rows.map((row) => ({
     ...row,
     balance: Number(row.balance),
+    min_stock: Number(row.min_stock)
+  }));
+}
+
+// Операційний вигляд складу — лише товари, що фізично зберігаються (не
+// "тільки під замовлення"): залишок, скільки надійшло, скільки видано.
+async function listStock({ search = '' } = {}) {
+  const conditions = ['p.is_stock_item = true'];
+  const params = [];
+
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    conditions.push(`(lower(p.code) LIKE $${params.length} OR lower(p.name) LIKE $${params.length} OR lower(p.short_name) LIKE $${params.length})`);
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const { rows } = await pool.query(
+    `SELECT p.code, p.name, p.short_name, p.unit, p.station, p.min_stock, p.status,
+            COALESCE(SUM(m.signed_qty), 0) AS balance,
+            COALESCE(SUM(CASE WHEN m.movement_type IN ('production_in', 'return') THEN m.qty ELSE 0 END), 0) AS received,
+            COALESCE(SUM(CASE WHEN m.movement_type IN ('shipment', 'writeoff') THEN m.qty ELSE 0 END), 0) AS issued,
+            MAX(m.movement_date) AS last_movement_date
+     FROM products p
+     LEFT JOIN stock_movements m ON m.product_code = p.code
+     ${where}
+     GROUP BY p.code, p.name, p.short_name, p.unit, p.station, p.min_stock, p.status
+     ORDER BY p.name ASC`,
+    params
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    balance: Number(row.balance),
+    received: Number(row.received),
+    issued: Number(row.issued),
     min_stock: Number(row.min_stock)
   }));
 }
@@ -243,8 +319,8 @@ async function insertProductsIfMissing(products) {
   let inserted = 0;
   for (const product of products) {
     const { rowCount } = await pool.query(
-      `INSERT INTO products (code, name, short_name, unit, station, is_stock_item, min_stock, active, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+      `INSERT INTO products (code, name, short_name, unit, station, is_stock_item, min_stock, active, status, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
        ON CONFLICT (code) DO NOTHING`,
       [
         product.code,
@@ -254,7 +330,8 @@ async function insertProductsIfMissing(products) {
         product.station || '',
         product.is_stock_item !== false,
         product.min_stock || 0,
-        product.active !== false
+        product.active !== false,
+        product.status || 'активний'
       ]
     );
     inserted += rowCount;
@@ -489,6 +566,90 @@ async function updateOrderStatus(orderNumber, status, note) {
   return rowCount;
 }
 
+const TASK_STATUSES = ['заплановано', 'виконується', 'пауза', 'завершено', 'заблоковано', 'скасовано'];
+
+// Станції беруться з двох джерел: уже призначені товарам (каталог) і вже
+// використані в задачах — щоб нова довільна назва станції, введена вручну
+// при створенні задачі, теж з'являлась у списку наступного разу.
+async function listStations() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT station FROM (
+       SELECT station FROM products WHERE station <> ''
+       UNION
+       SELECT station FROM production_tasks WHERE station <> ''
+     ) s ORDER BY station ASC`
+  );
+  return rows.map((r) => r.station);
+}
+
+async function createTask({ station, product_code, product_name, planned_qty, unit, task_date, reason, comment }) {
+  if (!station || !task_date) {
+    throw new Error('station і task_date обов’язкові');
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO production_tasks (station, product_code, product_name, planned_qty, unit, task_date, reason, comment)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     RETURNING *`,
+    [
+      station,
+      product_code || '',
+      product_name || '',
+      planned_qty || 0,
+      unit || '',
+      task_date,
+      reason || 'ручне',
+      comment || ''
+    ]
+  );
+  return rows[0];
+}
+
+async function listTasks({ station = '', dateFrom = '', dateTo = '', status = '' } = {}) {
+  const conditions = [];
+  const params = [];
+
+  if (station) {
+    params.push(station);
+    conditions.push(`station = $${params.length}`);
+  }
+  if (dateFrom) {
+    params.push(dateFrom);
+    conditions.push(`task_date >= $${params.length}`);
+  }
+  if (dateTo) {
+    params.push(dateTo);
+    conditions.push(`task_date <= $${params.length}`);
+  }
+  if (status) {
+    params.push(status);
+    conditions.push(`status = $${params.length}`);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(
+    `SELECT * FROM production_tasks ${where} ORDER BY task_date ASC, station ASC, id ASC`,
+    params
+  );
+  return rows.map((r) => ({ ...r, planned_qty: Number(r.planned_qty), actual_qty: r.actual_qty === null ? null : Number(r.actual_qty) }));
+}
+
+async function updateTaskStatus(id, { status, actual_qty, comment }) {
+  if (!TASK_STATUSES.includes(status)) {
+    throw new Error(`Unknown status: ${status}`);
+  }
+  const { rows } = await pool.query(
+    `UPDATE production_tasks SET
+       status = $2,
+       actual_qty = COALESCE($3, actual_qty),
+       comment = COALESCE($4, comment),
+       updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [id, status, actual_qty ?? null, comment ?? null]
+  );
+  return rows[0] || null;
+}
+
 export default {
   initSchema,
   upsertProduct,
@@ -509,7 +670,15 @@ export default {
   insertClientsIfMissing,
   listClients,
   updateClient,
+  updateProductFields,
+  listStock,
+  listStations,
+  createTask,
+  listTasks,
+  updateTaskStatus,
   ORDER_STATUSES,
+  PRODUCT_STATUSES,
+  TASK_STATUSES,
   SIGNED_TYPES,
   ABSOLUTE_TYPES
 };
