@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import db from './db.js';
 import seedCatalog from './seed-catalog.js';
+import seedCatalogAdditions from './seed-catalog-additions.js';
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is not set.');
@@ -129,6 +130,13 @@ app.post('/api/movements', async (req, res) => {
     if (existing === 0) {
       await db.bulkUpsertProducts(seedCatalog);
       console.log(`Seeded initial catalog: ${seedCatalog.length} products`);
+    }
+
+    // Безпечно на кожному старті: додає лише нові коди, ніколи не чіпає
+    // те, що вже є (з початкового сідингу чи вручну відредаговане).
+    const addedCount = await db.insertProductsIfMissing(seedCatalogAdditions);
+    if (addedCount > 0) {
+      console.log(`Added ${addedCount} new products found in order history`);
     }
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);

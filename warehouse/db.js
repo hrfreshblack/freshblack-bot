@@ -177,10 +177,40 @@ async function bulkUpsertProducts(products) {
   }
 }
 
+// На відміну від upsertProduct/bulkUpsertProducts, ЦЕ ніколи нічого не
+// перезаписує — якщо код уже є в каталозі (хоч із початкового сідингу, хоч
+// уже відредагований вручну через інтерфейс), рядок просто пропускається.
+// Тому безпечно викликати щоразу при старті сервера для нових партій
+// товарів, знайдених у файлах замовлень — жодного ризику затерти ручні
+// правки.
+async function insertProductsIfMissing(products) {
+  let inserted = 0;
+  for (const product of products) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO products (code, name, short_name, unit, station, is_stock_item, min_stock, active, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+       ON CONFLICT (code) DO NOTHING`,
+      [
+        product.code,
+        product.name || '',
+        product.short_name || '',
+        product.unit || '',
+        product.station || '',
+        product.is_stock_item !== false,
+        product.min_stock || 0,
+        product.active !== false
+      ]
+    );
+    inserted += rowCount;
+  }
+  return inserted;
+}
+
 export default {
   initSchema,
   upsertProduct,
   bulkUpsertProducts,
+  insertProductsIfMissing,
   getProduct,
   countProducts,
   getBalance,
