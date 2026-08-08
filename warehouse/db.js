@@ -28,12 +28,14 @@ async function initSchema() {
       name TEXT NOT NULL DEFAULT '',
       short_name TEXT NOT NULL DEFAULT '',
       unit TEXT NOT NULL DEFAULT '',
+      station TEXT NOT NULL DEFAULT '',
       is_stock_item BOOLEAN NOT NULL DEFAULT true,
       min_stock NUMERIC NOT NULL DEFAULT 0,
       active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS station TEXT NOT NULL DEFAULT '';
 
     CREATE TABLE IF NOT EXISTS stock_movements (
       id SERIAL PRIMARY KEY,
@@ -52,12 +54,13 @@ async function initSchema() {
 
 async function upsertProduct(product) {
   const { rows } = await pool.query(
-    `INSERT INTO products (code, name, short_name, unit, is_stock_item, min_stock, active, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+    `INSERT INTO products (code, name, short_name, unit, station, is_stock_item, min_stock, active, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
      ON CONFLICT (code) DO UPDATE SET
        name = excluded.name,
        short_name = excluded.short_name,
        unit = excluded.unit,
+       station = excluded.station,
        is_stock_item = excluded.is_stock_item,
        min_stock = excluded.min_stock,
        active = excluded.active,
@@ -68,6 +71,7 @@ async function upsertProduct(product) {
       product.name || '',
       product.short_name || '',
       product.unit || '',
+      product.station || '',
       product.is_stock_item !== false,
       product.min_stock || 0,
       product.active !== false
@@ -79,6 +83,11 @@ async function upsertProduct(product) {
 async function getProduct(code) {
   const { rows } = await pool.query('SELECT * FROM products WHERE code = $1', [code]);
   return rows[0] || null;
+}
+
+async function countProducts() {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM products');
+  return rows[0].n;
 }
 
 async function getBalance(code) {
@@ -106,13 +115,13 @@ async function listProducts({ search = '', activeOnly = true } = {}) {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const { rows } = await pool.query(
-    `SELECT p.code, p.name, p.short_name, p.unit, p.is_stock_item, p.min_stock, p.active,
+    `SELECT p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active,
             COALESCE(SUM(m.signed_qty), 0) AS balance,
             MAX(m.movement_date) AS last_movement_date
      FROM products p
      LEFT JOIN stock_movements m ON m.product_code = p.code
      ${where}
-     GROUP BY p.code, p.name, p.short_name, p.unit, p.is_stock_item, p.min_stock, p.active
+     GROUP BY p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active
      ORDER BY p.name ASC`,
     params
   );
@@ -162,10 +171,18 @@ async function addMovement({ product_code, movement_type, qty, note, movement_da
   return rows[0];
 }
 
+async function bulkUpsertProducts(products) {
+  for (const product of products) {
+    await upsertProduct(product);
+  }
+}
+
 export default {
   initSchema,
   upsertProduct,
+  bulkUpsertProducts,
   getProduct,
+  countProducts,
   getBalance,
   listProducts,
   listMovements,

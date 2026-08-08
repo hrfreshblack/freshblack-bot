@@ -118,6 +118,7 @@
       <tr>
         <th>Код</th>
         <th>Назва</th>
+        <th>Станція</th>
         <th>Одиниця</th>
         <th>Залишок</th>
         <th>Мін. запас</th>
@@ -187,6 +188,10 @@
       <input type="text" id="pUnit" placeholder="кг / пачки / дріпи">
     </div>
     <div class="field">
+      <label>Станція</label>
+      <input type="text" id="pStation" placeholder="Центршов / Ручна / ...">
+    </div>
+    <div class="field">
       <label>Мінімальний запас</label>
       <input type="number" id="pMinStock" min="0" step="any" value="0">
     </div>
@@ -244,6 +249,7 @@ async function loadProducts() {
     <tr>
       <td>${row.code}</td>
       <td>${row.name || row.short_name || ''}</td>
+      <td>${row.station || '—'}</td>
       <td>${row.unit || ''}</td>
       <td class="balance">${row.is_stock_item ? fmt(row.balance) : '—'}</td>
       <td>${row.is_stock_item ? fmt(row.min_stock) : '—'}</td>
@@ -294,6 +300,7 @@ document.getElementById('btnAddProduct').onclick = () => {
   document.getElementById('pName').value = '';
   document.getElementById('pShortName').value = '';
   document.getElementById('pUnit').value = '';
+  document.getElementById('pStation').value = '';
   document.getElementById('pMinStock').value = 0;
   document.getElementById('pIsStockItem').checked = true;
   document.getElementById('productOverlay').classList.add('open');
@@ -315,6 +322,7 @@ document.getElementById('btnSaveProduct').onclick = async () => {
       name: document.getElementById('pName').value.trim(),
       short_name: document.getElementById('pShortName').value.trim(),
       unit: document.getElementById('pUnit').value.trim(),
+      station: document.getElementById('pStation').value.trim(),
       min_stock: document.getElementById('pMinStock').value || 0,
       is_stock_item: document.getElementById('pIsStockItem').checked
     })

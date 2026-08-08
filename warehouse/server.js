@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import db from './db.js';
+import seedCatalog from './seed-catalog.js';
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is not set.');
@@ -62,7 +63,7 @@ app.get('/api/products', async (req, res) => {
 
 app.post('/api/products', async (req, res) => {
   try {
-    const { code, name, short_name, unit, is_stock_item, min_stock, active } = req.body || {};
+    const { code, name, short_name, unit, station, is_stock_item, min_stock, active } = req.body || {};
     if (!code || !String(code).trim()) {
       res.status(400).json({ ok: false, error: 'Код товару обов’язковий' });
       return;
@@ -72,6 +73,7 @@ app.post('/api/products', async (req, res) => {
       name,
       short_name,
       unit,
+      station,
       is_stock_item,
       min_stock,
       active
@@ -120,6 +122,14 @@ app.post('/api/movements', async (req, res) => {
 (async () => {
   try {
     await db.initSchema();
+
+    // Одноразово, лише якщо каталог ще порожній — щоб не затерти те, що
+    // вже додано вручну після першого запуску.
+    const existing = await db.countProducts();
+    if (existing === 0) {
+      await db.bulkUpsertProducts(seedCatalog);
+      console.log(`Seeded initial catalog: ${seedCatalog.length} products`);
+    }
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);
     process.exit(1);
