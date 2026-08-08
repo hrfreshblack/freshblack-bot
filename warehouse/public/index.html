@@ -69,6 +69,13 @@
   .tag.neutral { background: rgba(154,160,171,0.15); color: var(--muted); }
   .row-actions button { padding: 6px 10px; font-size: 13px; }
   .empty { padding: 40px; text-align: center; color: var(--muted); }
+  .tabBtn.active { background: var(--accent); border-color: var(--accent); color: white; }
+  .recipeGroup { margin-bottom: 28px; }
+  .recipeGroup h3 { font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin: 0 0 10px; }
+  .recipeCard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; }
+  .recipeCard .recipeName { font-weight: 700; margin-bottom: 8px; }
+  .recipeCard .recipeComponents { display: flex; flex-wrap: wrap; gap: 8px; }
+  .recipeCard .comp { background: rgba(79,140,255,0.12); color: var(--accent); border-radius: 6px; padding: 4px 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
 
   .overlay {
     display: none;
@@ -107,29 +114,39 @@
 <header>
   <h1>📦 Fresh Black — залишки на складі</h1>
   <div class="toolbar">
+    <button class="secondary tabBtn active" id="tabProducts" onclick="showTab('products')">Товари</button>
+    <button class="secondary tabBtn" id="tabRecipes" onclick="showTab('recipes')">Рецептури блендів</button>
     <input type="search" id="search" placeholder="Пошук за кодом чи назвою…">
     <button class="secondary" id="btnAddProduct">+ Товар</button>
   </div>
 </header>
 
 <main>
-  <table id="productsTable">
-    <thead>
-      <tr>
-        <th>Код</th>
-        <th>Назва</th>
-        <th>Станція</th>
-        <th>Одиниця</th>
-        <th>Залишок</th>
-        <th>Мін. запас</th>
-        <th>Стан</th>
-        <th>Останній рух</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody id="productsBody"></tbody>
-  </table>
-  <div class="empty" id="emptyState" style="display:none;">Товарів ще немає — додай перший кнопкою "+ Товар".</div>
+  <div id="viewProducts">
+    <table id="productsTable">
+      <thead>
+        <tr>
+          <th>Код</th>
+          <th>Назва</th>
+          <th>Станція</th>
+          <th>Одиниця</th>
+          <th>Залишок</th>
+          <th>Мін. запас</th>
+          <th>Стан</th>
+          <th>Останній рух</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="productsBody"></tbody>
+    </table>
+    <div class="empty" id="emptyState" style="display:none;">Товарів ще немає — додай перший кнопкою "+ Товар".</div>
+  </div>
+
+  <div id="viewRecipes" style="display:none;">
+    <p style="color: var(--muted); margin: 0 0 16px;">Технологічні карти блендів (напівфабрикат — обсмажена кава), партія 20 кг. Компоненти поки без звʼязку з окремим каталогом зеленої кави.</p>
+    <div id="recipesContainer"></div>
+    <div class="empty" id="recipesEmpty" style="display:none;">Рецептур ще немає.</div>
+  </div>
 </main>
 
 <!-- Модалка: рух -->
@@ -340,6 +357,56 @@ document.getElementById('search').addEventListener('input', () => {
   clearTimeout(window._searchTimer);
   window._searchTimer = setTimeout(loadProducts, 250);
 });
+
+let recipesLoaded = false;
+
+function showTab(tab) {
+  document.getElementById('viewProducts').style.display = tab === 'products' ? '' : 'none';
+  document.getElementById('viewRecipes').style.display = tab === 'recipes' ? '' : 'none';
+  document.getElementById('tabProducts').classList.toggle('active', tab === 'products');
+  document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
+  document.getElementById('search').style.display = tab === 'products' ? '' : 'none';
+  document.getElementById('btnAddProduct').style.display = tab === 'products' ? '' : 'none';
+  if (tab === 'recipes' && !recipesLoaded) loadRecipes();
+}
+
+async function loadRecipes() {
+  const resp = await fetch('/api/blend-recipes');
+  const data = await resp.json();
+  const container = document.getElementById('recipesContainer');
+  const empty = document.getElementById('recipesEmpty');
+
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  if (!data.recipes.length) {
+    container.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  recipesLoaded = true;
+
+  const groups = {};
+  for (const r of data.recipes) {
+    const key = r.category || '—';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(r);
+  }
+
+  container.innerHTML = Object.keys(groups).sort().map((category) => `
+    <div class="recipeGroup">
+      <h3>${category}</h3>
+      ${groups[category].map((r) => `
+        <div class="recipeCard">
+          <div class="recipeName">${r.blend_name} <span style="color: var(--muted); font-weight: 400;">(${fmt(r.batch_size)} кг)</span></div>
+          <div class="recipeComponents">
+            ${r.components.map((c) => `<span class="comp">${c.name}: ${fmt(c.qty)} кг</span>`).join('')}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
 
 loadProducts();
 </script>

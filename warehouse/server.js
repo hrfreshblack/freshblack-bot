@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import db from './db.js';
 import seedCatalog from './seed-catalog.js';
 import seedCatalogAdditions from './seed-catalog-additions.js';
+import seedBlendRecipes from './seed-blend-recipes.js';
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is not set.');
@@ -86,6 +87,16 @@ app.post('/api/products', async (req, res) => {
   }
 });
 
+app.get('/api/blend-recipes', async (req, res) => {
+  try {
+    const recipes = await db.listBlendRecipes();
+    res.json({ ok: true, recipes });
+  } catch (error) {
+    console.error('GET /api/blend-recipes ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати рецептури' });
+  }
+});
+
 app.get('/api/products/:code/movements', async (req, res) => {
   try {
     const movements = await db.listMovements(req.params.code);
@@ -137,6 +148,11 @@ app.post('/api/movements', async (req, res) => {
     const addedCount = await db.insertProductsIfMissing(seedCatalogAdditions);
     if (addedCount > 0) {
       console.log(`Added ${addedCount} new products found in order history`);
+    }
+
+    const addedRecipes = await db.insertBlendRecipesIfMissing(seedBlendRecipes);
+    if (addedRecipes > 0) {
+      console.log(`Added ${addedRecipes} blend recipes`);
     }
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);

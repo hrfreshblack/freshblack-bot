@@ -49,6 +49,24 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_movements_product ON stock_movements(product_code);
+
+    CREATE TABLE IF NOT EXISTS blend_recipes (
+      id SERIAL PRIMARY KEY,
+      category TEXT NOT NULL DEFAULT '',
+      blend_name TEXT NOT NULL,
+      batch_size NUMERIC NOT NULL DEFAULT 20,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (category, blend_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS blend_components (
+      id SERIAL PRIMARY KEY,
+      recipe_id INTEGER NOT NULL REFERENCES blend_recipes(id) ON DELETE CASCADE,
+      component_name TEXT NOT NULL,
+      qty NUMERIC NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_blend_components_recipe ON blend_components(recipe_id);
   `);
 }
 
@@ -206,6 +224,60 @@ async function insertProductsIfMissing(products) {
   return inserted;
 }
 
+// Так само, як insertProductsIfMissing — ніколи не перезаписує вже наявний
+// рецепт (category+blend_name), тож безпечно викликати щоразу при старті.
+async function insertBlendRecipesIfMissing(recipes) {
+  let inserted = 0;
+  for (const recipe of recipes) {
+    const { rows } = await pool.query(
+      `INSERT INTO blend_recipes (category, blend_name, batch_size, updated_at)
+       VALUES ($1,$2,$3, now())
+       ON CONFLICT (category, blend_name) DO NOTHING
+       RETURNING id`,
+      [recipe.category || '', recipe.blend_name, recipe.batch_size || 20]
+    );
+    if (!rows.length) continue;
+
+    const recipeId = rows[0].id;
+    inserted += 1;
+    for (const component of recipe.components || []) {
+      await pool.query(
+        `INSERT INTO blend_components (recipe_id, component_name, qty) VALUES ($1,$2,$3)`,
+        [recipeId, component.name, component.qty]
+      );
+    }
+  }
+  return inserted;
+}
+
+async function listBlendRecipes() {
+  const { rows } = await pool.query(
+    `SELECT r.id, r.category, r.blend_name, r.batch_size,
+            c.component_name, c.qty
+     FROM blend_recipes r
+     LEFT JOIN blend_components c ON c.recipe_id = r.id
+     ORDER BY r.category ASC, r.blend_name ASC, c.qty DESC NULLS LAST`,
+    []
+  );
+
+  const byId = new Map();
+  for (const row of rows) {
+    if (!byId.has(row.id)) {
+      byId.set(row.id, {
+        id: row.id,
+        category: row.category,
+        blend_name: row.blend_name,
+        batch_size: Number(row.batch_size),
+        components: []
+      });
+    }
+    if (row.component_name) {
+      byId.get(row.id).components.push({ name: row.component_name, qty: Number(row.qty) });
+    }
+  }
+  return Array.from(byId.values());
+}
+
 export default {
   initSchema,
   upsertProduct,
@@ -217,6 +289,8 @@ export default {
   listProducts,
   listMovements,
   addMovement,
+  insertBlendRecipesIfMissing,
+  listBlendRecipes,
   SIGNED_TYPES,
   ABSOLUTE_TYPES
 };
