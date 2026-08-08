@@ -6,6 +6,7 @@ import db from './db.js';
 import seedCatalog from './seed-catalog.js';
 import seedCatalogAdditions from './seed-catalog-additions.js';
 import seedBlendRecipes from './seed-blend-recipes.js';
+import seedMaterials from './seed-materials.js';
 import { parseOrderFile } from './parse-order-file.js';
 
 if (!process.env.DATABASE_URL) {
@@ -173,6 +174,112 @@ app.post('/api/tasks/:id/status', async (req, res) => {
   }
 });
 
+app.get('/api/materials', async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const materials = await db.listMaterials({ search });
+    res.json({ ok: true, materials });
+  } catch (error) {
+    console.error('GET /api/materials ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати розхідники' });
+  }
+});
+
+app.post('/api/materials', async (req, res) => {
+  try {
+    const { name, material_type, size_label, station, unit, min_stock, reorder_period_days } = req.body || {};
+    if (!name || !String(name).trim()) {
+      res.status(400).json({ ok: false, error: 'Назва обов’язкова' });
+      return;
+    }
+    const material = await db.createMaterial({ name: String(name).trim(), material_type, size_label, station, unit, min_stock, reorder_period_days });
+    res.json({ ok: true, material });
+  } catch (error) {
+    console.error('POST /api/materials ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити матеріал' });
+  }
+});
+
+app.post('/api/materials/:id', async (req, res) => {
+  try {
+    const { station, min_stock, unit, reorder_period_days, material_type } = req.body || {};
+    const material = await db.updateMaterialFields(Number(req.params.id), { station, min_stock, unit, reorder_period_days, material_type });
+    if (!material) {
+      res.status(404).json({ ok: false, error: 'Матеріал не знайдено' });
+      return;
+    }
+    res.json({ ok: true, material });
+  } catch (error) {
+    console.error('POST /api/materials/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити матеріал' });
+  }
+});
+
+app.get('/api/materials/:id/movements', async (req, res) => {
+  try {
+    const movements = await db.listMaterialMovements(Number(req.params.id));
+    res.json({ ok: true, movements });
+  } catch (error) {
+    console.error('GET /api/materials/:id/movements ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати історію рухів' });
+  }
+});
+
+app.post('/api/material-movements', async (req, res) => {
+  try {
+    const { material_id, movement_type, qty, note, movement_date, created_by } = req.body || {};
+    if (!material_id || !movement_type || qty === undefined || qty === null) {
+      res.status(400).json({ ok: false, error: 'Потрібні material_id, movement_type і qty' });
+      return;
+    }
+    const movement = await db.addMaterialMovement({ material_id, movement_type, qty, note, movement_date, created_by });
+    const balance = await db.getMaterialBalance(material_id);
+    res.json({ ok: true, movement, balance });
+  } catch (error) {
+    console.error('POST /api/material-movements ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося записати рух' });
+  }
+});
+
+app.get('/api/products/:code/specs', async (req, res) => {
+  try {
+    const specs = await db.listProductSpecs(req.params.code);
+    res.json({ ok: true, specs });
+  } catch (error) {
+    console.error('GET /api/products/:code/specs ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати специфікацію' });
+  }
+});
+
+app.post('/api/products/:code/specs', async (req, res) => {
+  try {
+    const { role, material_id, qty_per_unit } = req.body || {};
+    if (!role || !material_id) {
+      res.status(400).json({ ok: false, error: 'Потрібні role і material_id' });
+      return;
+    }
+    const spec = await db.upsertProductSpec({ product_code: req.params.code, role, material_id, qty_per_unit });
+    res.json({ ok: true, spec });
+  } catch (error) {
+    console.error('POST /api/products/:code/specs ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти специфікацію' });
+  }
+});
+
+app.delete('/api/product-specs/:id', async (req, res) => {
+  try {
+    const rowCount = await db.deleteProductSpec(Number(req.params.id));
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE /api/product-specs/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити' });
+  }
+});
+
 app.get('/api/blend-recipes', async (req, res) => {
   try {
     const recipes = await db.listBlendRecipes();
@@ -321,6 +428,12 @@ app.post('/api/movements', async (req, res) => {
     const addedRecipes = await db.insertBlendRecipesIfMissing(seedBlendRecipes);
     if (addedRecipes > 0) {
       console.log(`Added ${addedRecipes} blend recipes`);
+    }
+
+    const existingMaterials = await db.countMaterials();
+    if (existingMaterials === 0) {
+      await db.bulkCreateMaterialsWithBaseline(seedMaterials);
+      console.log(`Seeded initial materials catalog: ${seedMaterials.length} materials`);
     }
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);

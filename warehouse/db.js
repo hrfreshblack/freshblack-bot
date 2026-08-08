@@ -108,6 +108,50 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS materials (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      material_type TEXT NOT NULL DEFAULT '',
+      size_label TEXT NOT NULL DEFAULT '',
+      station TEXT NOT NULL DEFAULT '',
+      unit TEXT NOT NULL DEFAULT 'шт',
+      min_stock NUMERIC NOT NULL DEFAULT 0,
+      reorder_period_days NUMERIC,
+      last_order_date DATE,
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (name, size_label)
+    );
+
+    CREATE TABLE IF NOT EXISTS material_movements (
+      id SERIAL PRIMARY KEY,
+      material_id INTEGER NOT NULL REFERENCES materials(id),
+      movement_type TEXT NOT NULL,
+      qty NUMERIC NOT NULL,
+      signed_qty NUMERIC NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      movement_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_material_movements_material ON material_movements(material_id);
+
+    -- Специфікація пакування товару: яка пачка/плівка/наліпка йде на 1 одиницю
+    -- продукту, і в яку коробку пакуємо при відвантаженні. Для ролі
+    -- "коробка_відвантаження" qty_per_unit — це частка коробки на 1 одиницю
+    -- товару (наприклад 1/20, якщо в коробку влазить 20 шт).
+    CREATE TABLE IF NOT EXISTS product_specs (
+      id SERIAL PRIMARY KEY,
+      product_code TEXT NOT NULL REFERENCES products(code),
+      role TEXT NOT NULL,
+      material_id INTEGER NOT NULL REFERENCES materials(id),
+      qty_per_unit NUMERIC NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (product_code, role)
+    );
+
     CREATE TABLE IF NOT EXISTS production_tasks (
       id SERIAL PRIMARY KEY,
       station TEXT NOT NULL,
@@ -566,6 +610,175 @@ async function updateOrderStatus(orderNumber, status, note) {
   return rowCount;
 }
 
+const MATERIAL_SIGNED_TYPES = {
+  receipt: 1,
+  consumption: -1,
+  return: 1,
+  writeoff: -1,
+  adjustment_plus: 1,
+  adjustment_minus: -1
+};
+const MATERIAL_ABSOLUTE_TYPES = new Set(['inventory_adjustment']);
+
+async function countMaterials() {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM materials');
+  return rows[0].n;
+}
+
+// Одноразово при першому запуску (таблиця ще порожня): створює матеріал і
+// одну "інвентаризаційну" подію на його стартову кількість — це точка нуль,
+// узята з файлу, який Тетяна скинула станом на серпень 2026.
+async function bulkCreateMaterialsWithBaseline(materials) {
+  for (const m of materials) {
+    const { rows } = await pool.query(
+      `INSERT INTO materials (name, material_type, size_label, station, unit)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (name, size_label) DO NOTHING
+       RETURNING id`,
+      [m.name, m.material_type || '', m.size_label || '', m.station || '', m.unit || 'шт']
+    );
+    if (!rows.length) continue;
+    const materialId = rows[0].id;
+    const qty = m.qty_on_hand || 0;
+    await pool.query(
+      `INSERT INTO material_movements (material_id, movement_type, qty, signed_qty, note, movement_date)
+       VALUES ($1, 'inventory_adjustment', $2, $2, 'Початковий залишок (файл від Тетяни)', CURRENT_DATE)`,
+      [materialId, qty]
+    );
+  }
+}
+
+async function getMaterialBalance(materialId) {
+  const { rows } = await pool.query(
+    'SELECT COALESCE(SUM(signed_qty), 0) AS balance FROM material_movements WHERE material_id = $1',
+    [materialId]
+  );
+  return Number(rows[0].balance);
+}
+
+async function listMaterials({ search = '' } = {}) {
+  const conditions = ['m.active = true'];
+  const params = [];
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    conditions.push(`(lower(m.name) LIKE $${params.length} OR lower(m.material_type) LIKE $${params.length} OR lower(m.size_label) LIKE $${params.length})`);
+  }
+  const where = `WHERE ${conditions.join(' AND ')}`;
+  const { rows } = await pool.query(
+    `SELECT m.*, COALESCE(SUM(mm.signed_qty), 0) AS balance,
+            MAX(mm.movement_date) AS last_movement_date
+     FROM materials m
+     LEFT JOIN material_movements mm ON mm.material_id = m.id
+     ${where}
+     GROUP BY m.id
+     ORDER BY m.material_type ASC, m.name ASC`,
+    params
+  );
+  return rows.map((r) => ({
+    ...r,
+    balance: Number(r.balance),
+    min_stock: Number(r.min_stock),
+    reorder_period_days: r.reorder_period_days === null ? null : Number(r.reorder_period_days)
+  }));
+}
+
+async function createMaterial(m) {
+  const { rows } = await pool.query(
+    `INSERT INTO materials (name, material_type, size_label, station, unit, min_stock, reorder_period_days)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING *`,
+    [m.name, m.material_type || '', m.size_label || '', m.station || '', m.unit || 'шт', m.min_stock || 0, m.reorder_period_days || null]
+  );
+  return rows[0];
+}
+
+async function updateMaterialFields(id, { station, min_stock, unit, reorder_period_days, material_type } = {}) {
+  const { rows } = await pool.query(
+    `UPDATE materials SET
+       station = COALESCE($2, station),
+       min_stock = COALESCE($3, min_stock),
+       unit = COALESCE($4, unit),
+       reorder_period_days = COALESCE($5, reorder_period_days),
+       material_type = COALESCE($6, material_type),
+       updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [id, station ?? null, min_stock ?? null, unit ?? null, reorder_period_days ?? null, material_type ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function listMaterialMovements(materialId, limit = 50) {
+  const { rows } = await pool.query(
+    'SELECT * FROM material_movements WHERE material_id = $1 ORDER BY id DESC LIMIT $2',
+    [materialId, limit]
+  );
+  return rows;
+}
+
+async function addMaterialMovement({ material_id, movement_type, qty, note, movement_date, created_by }) {
+  if (!MATERIAL_SIGNED_TYPES.hasOwnProperty(movement_type) && !MATERIAL_ABSOLUTE_TYPES.has(movement_type)) {
+    throw new Error(`Unknown movement_type: ${movement_type}`);
+  }
+
+  const numericQty = Number(qty);
+  if (!Number.isFinite(numericQty) || numericQty < 0) {
+    throw new Error('qty must be a non-negative number');
+  }
+
+  let signedQty;
+  if (MATERIAL_ABSOLUTE_TYPES.has(movement_type)) {
+    const currentBalance = await getMaterialBalance(material_id);
+    signedQty = numericQty - currentBalance;
+  } else {
+    signedQty = MATERIAL_SIGNED_TYPES[movement_type] * numericQty;
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO material_movements (material_id, movement_type, qty, signed_qty, note, movement_date, created_by)
+     VALUES ($1,$2,$3,$4,$5, COALESCE($6, CURRENT_DATE), $7)
+     RETURNING *`,
+    [material_id, movement_type, numericQty, signedQty, note || '', movement_date || null, created_by || '']
+  );
+  return rows[0];
+}
+
+const PRODUCT_SPEC_ROLES = ['пачка', 'плівка', 'наліпка_перед', 'наліпка_зад', 'коробка_відвантаження'];
+
+async function listProductSpecs(productCode) {
+  const { rows } = await pool.query(
+    `SELECT ps.*, m.name AS material_name, m.size_label AS material_size_label, m.unit AS material_unit
+     FROM product_specs ps
+     JOIN materials m ON m.id = ps.material_id
+     WHERE ps.product_code = $1
+     ORDER BY ps.role ASC`,
+    [productCode]
+  );
+  return rows.map((r) => ({ ...r, qty_per_unit: Number(r.qty_per_unit) }));
+}
+
+async function upsertProductSpec({ product_code, role, material_id, qty_per_unit }) {
+  if (!PRODUCT_SPEC_ROLES.includes(role)) {
+    throw new Error(`Unknown role: ${role}`);
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO product_specs (product_code, role, material_id, qty_per_unit, updated_at)
+     VALUES ($1,$2,$3,$4, now())
+     ON CONFLICT (product_code, role) DO UPDATE SET
+       material_id = excluded.material_id,
+       qty_per_unit = excluded.qty_per_unit,
+       updated_at = now()
+     RETURNING *`,
+    [product_code, role, material_id, qty_per_unit || 1]
+  );
+  return rows[0];
+}
+
+async function deleteProductSpec(id) {
+  const { rowCount } = await pool.query('DELETE FROM product_specs WHERE id = $1', [id]);
+  return rowCount;
+}
+
 const TASK_STATUSES = ['заплановано', 'виконується', 'пауза', 'завершено', 'заблоковано', 'скасовано'];
 
 // Станції беруться з двох джерел: уже призначені товарам (каталог) і вже
@@ -676,9 +889,23 @@ export default {
   createTask,
   listTasks,
   updateTaskStatus,
+  countMaterials,
+  bulkCreateMaterialsWithBaseline,
+  getMaterialBalance,
+  listMaterials,
+  createMaterial,
+  updateMaterialFields,
+  listMaterialMovements,
+  addMaterialMovement,
+  listProductSpecs,
+  upsertProductSpec,
+  deleteProductSpec,
   ORDER_STATUSES,
   PRODUCT_STATUSES,
   TASK_STATUSES,
+  PRODUCT_SPEC_ROLES,
+  MATERIAL_SIGNED_TYPES,
+  MATERIAL_ABSOLUTE_TYPES,
   SIGNED_TYPES,
   ABSOLUTE_TYPES
 };

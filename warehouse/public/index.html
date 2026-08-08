@@ -163,6 +163,7 @@
     <button id="tabProducts" onclick="showTab('products')" class="active">Товари</button>
     <button id="tabStock" onclick="showTab('stock')">Склад</button>
     <button id="tabStations" onclick="showTab('stations')">Станції</button>
+    <button id="tabMaterials" onclick="showTab('materials')">Розхідники</button>
     <button id="tabRecipes" onclick="showTab('recipes')">Рецептури блендів</button>
     <button id="tabOrders" onclick="showTab('orders')">Замовлення</button>
     <button id="tabClients" onclick="showTab('clients')">Клієнти</button>
@@ -185,6 +186,7 @@
           <th>Одиниця</th>
           <th>Складський</th>
           <th>Статус</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="productsBody"></tbody>
@@ -243,6 +245,30 @@
       <tbody id="tasksBody"></tbody>
     </table>
     <div class="empty" id="tasksEmpty" style="display:none;">Задач немає за обраний період.</div>
+  </div>
+
+  <div id="viewMaterials" style="display:none;">
+    <div class="viewToolbar">
+      <input type="search" id="materialSearch" placeholder="Пошук за назвою чи типом…">
+      <button class="secondary" id="btnAddMaterial">+ Матеріал</button>
+    </div>
+    <p style="color: var(--muted); margin: 0 0 14px;">Пакувальні матеріали (плівка, пачки, коробки, наліпки) — окремий облік від готової продукції. "Період замовлення" — за скільки днів приходить від постачальника, для розрахунку коли й скільки замовляти.</p>
+    <table id="materialsTable">
+      <thead>
+        <tr>
+          <th>Тип</th>
+          <th>Назва</th>
+          <th>Розмір</th>
+          <th>Станція</th>
+          <th>Залишок</th>
+          <th>Мін. запас</th>
+          <th>Період замовл., дн</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="materialsBody"></tbody>
+    </table>
+    <div class="empty" id="materialsEmpty" style="display:none;">Розхідників ще немає.</div>
   </div>
 
   <div id="viewRecipes" style="display:none;">
@@ -455,6 +481,94 @@
   </div>
 </div>
 
+<!-- Модалка: новий матеріал -->
+<div class="overlay" id="materialOverlay">
+  <div class="modal">
+    <h2>Новий матеріал</h2>
+    <div class="field">
+      <label>Назва</label>
+      <input type="text" id="mName" placeholder="Пачка біла (FB)">
+    </div>
+    <div class="field">
+      <label>Тип</label>
+      <select id="mType">
+        <option value="пачка">пачка</option>
+        <option value="плівка">плівка</option>
+        <option value="коробка">коробка</option>
+        <option value="картонна коробка">картонна коробка</option>
+        <option value="наліпка">наліпка</option>
+        <option value="">інше</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Розмір/маркування</label>
+      <input type="text" id="mSizeLabel" placeholder="200 г / 19,5 кг / 460*360*320">
+    </div>
+    <div class="field">
+      <label>Станція</label>
+      <input type="text" id="mStation" list="stationsList" placeholder="ручна / центршов / ...">
+    </div>
+    <div class="field">
+      <label>Мінімальний запас</label>
+      <input type="number" id="mMinStock" min="0" step="any" value="0">
+    </div>
+    <div class="field">
+      <label>Період виконання замовлення постачальником, днів</label>
+      <input type="number" id="mReorderDays" min="0" step="1" placeholder="необов'язково">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelMaterial">Скасувати</button>
+      <button id="btnSaveMaterial">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: рух матеріалу -->
+<div class="overlay" id="materialMovementOverlay">
+  <div class="modal">
+    <h2 id="materialMovementTitle">Новий рух</h2>
+    <div class="field">
+      <label>Тип руху</label>
+      <select id="materialMovementType">
+        <option value="receipt">Приймання від постачальника (+)</option>
+        <option value="consumption">Списання у виробництво (−)</option>
+        <option value="return">Повернення (+)</option>
+        <option value="writeoff">Списання/брак (−)</option>
+        <option value="adjustment_plus">Коригування плюс (+)</option>
+        <option value="adjustment_minus">Коригування мінус (−)</option>
+        <option value="inventory_adjustment">Інвентаризація — фактично порахована кількість</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Кількість</label>
+      <input type="number" id="materialMovementQty" min="0" step="any" placeholder="0">
+    </div>
+    <div class="field">
+      <label>Дата</label>
+      <input type="date" id="materialMovementDate">
+    </div>
+    <div class="field">
+      <label>Коментар (необов'язково)</label>
+      <input type="text" id="materialMovementNote" placeholder="наприклад: накладна №...">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelMaterialMovement">Скасувати</button>
+      <button id="btnSaveMaterialMovement">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: специфікація товару -->
+<div class="overlay" id="specOverlay">
+  <div class="modal" style="max-width: 480px;">
+    <h2 id="specTitle">Специфікація</h2>
+    <div id="specRows"></div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCloseSpec">Закрити</button>
+    </div>
+  </div>
+</div>
+
 <!-- Модалка: зміна статусу задачі -->
 <div class="overlay" id="taskStatusOverlay">
   <div class="modal">
@@ -549,6 +663,7 @@ async function loadProducts() {
           ${PRODUCT_STATUSES.map((s) => `<option value="${s}" ${s === row.status ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
       </td>
+      <td class="row-actions"><button class="secondary" onclick="openSpec('${row.code}', '${(row.name || row.code).replace(/'/g, "\\'")}')">Специфікація</button></td>
     </tr>
   `).join('');
 }
@@ -683,17 +798,20 @@ function showTab(tab) {
   document.getElementById('viewProducts').style.display = tab === 'products' ? '' : 'none';
   document.getElementById('viewStock').style.display = tab === 'stock' ? '' : 'none';
   document.getElementById('viewStations').style.display = tab === 'stations' ? '' : 'none';
+  document.getElementById('viewMaterials').style.display = tab === 'materials' ? '' : 'none';
   document.getElementById('viewRecipes').style.display = tab === 'recipes' ? '' : 'none';
   document.getElementById('viewOrders').style.display = tab === 'orders' ? '' : 'none';
   document.getElementById('viewClients').style.display = tab === 'clients' ? '' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', tab === 'products');
   document.getElementById('tabStock').classList.toggle('active', tab === 'stock');
   document.getElementById('tabStations').classList.toggle('active', tab === 'stations');
+  document.getElementById('tabMaterials').classList.toggle('active', tab === 'materials');
   document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
   document.getElementById('tabOrders').classList.toggle('active', tab === 'orders');
   document.getElementById('tabClients').classList.toggle('active', tab === 'clients');
   if (tab === 'stock') loadStock();
   if (tab === 'stations') initStations();
+  if (tab === 'materials') loadMaterials();
   if (tab === 'recipes' && !recipesLoaded) loadRecipes();
   if (tab === 'orders') loadOrders();
   if (tab === 'clients') loadClients();
@@ -1060,6 +1178,188 @@ document.getElementById('btnSaveTaskStatus').onclick = async () => {
   document.getElementById('taskStatusOverlay').classList.remove('open');
   showToast('Статус оновлено');
   loadTasks();
+};
+
+// ---- Розхідники ----
+let currentMaterialId = null;
+
+function materialStatusTag(row) {
+  if (row.balance < 0) return '<span class="tag bad">від’ємний</span>';
+  if (row.balance < row.min_stock) return '<span class="tag warn">поповнити</span>';
+  return '<span class="tag ok">ОК</span>';
+}
+
+async function loadMaterials() {
+  const search = document.getElementById('materialSearch').value.trim();
+  const resp = await fetch('/api/materials?search=' + encodeURIComponent(search));
+  const data = await resp.json();
+  const body = document.getElementById('materialsBody');
+  const empty = document.getElementById('materialsEmpty');
+
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  window._materialsCache = data.materials;
+
+  if (!data.materials.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  body.innerHTML = data.materials.map((m) => `
+    <tr>
+      <td>${m.material_type || '—'}</td>
+      <td>${m.name}</td>
+      <td>${m.size_label || '—'}</td>
+      <td>${m.station || '—'}</td>
+      <td class="balance">${fmt(m.balance)} ${materialStatusTag(m)}</td>
+      <td>${fmt(m.min_stock)}</td>
+      <td>${m.reorder_period_days ?? '—'}</td>
+      <td class="row-actions"><button class="secondary" onclick="openMaterialMovement(${m.id}, '${m.name.replace(/'/g, "\\'")}')">+ Рух</button></td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('materialSearch').addEventListener('input', () => {
+  clearTimeout(window._materialSearchTimer);
+  window._materialSearchTimer = setTimeout(loadMaterials, 250);
+});
+
+document.getElementById('btnAddMaterial').onclick = () => {
+  document.getElementById('mName').value = '';
+  document.getElementById('mType').value = 'пачка';
+  document.getElementById('mSizeLabel').value = '';
+  document.getElementById('mStation').value = '';
+  document.getElementById('mMinStock').value = 0;
+  document.getElementById('mReorderDays').value = '';
+  document.getElementById('materialOverlay').classList.add('open');
+};
+
+document.getElementById('btnCancelMaterial').onclick = () => {
+  document.getElementById('materialOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveMaterial').onclick = async () => {
+  const name = document.getElementById('mName').value.trim();
+  if (!name) { showToast('Назва обов’язкова'); return; }
+
+  const resp = await fetch('/api/materials', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      material_type: document.getElementById('mType').value,
+      size_label: document.getElementById('mSizeLabel').value.trim(),
+      station: document.getElementById('mStation').value.trim(),
+      min_stock: document.getElementById('mMinStock').value || 0,
+      reorder_period_days: document.getElementById('mReorderDays').value || null
+    })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+
+  document.getElementById('materialOverlay').classList.remove('open');
+  showToast('Матеріал збережено');
+  loadMaterials();
+};
+
+function openMaterialMovement(id, name) {
+  currentMaterialId = id;
+  document.getElementById('materialMovementTitle').textContent = 'Рух — ' + name;
+  document.getElementById('materialMovementQty').value = '';
+  document.getElementById('materialMovementNote').value = '';
+  document.getElementById('materialMovementDate').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('materialMovementOverlay').classList.add('open');
+}
+
+document.getElementById('btnCancelMaterialMovement').onclick = () => {
+  document.getElementById('materialMovementOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveMaterialMovement').onclick = async () => {
+  const movement_type = document.getElementById('materialMovementType').value;
+  const qty = document.getElementById('materialMovementQty').value;
+  const note = document.getElementById('materialMovementNote').value;
+  const movement_date = document.getElementById('materialMovementDate').value;
+
+  if (!qty || Number(qty) < 0) { showToast('Вкажи кількість'); return; }
+
+  const resp = await fetch('/api/material-movements', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ material_id: currentMaterialId, movement_type, qty, note, movement_date })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+
+  document.getElementById('materialMovementOverlay').classList.remove('open');
+  showToast('Збережено. Новий залишок: ' + fmt(data.balance));
+  loadMaterials();
+};
+
+// ---- Специфікація товару (пачка/плівка/наліпки/коробка відвантаження) ----
+const SPEC_ROLES = [
+  { value: 'пачка', label: 'Пачка' },
+  { value: 'плівка', label: 'Плівка' },
+  { value: 'наліпка_перед', label: 'Наліпка (перед)' },
+  { value: 'наліпка_зад', label: 'Наліпка (зад)' },
+  { value: 'коробка_відвантаження', label: 'Коробка відвантаження' }
+];
+let currentSpecProductCode = null;
+
+async function openSpec(code, name) {
+  currentSpecProductCode = code;
+  document.getElementById('specTitle').textContent = 'Специфікація — ' + name;
+
+  if (!window._materialsCache) {
+    const resp = await fetch('/api/materials');
+    const data = await resp.json();
+    window._materialsCache = data.ok ? data.materials : [];
+  }
+  const materials = window._materialsCache;
+
+  const resp = await fetch('/api/products/' + encodeURIComponent(code) + '/specs');
+  const data = await resp.json();
+  const specs = data.ok ? data.specs : [];
+
+  document.getElementById('specRows').innerHTML = SPEC_ROLES.map((r) => {
+    const existing = specs.find((s) => s.role === r.value);
+    return `
+      <div class="field" style="border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+        <label>${r.label}</label>
+        <select id="specMaterial_${r.value}" style="margin-bottom: 6px;">
+          <option value="">— не задано —</option>
+          ${materials.map((m) => `<option value="${m.id}" ${existing && existing.material_id === m.id ? 'selected' : ''}>${m.material_type ? '[' + m.material_type + '] ' : ''}${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</option>`).join('')}
+        </select>
+        <div style="display:flex; gap:8px;">
+          <input type="number" id="specQty_${r.value}" min="0" step="any" placeholder="к-сть на 1 од." value="${existing ? existing.qty_per_unit : (r.value === 'коробка_відвантаження' ? '' : 1)}" style="flex:1;">
+          <button class="secondary" onclick="saveSpec('${r.value}')">Зберегти</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  document.getElementById('specOverlay').classList.add('open');
+}
+
+async function saveSpec(role) {
+  const materialId = document.getElementById('specMaterial_' + role).value;
+  const qty = document.getElementById('specQty_' + role).value;
+
+  if (!materialId) { showToast('Обери матеріал'); return; }
+
+  const resp = await fetch('/api/products/' + encodeURIComponent(currentSpecProductCode) + '/specs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role, material_id: Number(materialId), qty_per_unit: qty || 1 })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Специфікацію збережено');
+}
+
+document.getElementById('btnCloseSpec').onclick = () => {
+  document.getElementById('specOverlay').classList.remove('open');
 };
 
 loadProducts();
