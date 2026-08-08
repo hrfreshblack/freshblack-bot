@@ -1,6 +1,9 @@
 import pg from 'pg';
+import bcrypt from 'bcryptjs';
 
 const { Pool } = pg;
+
+const ACCOUNT_ROLES = ['адмін', 'тімлід', 'станція'];
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL
@@ -152,12 +155,62 @@ async function initSchema() {
       UNIQUE (product_code, role)
     );
 
+    -- base_norm/target_norm/unit/employees лишились з першої версії й більше
+    -- не пишуться в код — станція може мати кілька операцій із різними
+    -- нормами (station_operations) і кількох іменованих співробітників
+    -- (station_employees). Колонки не видаляю, щоб не робити руйнівну міграцію.
     CREATE TABLE IF NOT EXISTS stations (
       name TEXT PRIMARY KEY,
       base_norm NUMERIC,
       target_norm NUMERIC,
       unit TEXT NOT NULL DEFAULT '',
       employees TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    ALTER TABLE stations ADD COLUMN IF NOT EXISTS note TEXT NOT NULL DEFAULT '';
+
+    -- operation_name = '' означає єдину загальну норму станції. Непорожнє
+    -- значення — іменована підоперація (наприклад, у "Збірка дріпів" їх
+    -- декілька з різними нормами й одиницями).
+    CREATE TABLE IF NOT EXISTS station_operations (
+      id SERIAL PRIMARY KEY,
+      station TEXT NOT NULL REFERENCES stations(name),
+      operation_name TEXT NOT NULL DEFAULT '',
+      base_norm NUMERIC,
+      target_norm NUMERIC,
+      unit TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (station, operation_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS station_employees (
+      id SERIAL PRIMARY KEY,
+      station TEXT NOT NULL REFERENCES stations(name),
+      employee_name TEXT NOT NULL,
+      personal_norm NUMERIC,
+      personal_norm_unit TEXT NOT NULL DEFAULT '',
+      schedule_note TEXT NOT NULL DEFAULT '',
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (station, employee_name)
+    );
+
+    -- Один обліковий запис на станцію (спільний планшет) або особисто для
+    -- адміна/тімліда. role: 'адмін' (весь доступ), 'тімлід' (усе на вкладці
+    -- "Станції" для всіх станцій, без каталогу/складу/замовлень/клієнтів),
+    -- 'станція' (тільки свої задачі: почати/пауза/завершити, з перемикачем
+    -- станції в інтерфейсі — планшет один, а людина може працювати на різних).
+    CREATE TABLE IF NOT EXISTS accounts (
+      username TEXT PRIMARY KEY,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL,
+      home_station TEXT,
+      display_name TEXT NOT NULL DEFAULT '',
       active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -825,35 +878,117 @@ async function insertStationsIfMissing(names) {
   return inserted;
 }
 
-async function updateStation(name, { base_norm, target_norm, unit, employees } = {}) {
+async function updateStation(name, { note } = {}) {
   const { rows } = await pool.query(
-    `UPDATE stations SET
-       base_norm = COALESCE($2, base_norm),
-       target_norm = COALESCE($3, target_norm),
-       unit = COALESCE($4, unit),
-       employees = COALESCE($5, employees),
-       updated_at = now()
-     WHERE name = $1
-     RETURNING *`,
-    [name, base_norm ?? null, target_norm ?? null, unit ?? null, employees ?? null]
+    `UPDATE stations SET note = COALESCE($2, note), updated_at = now() WHERE name = $1 RETURNING *`,
+    [name, note ?? null]
   );
   return rows[0] || null;
 }
 
-// Реєстр станцій з нормами, співробітниками і поточним станом на сьогодні:
-// скільки заплановано, скільки вже фактично виконано, яка задача зараз
-// "виконується" (якщо є).
+// Перейменовує вже наявні значення station у products/materials/tasks на
+// канонічну назву (наприклад "ручна" -> "Ручна"), щоб та сама станція не
+// показувалась двома картками через різницю в регістрі. Викликається один
+// раз при старті з фіксованим списком відомих варіантів написання.
+async function normalizeStationNames(aliasMap) {
+  for (const [alias, canonical] of Object.entries(aliasMap)) {
+    if (alias === canonical) continue;
+    await pool.query('UPDATE products SET station = $2 WHERE station = $1', [alias, canonical]);
+    await pool.query('UPDATE materials SET station = $2 WHERE station = $1', [alias, canonical]);
+    await pool.query('UPDATE production_tasks SET station = $2 WHERE station = $1', [alias, canonical]);
+    await pool.query('DELETE FROM stations WHERE name = $1', [alias]);
+  }
+}
+
+async function upsertStationOperation({ station, operation_name, base_norm, target_norm, unit }) {
+  const { rows } = await pool.query(
+    `INSERT INTO station_operations (station, operation_name, base_norm, target_norm, unit, updated_at)
+     VALUES ($1,$2,$3,$4,$5, now())
+     ON CONFLICT (station, operation_name) DO UPDATE SET
+       base_norm = excluded.base_norm,
+       target_norm = excluded.target_norm,
+       unit = excluded.unit,
+       updated_at = now()
+     RETURNING *`,
+    [station, operation_name || '', base_norm ?? null, target_norm ?? null, unit || '']
+  );
+  return rows[0];
+}
+
+// Безпечно на старт: не чіпає вже наявну (station, operation_name) норму.
+async function seedStationOperationsIfMissing(rows) {
+  let inserted = 0;
+  for (const r of rows) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO station_operations (station, operation_name, base_norm, target_norm, unit)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (station, operation_name) DO NOTHING`,
+      [r.station, r.operation_name || '', r.base_norm ?? null, r.target_norm ?? null, r.unit || '']
+    );
+    inserted += rowCount;
+  }
+  return inserted;
+}
+
+async function listStationOperations(station) {
+  const { rows } = await pool.query(
+    'SELECT * FROM station_operations WHERE station = $1 ORDER BY operation_name ASC',
+    [station]
+  );
+  return rows.map((r) => ({ ...r, base_norm: r.base_norm === null ? null : Number(r.base_norm), target_norm: r.target_norm === null ? null : Number(r.target_norm) }));
+}
+
+async function upsertStationEmployee({ station, employee_name, personal_norm, personal_norm_unit, schedule_note }) {
+  const { rows } = await pool.query(
+    `INSERT INTO station_employees (station, employee_name, personal_norm, personal_norm_unit, schedule_note, updated_at)
+     VALUES ($1,$2,$3,$4,$5, now())
+     ON CONFLICT (station, employee_name) DO UPDATE SET
+       personal_norm = excluded.personal_norm,
+       personal_norm_unit = excluded.personal_norm_unit,
+       schedule_note = excluded.schedule_note,
+       updated_at = now()
+     RETURNING *`,
+    [station, employee_name, personal_norm ?? null, personal_norm_unit || '', schedule_note || '']
+  );
+  return rows[0];
+}
+
+async function seedStationEmployeesIfMissing(rows) {
+  let inserted = 0;
+  for (const r of rows) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO station_employees (station, employee_name, personal_norm, personal_norm_unit, schedule_note)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (station, employee_name) DO NOTHING`,
+      [r.station, r.employee_name, r.personal_norm ?? null, r.personal_norm_unit || '', r.schedule_note || '']
+    );
+    inserted += rowCount;
+  }
+  return inserted;
+}
+
+async function listStationEmployees(station) {
+  const { rows } = await pool.query(
+    'SELECT * FROM station_employees WHERE station = $1 AND active = true ORDER BY employee_name ASC',
+    [station]
+  );
+  return rows.map((r) => ({ ...r, personal_norm: r.personal_norm === null ? null : Number(r.personal_norm) }));
+}
+
+// Реєстр станцій з операціями (нормами), співробітниками і поточним станом
+// на сьогодні: скільки заплановано, скільки вже фактично виконано, яка
+// задача зараз "виконується" (якщо є).
 async function listStationsWithStatus() {
   await insertStationsIfMissing(await listStations());
 
   const { rows: stations } = await pool.query(
-    `SELECT s.*,
+    `SELECT s.name, s.note, s.active,
             COALESCE(SUM(CASE WHEN t.task_date = CURRENT_DATE THEN t.planned_qty ELSE 0 END), 0) AS planned_today,
             COALESCE(SUM(CASE WHEN t.task_date = CURRENT_DATE AND t.status = 'завершено' THEN COALESCE(t.actual_qty, t.planned_qty) ELSE 0 END), 0) AS completed_today
      FROM stations s
      LEFT JOIN production_tasks t ON t.station = s.name
      WHERE s.active = true
-     GROUP BY s.name, s.base_norm, s.target_norm, s.unit, s.employees, s.active, s.created_at, s.updated_at
+     GROUP BY s.name, s.note, s.active
      ORDER BY s.name ASC`
   );
 
@@ -864,14 +999,20 @@ async function listStationsWithStatus() {
   );
   const activeByStation = new Map(activeTasks.map((t) => [t.station, t]));
 
-  return stations.map((s) => ({
-    ...s,
-    base_norm: s.base_norm === null ? null : Number(s.base_norm),
-    target_norm: s.target_norm === null ? null : Number(s.target_norm),
-    planned_today: Number(s.planned_today),
-    completed_today: Number(s.completed_today),
-    active_task: activeByStation.get(s.name) || null
-  }));
+  const result = [];
+  for (const s of stations) {
+    const operations = await listStationOperations(s.name);
+    const employees = await listStationEmployees(s.name);
+    result.push({
+      ...s,
+      planned_today: Number(s.planned_today),
+      completed_today: Number(s.completed_today),
+      active_task: activeByStation.get(s.name) || null,
+      operations,
+      employees
+    });
+  }
+  return result;
 }
 
 async function createTask({ station, product_code, product_name, planned_qty, unit, task_date, reason, comment }) {
@@ -942,6 +1083,62 @@ async function updateTaskStatus(id, { status, actual_qty, comment }) {
   return rows[0] || null;
 }
 
+// Ніколи не перезаписує пароль уже наявного акаунта — безпечно викликати на
+// кожен старт з тим самим списком, не скидає пароль, який хтось змінив.
+async function createAccountIfMissing({ username, password, role, home_station, display_name }) {
+  if (!ACCOUNT_ROLES.includes(role)) {
+    throw new Error(`Unknown role: ${role}`);
+  }
+  const passwordHash = await bcrypt.hash(password, 10);
+  const { rowCount } = await pool.query(
+    `INSERT INTO accounts (username, password_hash, role, home_station, display_name)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (username) DO NOTHING`,
+    [username, passwordHash, role, home_station || null, display_name || '']
+  );
+  return rowCount;
+}
+
+// Те саме, що createAccountIfMissing, але приймає вже готовий bcrypt-хеш —
+// щоб у сідинг-файлі, який іде в git, ніколи не було відкритого пароля.
+async function createAccountIfMissingWithHash({ username, password_hash, role, home_station, display_name }) {
+  if (!ACCOUNT_ROLES.includes(role)) {
+    throw new Error(`Unknown role: ${role}`);
+  }
+  const { rowCount } = await pool.query(
+    `INSERT INTO accounts (username, password_hash, role, home_station, display_name)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (username) DO NOTHING`,
+    [username, password_hash, role, home_station || null, display_name || '']
+  );
+  return rowCount;
+}
+
+async function findAccountByUsername(username) {
+  const { rows } = await pool.query('SELECT * FROM accounts WHERE username = $1 AND active = true', [username]);
+  return rows[0] || null;
+}
+
+async function verifyAccountPassword(account, password) {
+  return bcrypt.compare(password, account.password_hash);
+}
+
+async function listAccounts() {
+  const { rows } = await pool.query(
+    'SELECT username, role, home_station, display_name, active, created_at FROM accounts ORDER BY role ASC, username ASC'
+  );
+  return rows;
+}
+
+async function updateAccountPassword(username, newPassword) {
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  const { rowCount } = await pool.query(
+    'UPDATE accounts SET password_hash = $2, updated_at = now() WHERE username = $1',
+    [username, passwordHash]
+  );
+  return rowCount;
+}
+
 export default {
   initSchema,
   upsertProduct,
@@ -971,6 +1168,19 @@ export default {
   insertStationsIfMissing,
   updateStation,
   listStationsWithStatus,
+  normalizeStationNames,
+  upsertStationOperation,
+  seedStationOperationsIfMissing,
+  listStationOperations,
+  upsertStationEmployee,
+  seedStationEmployeesIfMissing,
+  listStationEmployees,
+  createAccountIfMissing,
+  createAccountIfMissingWithHash,
+  findAccountByUsername,
+  verifyAccountPassword,
+  listAccounts,
+  updateAccountPassword,
   countMaterials,
   bulkCreateMaterialsWithBaseline,
   getMaterialBalance,
@@ -988,6 +1198,7 @@ export default {
   PRODUCT_SPEC_ROLES,
   MATERIAL_SIGNED_TYPES,
   MATERIAL_ABSOLUTE_TYPES,
+  ACCOUNT_ROLES,
   SIGNED_TYPES,
   ABSOLUTE_TYPES
 };

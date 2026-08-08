@@ -169,7 +169,7 @@
     <h1>📦 Fresh Black ERP — Виробництво</h1>
   </div>
   <nav class="tabs">
-    <button id="tabProducts" onclick="showTab('products')" class="active">Товари</button>
+    <button id="tabProducts" onclick="showTab('products')">Товари</button>
     <button id="tabStock" onclick="showTab('stock')">Склад</button>
     <button id="tabStations" onclick="showTab('stations')">Станції</button>
     <button id="tabMaterials" onclick="showTab('materials')">Розхідники</button>
@@ -819,6 +819,7 @@ function showTab(tab) {
   document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
   document.getElementById('tabOrders').classList.toggle('active', tab === 'orders');
   document.getElementById('tabClients').classList.toggle('active', tab === 'clients');
+  if (tab === 'products') loadProducts();
   if (tab === 'stock') loadStock();
   if (tab === 'stations') initStations();
   if (tab === 'materials') loadMaterials();
@@ -1040,36 +1041,98 @@ async function initStations() {
   await loadTasks();
 }
 
+function escAttr(s) { return String(s || '').replace(/'/g, "\\'"); }
+
 async function loadStationCards() {
   const resp = await fetch('/api/stations-status');
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Помилка завантаження станцій'); return; }
 
+  const isAdmin = window._me && window._me.role === 'адмін';
   const container = document.getElementById('stationCards');
+
   container.innerHTML = data.stations.map((s) => {
-    const pct = s.target_norm ? Math.min(100, Math.round((s.completed_today / s.target_norm) * 100)) : null;
+    const mainOp = s.operations.find((o) => !o.operation_name);
+    const pct = mainOp && mainOp.target_norm ? Math.min(100, Math.round((s.completed_today / mainOp.target_norm) * 100)) : null;
+
+    const opsHtml = s.operations.map((o) => `
+      <div class="row">
+        <span>${o.operation_name || 'Норма'}</span>
+        <span>${fmt(o.base_norm ?? 0)}${o.target_norm ? ' / ' + fmt(o.target_norm) : ''} ${o.unit || ''}</span>
+      </div>
+    `).join('') || '<div class="row"><span>Норма ще не задана</span></div>';
+
+    const empHtml = s.employees.map((e) => `
+      <div class="row">
+        <span>${e.employee_name}${e.schedule_note ? ' (' + e.schedule_note + ')' : ''}</span>
+        <span>${e.personal_norm !== null ? fmt(e.personal_norm) + ' ' + (e.personal_norm_unit || '') : ''}</span>
+      </div>
+    `).join('') || '<div class="row"><span style="color: var(--muted);">Співробітники не вказані</span></div>';
+
+    const adminExtras = isAdmin ? `
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer; font-size:12px; color: var(--muted);">+ Норма / співробітник</summary>
+        <div style="display:flex; gap:4px; margin-top:6px;">
+          <input type="text" id="opName_${s.name}" placeholder="назва операції (порожньо — основна)" style="flex:1; font-size:11px;">
+          <input type="number" id="opBase_${s.name}" placeholder="норма" style="width:70px; font-size:11px;">
+          <input type="text" id="opUnit_${s.name}" placeholder="од." style="width:50px; font-size:11px;">
+          <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveStationOperation('${escAttr(s.name)}')">✓</button>
+        </div>
+        <div style="display:flex; gap:4px; margin-top:6px;">
+          <input type="text" id="empName_${s.name}" placeholder="ім'я співробітника" style="flex:1; font-size:11px;">
+          <input type="text" id="empSchedule_${s.name}" placeholder="графік" style="width:70px; font-size:11px;">
+          <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveStationEmployee('${escAttr(s.name)}')">✓</button>
+        </div>
+      </details>
+    ` : '';
+
     return `
     <div class="stationCard">
       <h4>${s.name}</h4>
-      <div class="row">
-        <span>Базова норма / ціль</span>
-        <span>
-          <input type="number" min="0" step="any" value="${s.base_norm ?? ''}" placeholder="—" onchange="saveStationField('${s.name.replace(/'/g, "\\'")}','base_norm',this.value)">
-          /
-          <input type="number" min="0" step="any" value="${s.target_norm ?? ''}" placeholder="—" onchange="saveStationField('${s.name.replace(/'/g, "\\'")}','target_norm',this.value)">
-          <input type="text" value="${s.unit || ''}" placeholder="од." style="width:50px;" onchange="saveStationField('${s.name.replace(/'/g, "\\'")}','unit',this.value)">
-        </span>
-      </div>
+      ${opsHtml}
       <div class="row"><span>Сьогодні: план / факт</span><span>${fmt(s.planned_today)} / ${fmt(s.completed_today)}</span></div>
       ${pct !== null ? `<div class="progressBar"><div style="width:${pct}%;"></div></div>` : ''}
       <div class="employees">
         <label style="font-size:11px; color: var(--muted);">Співробітники</label>
-        <textarea placeholder="прізвища через кому чи з нового рядка" onchange="saveStationField('${s.name.replace(/'/g, "\\'")}','employees',this.value)">${s.employees || ''}</textarea>
+        ${empHtml}
       </div>
+      ${s.note ? `<div style="font-size:11px; color: var(--muted); margin-top:6px;">${s.note}</div>` : ''}
       ${s.active_task ? `<div class="activeTask">▶ Зараз: ${s.active_task.product_name || s.active_task.product_code || '—'} (${fmt(s.active_task.planned_qty)} ${s.active_task.unit || ''})</div>` : ''}
+      ${adminExtras}
     </div>
   `;
   }).join('');
+}
+
+async function saveStationOperation(station) {
+  const operation_name = document.getElementById('opName_' + station).value.trim();
+  const base_norm = document.getElementById('opBase_' + station).value;
+  const unit = document.getElementById('opUnit_' + station).value.trim();
+  if (!base_norm) { showToast('Вкажи норму'); return; }
+  const resp = await fetch('/api/stations/' + encodeURIComponent(station) + '/operations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ operation_name, base_norm, unit })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Норму збережено');
+  loadStationCards();
+}
+
+async function saveStationEmployee(station) {
+  const employee_name = document.getElementById('empName_' + station).value.trim();
+  const schedule_note = document.getElementById('empSchedule_' + station).value.trim();
+  if (!employee_name) { showToast('Вкажи ім’я'); return; }
+  const resp = await fetch('/api/stations/' + encodeURIComponent(station) + '/employees', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ employee_name, schedule_note })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Співробітника збережено');
+  loadStationCards();
 }
 
 async function saveStationField(name, field, value) {
@@ -1203,10 +1266,19 @@ document.getElementById('btnSaveTask').onclick = async () => {
 
 let currentTaskId = null;
 
+const STATION_ROLE_ALLOWED_STATUSES = ['виконується', 'пауза', 'завершено'];
+
 function openTaskStatus(id, status) {
   currentTaskId = id;
   document.getElementById('taskStatusTitle').textContent = 'Задача #' + id;
-  document.getElementById('taskNewStatus').value = status;
+
+  const select = document.getElementById('taskNewStatus');
+  const isStationRole = window._me && window._me.role === 'станція';
+  select.querySelectorAll('option').forEach((opt) => {
+    opt.style.display = (!isStationRole || STATION_ROLE_ALLOWED_STATUSES.includes(opt.value)) ? '' : 'none';
+  });
+  select.value = isStationRole && !STATION_ROLE_ALLOWED_STATUSES.includes(status) ? 'виконується' : status;
+
   document.getElementById('taskActualQty').value = '';
   document.getElementById('taskStatusComment').value = '';
   document.getElementById('taskStatusOverlay').classList.add('open');
@@ -1417,7 +1489,34 @@ document.getElementById('btnCloseSpec').onclick = () => {
   document.getElementById('specOverlay').classList.remove('open');
 };
 
-loadProducts();
+const ADMIN_ONLY_TABS = ['tabProducts', 'tabStock', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
+
+async function initApp() {
+  const resp = await fetch('/api/me');
+  const data = await resp.json();
+  if (!data.ok) { showToast('Не вдалося авторизуватись'); return; }
+  window._me = data.account;
+
+  document.title = 'Fresh Black ERP — ' + (window._me.display_name || window._me.username);
+
+  if (window._me.role !== 'адмін') {
+    ADMIN_ONLY_TABS.forEach((id) => { document.getElementById(id).style.display = 'none'; });
+  }
+  if (window._me.role === 'станція') {
+    document.getElementById('btnAddTask').style.display = 'none';
+  }
+  if (window._me.role === 'станція' && window._me.home_station) {
+    currentStationFilter = window._me.home_station;
+  }
+
+  if (window._me.role === 'адмін') {
+    showTab('products');
+  } else {
+    showTab('stations');
+  }
+}
+
+initApp();
 </script>
 
 </body>
