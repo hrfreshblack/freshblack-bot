@@ -152,6 +152,17 @@ async function initSchema() {
       UNIQUE (product_code, role)
     );
 
+    CREATE TABLE IF NOT EXISTS stations (
+      name TEXT PRIMARY KEY,
+      base_norm NUMERIC,
+      target_norm NUMERIC,
+      unit TEXT NOT NULL DEFAULT '',
+      employees TEXT NOT NULL DEFAULT '',
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS production_tasks (
       id SERIAL PRIMARY KEY,
       station TEXT NOT NULL,
@@ -781,18 +792,86 @@ async function deleteProductSpec(id) {
 
 const TASK_STATUSES = ['заплановано', 'виконується', 'пауза', 'завершено', 'заблоковано', 'скасовано'];
 
-// Станції беруться з двох джерел: уже призначені товарам (каталог) і вже
-// використані в задачах — щоб нова довільна назва станції, введена вручну
-// при створенні задачі, теж з'являлась у списку наступного разу.
+// Станції беруться з трьох джерел: реєстр (stations), уже призначені
+// товарам/розхідникам і вже використані в задачах — щоб нова довільна назва
+// станції, введена вручну, теж з'являлась у списку наступного разу.
 async function listStations() {
   const { rows } = await pool.query(
     `SELECT DISTINCT station FROM (
+       SELECT name AS station FROM stations WHERE active = true
+       UNION
        SELECT station FROM products WHERE station <> ''
+       UNION
+       SELECT station FROM materials WHERE station <> ''
        UNION
        SELECT station FROM production_tasks WHERE station <> ''
      ) s ORDER BY station ASC`
   );
   return rows.map((r) => r.station);
+}
+
+// Безпечно на кожен старт: додає в реєстр лише нові назви станцій, ніколи не
+// чіпає вже наявний запис (норми/співробітників, які вручну заповнили).
+async function insertStationsIfMissing(names) {
+  let inserted = 0;
+  for (const name of names) {
+    if (!name) continue;
+    const { rowCount } = await pool.query(
+      `INSERT INTO stations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`,
+      [name]
+    );
+    inserted += rowCount;
+  }
+  return inserted;
+}
+
+async function updateStation(name, { base_norm, target_norm, unit, employees } = {}) {
+  const { rows } = await pool.query(
+    `UPDATE stations SET
+       base_norm = COALESCE($2, base_norm),
+       target_norm = COALESCE($3, target_norm),
+       unit = COALESCE($4, unit),
+       employees = COALESCE($5, employees),
+       updated_at = now()
+     WHERE name = $1
+     RETURNING *`,
+    [name, base_norm ?? null, target_norm ?? null, unit ?? null, employees ?? null]
+  );
+  return rows[0] || null;
+}
+
+// Реєстр станцій з нормами, співробітниками і поточним станом на сьогодні:
+// скільки заплановано, скільки вже фактично виконано, яка задача зараз
+// "виконується" (якщо є).
+async function listStationsWithStatus() {
+  await insertStationsIfMissing(await listStations());
+
+  const { rows: stations } = await pool.query(
+    `SELECT s.*,
+            COALESCE(SUM(CASE WHEN t.task_date = CURRENT_DATE THEN t.planned_qty ELSE 0 END), 0) AS planned_today,
+            COALESCE(SUM(CASE WHEN t.task_date = CURRENT_DATE AND t.status = 'завершено' THEN COALESCE(t.actual_qty, t.planned_qty) ELSE 0 END), 0) AS completed_today
+     FROM stations s
+     LEFT JOIN production_tasks t ON t.station = s.name
+     WHERE s.active = true
+     GROUP BY s.name, s.base_norm, s.target_norm, s.unit, s.employees, s.active, s.created_at, s.updated_at
+     ORDER BY s.name ASC`
+  );
+
+  const { rows: activeTasks } = await pool.query(
+    `SELECT DISTINCT ON (station) * FROM production_tasks
+     WHERE status = 'виконується'
+     ORDER BY station, updated_at DESC`
+  );
+  const activeByStation = new Map(activeTasks.map((t) => [t.station, t]));
+
+  return stations.map((s) => ({
+    ...s,
+    base_norm: s.base_norm === null ? null : Number(s.base_norm),
+    target_norm: s.target_norm === null ? null : Number(s.target_norm),
+    planned_today: Number(s.planned_today),
+    completed_today: Number(s.completed_today),
+    active_task: activeByStation.get(s.name) || null
+  }));
 }
 
 async function createTask({ station, product_code, product_name, planned_qty, unit, task_date, reason, comment }) {
@@ -889,6 +968,9 @@ export default {
   createTask,
   listTasks,
   updateTaskStatus,
+  insertStationsIfMissing,
+  updateStation,
+  listStationsWithStatus,
   countMaterials,
   bulkCreateMaterialsWithBaseline,
   getMaterialBalance,

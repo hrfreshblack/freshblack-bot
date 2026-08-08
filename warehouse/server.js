@@ -129,6 +129,31 @@ app.get('/api/stations', async (req, res) => {
   }
 });
 
+app.get('/api/stations-status', async (req, res) => {
+  try {
+    const stations = await db.listStationsWithStatus();
+    res.json({ ok: true, stations });
+  } catch (error) {
+    console.error('GET /api/stations-status ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати стан станцій' });
+  }
+});
+
+app.post('/api/stations/:name', async (req, res) => {
+  try {
+    const { base_norm, target_norm, unit, employees } = req.body || {};
+    const station = await db.updateStation(req.params.name, { base_norm, target_norm, unit, employees });
+    if (!station) {
+      res.status(404).json({ ok: false, error: 'Станцію не знайдено' });
+      return;
+    }
+    res.json({ ok: true, station });
+  } catch (error) {
+    console.error('POST /api/stations/:name ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити станцію' });
+  }
+});
+
 app.post('/api/tasks', async (req, res) => {
   try {
     const { station, product_code, product_name, planned_qty, unit, task_date, reason, comment } = req.body || {};

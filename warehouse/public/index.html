@@ -96,6 +96,15 @@
   .recipeCard .recipeComponents { display: flex; flex-wrap: wrap; gap: 6px; }
   .recipeCard .comp { background: rgba(79,140,255,0.12); color: var(--accent); border-radius: 6px; padding: 3px 9px; font-size: 12px; font-variant-numeric: tabular-nums; }
 
+  .stationCard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .stationCard h4 { margin: 0 0 8px; font-size: 14px; }
+  .stationCard .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
+  .stationCard .row input { width: 70px; padding: 4px 6px; font-size: 12px; }
+  .stationCard .employees textarea { width: 100%; font-size: 12px; min-height: 44px; resize: vertical; }
+  .stationCard .activeTask { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; }
+  .progressBar { height: 6px; border-radius: 999px; background: #1b1f28; overflow: hidden; margin: 6px 0; }
+  .progressBar > div { height: 100%; background: var(--accent); }
+
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .chips button {
     padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
@@ -219,6 +228,7 @@
   </div>
 
   <div id="viewStations" style="display:none;">
+    <div id="stationCards" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin: 14px 0;"></div>
     <div class="viewToolbar">
       <div class="chips" id="stationChips"></div>
     </div>
@@ -1025,8 +1035,51 @@ async function initStations() {
     document.getElementById('taskDateFrom').value = isoDate(today);
     document.getElementById('taskDateTo').value = isoDate(weekAhead);
   }
+  await loadStationCards();
   await loadStationChips();
   await loadTasks();
+}
+
+async function loadStationCards() {
+  const resp = await fetch('/api/stations-status');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження станцій'); return; }
+
+  const container = document.getElementById('stationCards');
+  container.innerHTML = data.stations.map((s) => {
+    const pct = s.target_norm ? Math.min(100, Math.round((s.completed_today / s.target_norm) * 100)) : null;
+    return `
+    <div class="stationCard">
+      <h4>${s.name}</h4>
+      <div class="row">
+        <span>Базова норма / ціль</span>
+        <span>
+          <input type="number" min="0" step="any" value="${s.base_norm ?? ''}" placeholder="—" onchange="saveStationField('${s.name.replace(/'/g, "\\'")}','base_norm',this.value)">
+          /
+          <input type="number" min="0" step="any" value="${s.target_norm ?? ''}" placeholder="—" onchange="saveStationField('${s.name.replace(/'/g, "\\'")}','target_norm',this.value)">
+          <input type="text" value="${s.unit || ''}" placeholder="од." style="width:50px;" onchange="saveStationField('${s.name.replace(/'/g, "\\'")}','unit',this.value)">
+        </span>
+      </div>
+      <div class="row"><span>Сьогодні: план / факт</span><span>${fmt(s.planned_today)} / ${fmt(s.completed_today)}</span></div>
+      ${pct !== null ? `<div class="progressBar"><div style="width:${pct}%;"></div></div>` : ''}
+      <div class="employees">
+        <label style="font-size:11px; color: var(--muted);">Співробітники</label>
+        <textarea placeholder="прізвища через кому чи з нового рядка" onchange="saveStationField('${s.name.replace(/'/g, "\\'")}','employees',this.value)">${s.employees || ''}</textarea>
+      </div>
+      ${s.active_task ? `<div class="activeTask">▶ Зараз: ${s.active_task.product_name || s.active_task.product_code || '—'} (${fmt(s.active_task.planned_qty)} ${s.active_task.unit || ''})</div>` : ''}
+    </div>
+  `;
+  }).join('');
+}
+
+async function saveStationField(name, field, value) {
+  const resp = await fetch('/api/stations/' + encodeURIComponent(name), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ [field]: value })
+  });
+  const data = await resp.json();
+  if (!data.ok) showToast(data.error || 'Не вдалося зберегти');
 }
 
 async function loadStationChips() {
@@ -1143,6 +1196,7 @@ document.getElementById('btnSaveTask').onclick = async () => {
 
   document.getElementById('taskOverlay').classList.remove('open');
   showToast('Задачу створено');
+  loadStationCards();
   loadStationChips();
   loadTasks();
 };
@@ -1177,6 +1231,7 @@ document.getElementById('btnSaveTaskStatus').onclick = async () => {
 
   document.getElementById('taskStatusOverlay').classList.remove('open');
   showToast('Статус оновлено');
+  loadStationCards();
   loadTasks();
 };
 
