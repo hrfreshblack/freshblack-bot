@@ -1,10 +1,12 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import multer from 'multer';
 import db from './db.js';
 import seedCatalog from './seed-catalog.js';
 import seedCatalogAdditions from './seed-catalog-additions.js';
 import seedBlendRecipes from './seed-blend-recipes.js';
+import { parseOrderFile } from './parse-order-file.js';
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is not set.');
@@ -18,6 +20,8 @@ const PORT = process.env.PORT || 3000;
 
 const AUTH_USER = process.env.WAREHOUSE_USER || '';
 const AUTH_PASSWORD = process.env.WAREHOUSE_PASSWORD || '';
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 app.use(express.json());
 
@@ -94,6 +98,62 @@ app.get('/api/blend-recipes', async (req, res) => {
   } catch (error) {
     console.error('GET /api/blend-recipes ERROR:', error?.message || error);
     res.status(500).json({ ok: false, error: 'Не вдалося отримати рецептури' });
+  }
+});
+
+app.post('/api/orders/import', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл не додано' });
+      return;
+    }
+    const lines = await parseOrderFile(req.file.buffer);
+    const result = await db.importOrderLines(lines);
+    res.json({ ok: true, ...result, totalRows: lines.length });
+  } catch (error) {
+    console.error('POST /api/orders/import ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося розпізнати файл' });
+  }
+});
+
+app.get('/api/orders', async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const status = String(req.query.status || '').trim();
+    const orders = await db.listOrders({ search, status });
+    res.json({ ok: true, orders });
+  } catch (error) {
+    console.error('GET /api/orders ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати список замовлень' });
+  }
+});
+
+app.get('/api/orders/:orderNumber', async (req, res) => {
+  try {
+    const lines = await db.getOrderLines(req.params.orderNumber);
+    res.json({ ok: true, lines });
+  } catch (error) {
+    console.error('GET /api/orders/:orderNumber ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати замовлення' });
+  }
+});
+
+app.post('/api/orders/:orderNumber/status', async (req, res) => {
+  try {
+    const { status, note } = req.body || {};
+    if (!db.ORDER_STATUSES.includes(status)) {
+      res.status(400).json({ ok: false, error: 'Невідомий статус' });
+      return;
+    }
+    const rowCount = await db.updateOrderStatus(req.params.orderNumber, status, note);
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Замовлення не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/orders/:orderNumber/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
   }
 });
 

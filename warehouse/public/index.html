@@ -116,8 +116,19 @@
   <div class="toolbar">
     <button class="secondary tabBtn active" id="tabProducts" onclick="showTab('products')">Товари</button>
     <button class="secondary tabBtn" id="tabRecipes" onclick="showTab('recipes')">Рецептури блендів</button>
+    <button class="secondary tabBtn" id="tabOrders" onclick="showTab('orders')">Замовлення</button>
     <input type="search" id="search" placeholder="Пошук за кодом чи назвою…">
     <button class="secondary" id="btnAddProduct">+ Товар</button>
+    <input type="file" id="orderFileInput" accept=".xlsx,.xls" style="display:none;">
+    <button class="secondary" id="btnImportOrders" style="display:none;">⬆ Завантажити файл замовлень</button>
+    <input type="search" id="orderSearch" placeholder="Пошук за номером/клієнтом…" style="display:none;">
+    <select id="orderStatusFilter" style="display:none;">
+      <option value="">Всі статуси</option>
+      <option value="нове">нове</option>
+      <option value="в роботі">в роботі</option>
+      <option value="відвантажено">відвантажено</option>
+      <option value="скасовано">скасовано</option>
+    </select>
   </div>
 </header>
 
@@ -146,6 +157,27 @@
     <p style="color: var(--muted); margin: 0 0 16px;">Технологічні карти блендів (напівфабрикат — обсмажена кава), партія 20 кг. Компоненти поки без звʼязку з окремим каталогом зеленої кави.</p>
     <div id="recipesContainer"></div>
     <div class="empty" id="recipesEmpty" style="display:none;">Рецептур ще немає.</div>
+  </div>
+
+  <div id="viewOrders" style="display:none;">
+    <table id="ordersTable">
+      <thead>
+        <tr>
+          <th>№ замовлення</th>
+          <th>Дата замов.</th>
+          <th>Дата відв.</th>
+          <th>Клієнт</th>
+          <th>Філіал</th>
+          <th>Доставка</th>
+          <th>Позицій</th>
+          <th>Кількість</th>
+          <th>Статус</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="ordersBody"></tbody>
+    </table>
+    <div class="empty" id="ordersEmpty" style="display:none;">Замовлень ще немає — завантаж файл кнопкою вгорі.</div>
   </div>
 </main>
 
@@ -219,6 +251,31 @@
     <div class="modal-actions">
       <button class="secondary" id="btnCancelProduct">Скасувати</button>
       <button id="btnSaveProduct">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: деталі замовлення / зміна статусу -->
+<div class="overlay" id="orderOverlay">
+  <div class="modal" style="max-width: 560px;">
+    <h2 id="orderModalTitle">Замовлення</h2>
+    <div id="orderLinesContainer" style="margin-bottom: 16px; max-height: 300px; overflow-y: auto;"></div>
+    <div class="field">
+      <label>Новий статус</label>
+      <select id="orderNewStatus">
+        <option value="нове">нове</option>
+        <option value="в роботі">в роботі</option>
+        <option value="відвантажено">відвантажено</option>
+        <option value="скасовано">скасовано</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Коментар (напр. причина скасування)</label>
+      <input type="text" id="orderStatusNote" placeholder="необов'язково">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelOrderStatus">Закрити</button>
+      <button id="btnSaveOrderStatus">Змінити статус</button>
     </div>
   </div>
 </div>
@@ -363,11 +420,17 @@ let recipesLoaded = false;
 function showTab(tab) {
   document.getElementById('viewProducts').style.display = tab === 'products' ? '' : 'none';
   document.getElementById('viewRecipes').style.display = tab === 'recipes' ? '' : 'none';
+  document.getElementById('viewOrders').style.display = tab === 'orders' ? '' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', tab === 'products');
   document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
+  document.getElementById('tabOrders').classList.toggle('active', tab === 'orders');
   document.getElementById('search').style.display = tab === 'products' ? '' : 'none';
   document.getElementById('btnAddProduct').style.display = tab === 'products' ? '' : 'none';
+  document.getElementById('btnImportOrders').style.display = tab === 'orders' ? '' : 'none';
+  document.getElementById('orderSearch').style.display = tab === 'orders' ? '' : 'none';
+  document.getElementById('orderStatusFilter').style.display = tab === 'orders' ? '' : 'none';
   if (tab === 'recipes' && !recipesLoaded) loadRecipes();
+  if (tab === 'orders') loadOrders();
 }
 
 async function loadRecipes() {
@@ -407,6 +470,114 @@ async function loadRecipes() {
     </div>
   `).join('');
 }
+
+function orderStatusTag(status) {
+  if (status === 'відвантажено') return '<span class="tag ok">відвантажено</span>';
+  if (status === 'скасовано') return '<span class="tag bad">скасовано</span>';
+  if (status === 'в роботі') return '<span class="tag warn">в роботі</span>';
+  if (status === 'змішаний') return '<span class="tag warn">змішаний</span>';
+  return '<span class="tag neutral">нове</span>';
+}
+
+async function loadOrders() {
+  const search = document.getElementById('orderSearch').value.trim();
+  const status = document.getElementById('orderStatusFilter').value;
+  const resp = await fetch('/api/orders?search=' + encodeURIComponent(search) + '&status=' + encodeURIComponent(status));
+  const data = await resp.json();
+  const body = document.getElementById('ordersBody');
+  const empty = document.getElementById('ordersEmpty');
+
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  if (!data.orders.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  body.innerHTML = data.orders.map((o) => `
+    <tr>
+      <td>${o.order_number}</td>
+      <td>${o.order_date ? new Date(o.order_date).toLocaleDateString('uk-UA') : '—'}</td>
+      <td>${o.ship_date ? new Date(o.ship_date).toLocaleDateString('uk-UA') : '—'}</td>
+      <td>${o.customer_name || '—'}</td>
+      <td>${o.branch_name || '—'}</td>
+      <td>${o.delivery_method || '—'}</td>
+      <td>${o.line_count}</td>
+      <td class="balance">${fmt(o.total_qty)}</td>
+      <td>${orderStatusTag(o.status)}</td>
+      <td class="row-actions"><button class="secondary" onclick="openOrder('${o.order_number}')">Деталі</button></td>
+    </tr>
+  `).join('');
+}
+
+let currentOrderNumber = null;
+
+async function openOrder(orderNumber) {
+  currentOrderNumber = orderNumber;
+  const resp = await fetch('/api/orders/' + encodeURIComponent(orderNumber));
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити замовлення'); return; }
+
+  document.getElementById('orderModalTitle').textContent = 'Замовлення № ' + orderNumber;
+  document.getElementById('orderLinesContainer').innerHTML = data.lines.map((l) => `
+    <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
+      <div>${l.product_name_raw || l.product_code} <span style="color: var(--muted);">(${l.product_code})</span></div>
+      <div style="color: var(--muted); font-size: 13px;">${fmt(l.qty)} шт · ${l.roast_type || '—'} · ${l.delivery_method || '—'} · ${orderStatusTag(l.status)}</div>
+    </div>
+  `).join('');
+  document.getElementById('orderNewStatus').value = data.lines[0]?.status && data.lines[0].status !== 'змішаний' ? data.lines[0].status : 'нове';
+  document.getElementById('orderStatusNote').value = '';
+  document.getElementById('orderOverlay').classList.add('open');
+}
+
+document.getElementById('btnCancelOrderStatus').onclick = () => {
+  document.getElementById('orderOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveOrderStatus').onclick = async () => {
+  const status = document.getElementById('orderNewStatus').value;
+  const note = document.getElementById('orderStatusNote').value;
+  const resp = await fetch('/api/orders/' + encodeURIComponent(currentOrderNumber) + '/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status, note })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  document.getElementById('orderOverlay').classList.remove('open');
+  showToast('Статус оновлено');
+  loadOrders();
+};
+
+document.getElementById('btnImportOrders').onclick = () => {
+  document.getElementById('orderFileInput').click();
+};
+
+document.getElementById('orderFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  showToast('Завантажую файл…');
+  const resp = await fetch('/api/orders/import', { method: 'POST', body: formData });
+  const data = await resp.json();
+  e.target.value = '';
+
+  if (!data.ok) { showToast(data.error || 'Не вдалося імпортувати файл'); return; }
+
+  showToast(`Додано нових: ${data.inserted}, вже було: ${data.skippedDuplicate}, пропущено (без номера/коду): ${data.skippedInvalid}`);
+  loadOrders();
+});
+
+document.getElementById('orderSearch').addEventListener('input', () => {
+  clearTimeout(window._orderSearchTimer);
+  window._orderSearchTimer = setTimeout(loadOrders, 250);
+});
+document.getElementById('orderStatusFilter').addEventListener('change', loadOrders);
 
 loadProducts();
 </script>

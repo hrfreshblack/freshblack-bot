@@ -67,6 +67,31 @@ async function initSchema() {
       qty NUMERIC NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_blend_components_recipe ON blend_components(recipe_id);
+
+    CREATE TABLE IF NOT EXISTS order_lines (
+      id SERIAL PRIMARY KEY,
+      order_number TEXT NOT NULL,
+      order_date DATE,
+      ship_date DATE,
+      customer_code TEXT NOT NULL DEFAULT '',
+      customer_name TEXT NOT NULL DEFAULT '',
+      branch_name TEXT NOT NULL DEFAULT '',
+      product_code TEXT NOT NULL DEFAULT '',
+      product_name_raw TEXT NOT NULL DEFAULT '',
+      roast_type TEXT NOT NULL DEFAULT '',
+      qty NUMERIC NOT NULL DEFAULT 0,
+      sap_stock_hint NUMERIC,
+      grind_flag TEXT NOT NULL DEFAULT '',
+      grind_type TEXT NOT NULL DEFAULT '',
+      delivery_method TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'нове',
+      status_note TEXT NOT NULL DEFAULT '',
+      status_updated_at TIMESTAMPTZ,
+      imported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (order_number, product_code)
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_lines_order_number ON order_lines(order_number);
+    CREATE INDEX IF NOT EXISTS idx_order_lines_status ON order_lines(status);
   `);
 }
 
@@ -278,6 +303,119 @@ async function listBlendRecipes() {
   return Array.from(byId.values());
 }
 
+const ORDER_STATUSES = ['нове', 'в роботі', 'відвантажено', 'скасовано'];
+
+// Дедуп по (order_number, product_code) — те саме замовлення, яке з'явилось
+// знову в наступному вивантаженні за день (9:00/12:00/15:00), просто
+// пропускається. Рядки без номера замовлення чи коду товару не імпортуються.
+// Товар, якого ще немає в каталозі, додається автоматично (insertProductsIfMissing).
+async function importOrderLines(lines) {
+  let inserted = 0;
+  let skippedDuplicate = 0;
+  let skippedInvalid = 0;
+
+  for (const line of lines) {
+    if (!line.order_number || !line.product_code) {
+      skippedInvalid += 1;
+      continue;
+    }
+
+    await insertProductsIfMissing([{
+      code: line.product_code,
+      name: line.product_name_raw || '',
+      is_stock_item: false,
+      min_stock: 0
+    }]);
+
+    const { rowCount } = await pool.query(
+      `INSERT INTO order_lines (
+         order_number, order_date, ship_date, customer_code, customer_name, branch_name,
+         product_code, product_name_raw, roast_type, qty, sap_stock_hint,
+         grind_flag, grind_type, delivery_method
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (order_number, product_code) DO NOTHING`,
+      [
+        line.order_number,
+        line.order_date || null,
+        line.ship_date || null,
+        line.customer_code || '',
+        line.customer_name || '',
+        line.branch_name || '',
+        line.product_code,
+        line.product_name_raw || '',
+        line.roast_type || '',
+        line.qty || 0,
+        line.sap_stock_hint === undefined || line.sap_stock_hint === null || line.sap_stock_hint === '' ? null : line.sap_stock_hint,
+        line.grind_flag || '',
+        line.grind_type || '',
+        line.delivery_method || ''
+      ]
+    );
+
+    if (rowCount > 0) inserted += 1;
+    else skippedDuplicate += 1;
+  }
+
+  return { inserted, skippedDuplicate, skippedInvalid };
+}
+
+// Список замовлень, згрупований по номеру документа. Якщо в межах одного
+// замовлення позиції мають різний статус (наприклад частину вже відвантажили
+// окремим рухом) — показуємо "змішаний", щоб це впадало в очі.
+async function listOrders({ search = '', status = '' } = {}) {
+  const conditions = [];
+  const params = [];
+
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    conditions.push(`(lower(order_number) LIKE $${params.length} OR lower(customer_name) LIKE $${params.length} OR lower(branch_name) LIKE $${params.length})`);
+  }
+  if (status) {
+    params.push(status);
+    conditions.push(`status = $${params.length}`);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const { rows } = await pool.query(
+    `SELECT order_number,
+            MIN(order_date) AS order_date,
+            MIN(ship_date) AS ship_date,
+            MAX(customer_name) AS customer_name,
+            MAX(branch_name) AS branch_name,
+            MAX(delivery_method) AS delivery_method,
+            COUNT(*)::int AS line_count,
+            SUM(qty) AS total_qty,
+            CASE WHEN COUNT(DISTINCT status) = 1 THEN MIN(status) ELSE 'змішаний' END AS status,
+            MAX(imported_at) AS imported_at
+     FROM order_lines
+     ${where}
+     GROUP BY order_number
+     ORDER BY MAX(imported_at) DESC`,
+    params
+  );
+  return rows.map((r) => ({ ...r, total_qty: Number(r.total_qty) }));
+}
+
+async function getOrderLines(orderNumber) {
+  const { rows } = await pool.query(
+    'SELECT * FROM order_lines WHERE order_number = $1 ORDER BY id ASC',
+    [orderNumber]
+  );
+  return rows;
+}
+
+async function updateOrderStatus(orderNumber, status, note) {
+  if (!ORDER_STATUSES.includes(status)) {
+    throw new Error(`Unknown status: ${status}`);
+  }
+  const { rowCount } = await pool.query(
+    `UPDATE order_lines SET status = $1, status_note = $2, status_updated_at = now() WHERE order_number = $3`,
+    [status, note || '', orderNumber]
+  );
+  return rowCount;
+}
+
 export default {
   initSchema,
   upsertProduct,
@@ -291,6 +429,11 @@ export default {
   addMovement,
   insertBlendRecipesIfMissing,
   listBlendRecipes,
+  importOrderLines,
+  listOrders,
+  getOrderLines,
+  updateOrderStatus,
+  ORDER_STATUSES,
   SIGNED_TYPES,
   ABSOLUTE_TYPES
 };
