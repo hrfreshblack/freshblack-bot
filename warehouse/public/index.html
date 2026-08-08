@@ -140,6 +140,7 @@
     background: var(--panel); border: 1px solid var(--border);
     padding: 10px 18px; border-radius: 8px; font-size: 13px;
     display: none;
+    max-width: min(560px, calc(100vw - 32px));
     z-index: 20;
   }
 </style>
@@ -154,6 +155,7 @@
     <button id="tabProducts" onclick="showTab('products')" class="active">Товари</button>
     <button id="tabRecipes" onclick="showTab('recipes')">Рецептури блендів</button>
     <button id="tabOrders" onclick="showTab('orders')">Замовлення</button>
+    <button id="tabClients" onclick="showTab('clients')">Клієнти</button>
   </nav>
 </header>
 
@@ -224,6 +226,26 @@
       <tbody id="ordersBody"></tbody>
     </table>
     <div class="empty" id="ordersEmpty" style="display:none;">Замовлень ще немає — завантаж файл через меню "⋯" вгорі.</div>
+  </div>
+
+  <div id="viewClients" style="display:none;">
+    <div class="viewToolbar">
+      <input type="search" id="clientSearch" placeholder="Пошук за кодом/назвою/групою…">
+    </div>
+    <p style="color: var(--muted); margin: 0 0 14px;">Клієнти додаються автоматично з імпортованих замовлень. "Група партнера" — щоб об'єднати кілька ФОП/ТОВ одного фактичного партнера (наприклад, Капран).</p>
+    <table id="clientsTable">
+      <thead>
+        <tr>
+          <th>Код</th>
+          <th>Назва</th>
+          <th>Група партнера</th>
+          <th>Тип</th>
+          <th>Менеджер</th>
+        </tr>
+      </thead>
+      <tbody id="clientsBody"></tbody>
+    </table>
+    <div class="empty" id="clientsEmpty" style="display:none;">Клієнтів ще немає — з'являться після імпорту замовлень.</div>
   </div>
 </main>
 
@@ -335,11 +357,12 @@ function fmt(n) {
   return Number(n).toLocaleString('uk-UA', { maximumFractionDigits: 2 });
 }
 
-function showToast(text) {
+function showToast(text, duration) {
   const el = document.getElementById('toast');
   el.textContent = text;
   el.style.display = 'block';
-  setTimeout(() => { el.style.display = 'none'; }, 3000);
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, duration || 3000);
 }
 
 function statusTag(row) {
@@ -467,11 +490,14 @@ function showTab(tab) {
   document.getElementById('viewProducts').style.display = tab === 'products' ? '' : 'none';
   document.getElementById('viewRecipes').style.display = tab === 'recipes' ? '' : 'none';
   document.getElementById('viewOrders').style.display = tab === 'orders' ? '' : 'none';
+  document.getElementById('viewClients').style.display = tab === 'clients' ? '' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', tab === 'products');
   document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
   document.getElementById('tabOrders').classList.toggle('active', tab === 'orders');
+  document.getElementById('tabClients').classList.toggle('active', tab === 'clients');
   if (tab === 'recipes' && !recipesLoaded) loadRecipes();
   if (tab === 'orders') loadOrders();
+  if (tab === 'clients') loadClients();
 }
 
 async function loadRecipes() {
@@ -618,7 +644,7 @@ document.getElementById('orderFileInput').addEventListener('change', async (e) =
 
   if (!data.ok) { showToast(data.error || 'Не вдалося імпортувати файл'); return; }
 
-  showToast(`Додано нових: ${data.inserted}, вже було: ${data.skippedDuplicate}, пропущено (без номера/коду): ${data.skippedInvalid}`);
+  showToast(`Рядків у файлі: ${data.totalRows}. Додано нових: ${data.inserted}. Вже було: ${data.skippedDuplicate}. Пропущено (без номера/коду): ${data.skippedInvalid}. Без дати відвантаження: ${data.missingDate}. Нових товарів: ${data.newProducts}. Нових клієнтів: ${data.newClients}.`, 8000);
   loadOrders();
 });
 
@@ -627,6 +653,48 @@ document.getElementById('orderSearch').addEventListener('input', () => {
   window._orderSearchTimer = setTimeout(loadOrders, 250);
 });
 document.getElementById('orderStatusFilter').addEventListener('change', loadOrders);
+
+async function saveClientField(customerCode, field, value) {
+  const resp = await fetch('/api/clients/' + encodeURIComponent(customerCode), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ [field]: value })
+  });
+  const data = await resp.json();
+  if (!data.ok) showToast(data.error || 'Не вдалося зберегти');
+}
+
+async function loadClients() {
+  const search = document.getElementById('clientSearch').value.trim();
+  const resp = await fetch('/api/clients?search=' + encodeURIComponent(search));
+  const data = await resp.json();
+  const body = document.getElementById('clientsBody');
+  const empty = document.getElementById('clientsEmpty');
+
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  if (!data.clients.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  body.innerHTML = data.clients.map((c) => `
+    <tr>
+      <td>${c.customer_code}</td>
+      <td>${c.customer_name || '—'}</td>
+      <td><input type="text" value="${(c.partner_group || '').replace(/"/g, '&quot;')}" style="min-width:160px;" onchange="saveClientField('${c.customer_code}','partner_group',this.value)"></td>
+      <td><input type="text" value="${(c.client_type || '').replace(/"/g, '&quot;')}" style="min-width:120px;" onchange="saveClientField('${c.customer_code}','client_type',this.value)"></td>
+      <td><input type="text" value="${(c.manager || '').replace(/"/g, '&quot;')}" style="min-width:120px;" onchange="saveClientField('${c.customer_code}','manager',this.value)"></td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('clientSearch').addEventListener('input', () => {
+  clearTimeout(window._clientSearchTimer);
+  window._clientSearchTimer = setTimeout(loadClients, 250);
+});
 
 loadProducts();
 </script>

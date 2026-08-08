@@ -157,6 +157,32 @@ app.post('/api/orders/:orderNumber/status', async (req, res) => {
   }
 });
 
+app.get('/api/clients', async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const clients = await db.listClients({ search });
+    res.json({ ok: true, clients });
+  } catch (error) {
+    console.error('GET /api/clients ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати список клієнтів' });
+  }
+});
+
+app.post('/api/clients/:customerCode', async (req, res) => {
+  try {
+    const { partner_group, client_type, manager } = req.body || {};
+    const client = await db.updateClient(req.params.customerCode, { partner_group, client_type, manager });
+    if (!client) {
+      res.status(404).json({ ok: false, error: 'Клієнта не знайдено' });
+      return;
+    }
+    res.json({ ok: true, client });
+  } catch (error) {
+    console.error('POST /api/clients/:customerCode ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти клієнта' });
+  }
+});
+
 app.get('/api/products/:code/movements', async (req, res) => {
   try {
     const movements = await db.listMovements(req.params.code);

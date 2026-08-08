@@ -70,6 +70,7 @@ async function initSchema() {
 
     CREATE TABLE IF NOT EXISTS order_lines (
       id SERIAL PRIMARY KEY,
+      source TEXT NOT NULL DEFAULT 'SAP',
       order_number TEXT NOT NULL,
       order_date DATE,
       ship_date DATE,
@@ -90,8 +91,20 @@ async function initSchema() {
       imported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (order_number, product_code)
     );
+    ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'SAP';
     CREATE INDEX IF NOT EXISTS idx_order_lines_order_number ON order_lines(order_number);
     CREATE INDEX IF NOT EXISTS idx_order_lines_status ON order_lines(status);
+
+    CREATE TABLE IF NOT EXISTS clients (
+      customer_code TEXT PRIMARY KEY,
+      customer_name TEXT NOT NULL DEFAULT '',
+      partner_group TEXT NOT NULL DEFAULT '',
+      client_type TEXT NOT NULL DEFAULT '',
+      manager TEXT NOT NULL DEFAULT '',
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   `);
 }
 
@@ -305,27 +318,87 @@ async function listBlendRecipes() {
 
 const ORDER_STATUSES = ['нове', 'в роботі', 'відвантажено', 'скасовано'];
 
+// Так само, як insertProductsIfMissing — ніколи не перезаписує вже наявного
+// клієнта (додано вручну "Групу партнера" чи ні), безпечно на кожен імпорт.
+async function insertClientsIfMissing(clients) {
+  let inserted = 0;
+  for (const client of clients) {
+    if (!client.customer_code) continue;
+    const { rowCount } = await pool.query(
+      `INSERT INTO clients (customer_code, customer_name, updated_at)
+       VALUES ($1,$2, now())
+       ON CONFLICT (customer_code) DO NOTHING`,
+      [client.customer_code, client.customer_name || '']
+    );
+    inserted += rowCount;
+  }
+  return inserted;
+}
+
+async function listClients({ search = '' } = {}) {
+  const conditions = [];
+  const params = [];
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    conditions.push(`(lower(customer_code) LIKE $${params.length} OR lower(customer_name) LIKE $${params.length} OR lower(partner_group) LIKE $${params.length})`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(
+    `SELECT * FROM clients ${where} ORDER BY customer_name ASC`,
+    params
+  );
+  return rows;
+}
+
+async function updateClient(customerCode, { partner_group, client_type, manager }) {
+  const { rows } = await pool.query(
+    `UPDATE clients SET
+       partner_group = COALESCE($2, partner_group),
+       client_type = COALESCE($3, client_type),
+       manager = COALESCE($4, manager),
+       updated_at = now()
+     WHERE customer_code = $1
+     RETURNING *`,
+    [customerCode, partner_group ?? null, client_type ?? null, manager ?? null]
+  );
+  return rows[0] || null;
+}
+
 // Дедуп по (order_number, product_code) — те саме замовлення, яке з'явилось
 // знову в наступному вивантаженні за день (9:00/12:00/15:00), просто
-// пропускається. Рядки без номера замовлення чи коду товару не імпортуються.
-// Товар, якого ще немає в каталозі, додається автоматично (insertProductsIfMissing).
+// пропускається. Рядки без номера замовлення чи коду товару не імпортуються
+// (це відхилення від ТЗ §10, де рядок без коду теж має потрапляти в план з
+// попередженням — поки не реалізовано, бо в реальних SAP-файлах код завжди є).
+// Товар і клієнт, яких ще немає в довідниках, додаються автоматично.
 async function importOrderLines(lines) {
   let inserted = 0;
   let skippedDuplicate = 0;
   let skippedInvalid = 0;
+  let missingDate = 0;
+  let newProducts = 0;
+  let newClients = 0;
 
   for (const line of lines) {
+    if (!line.ship_date) missingDate += 1;
+
     if (!line.order_number || !line.product_code) {
       skippedInvalid += 1;
       continue;
     }
 
-    await insertProductsIfMissing([{
+    newProducts += await insertProductsIfMissing([{
       code: line.product_code,
       name: line.product_name_raw || '',
       is_stock_item: false,
       min_stock: 0
     }]);
+
+    if (line.customer_code) {
+      newClients += await insertClientsIfMissing([{
+        customer_code: line.customer_code,
+        customer_name: line.customer_name || ''
+      }]);
+    }
 
     const { rowCount } = await pool.query(
       `INSERT INTO order_lines (
@@ -356,7 +429,7 @@ async function importOrderLines(lines) {
     else skippedDuplicate += 1;
   }
 
-  return { inserted, skippedDuplicate, skippedInvalid };
+  return { inserted, skippedDuplicate, skippedInvalid, missingDate, newProducts, newClients };
 }
 
 // Список замовлень, згрупований по номеру документа. Якщо в межах одного
@@ -433,6 +506,9 @@ export default {
   listOrders,
   getOrderLines,
   updateOrderStatus,
+  insertClientsIfMissing,
+  listClients,
+  updateClient,
   ORDER_STATUSES,
   SIGNED_TYPES,
   ABSOLUTE_TYPES
