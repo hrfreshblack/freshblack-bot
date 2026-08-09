@@ -778,6 +778,7 @@ async function listOrders({ search = '', status = '' } = {}) {
     `SELECT order_number,
             MIN(order_date) AS order_date,
             MIN(ship_date) AS ship_date,
+            MAX(customer_code) AS customer_code,
             MAX(customer_name) AS customer_name,
             MAX(branch_name) AS branch_name,
             MAX(delivery_method) AS delivery_method,
@@ -882,6 +883,47 @@ async function updateOrderStatus(orderNumber, status, note) {
         note: `Скасування/зміна статусу замовлення №${orderNumber}`
       });
     }
+  }
+
+  return rowCount;
+}
+
+// Те саме, але для ОДНОГО рядка замовлення — замовлення часто їде не всі
+// позиції одразу, тож статус (відвантажено/скасовано) треба вміти міняти
+// окремо по кожному товару в замовленні, а не тільки цілим замовленням.
+async function updateOrderLineStatus(lineId, status, note) {
+  if (!ORDER_STATUSES.includes(status)) {
+    throw new Error(`Unknown status: ${status}`);
+  }
+
+  const { rows } = await pool.query(
+    `SELECT id, order_number, product_code, qty, ship_date, status FROM order_lines WHERE id = $1`,
+    [lineId]
+  );
+  const line = rows[0];
+  if (!line) return 0;
+
+  const { rowCount } = await pool.query(
+    `UPDATE order_lines SET status = $1, status_note = $2, status_updated_at = now() WHERE id = $3`,
+    [status, note || '', lineId]
+  );
+
+  if (status === 'відвантажено' && line.status !== 'відвантажено') {
+    await addMovement({
+      product_code: line.product_code,
+      movement_type: 'shipment',
+      qty: line.qty,
+      movement_date: line.ship_date || null,
+      note: `Замовлення №${line.order_number}`
+    });
+  } else if (status !== 'відвантажено' && line.status === 'відвантажено') {
+    await addMovement({
+      product_code: line.product_code,
+      movement_type: 'return',
+      qty: line.qty,
+      movement_date: null,
+      note: `Скасування/зміна статусу замовлення №${line.order_number} (позиція)`
+    });
   }
 
   return rowCount;
@@ -1442,6 +1484,7 @@ export default {
   upsertOrderLineOverride,
   deleteOrderLineOverride,
   updateOrderStatus,
+  updateOrderLineStatus,
   backfillHistoricalShipments,
   zeroOutMadeToOrderDeficits,
   insertClientsIfMissing,

@@ -77,7 +77,15 @@
   }
   button:active { transform: translateY(1px); }
   main { padding: 0 24px 40px; }
-  .tableWrap { overflow-x: auto; }
+  /* No overflow-x here on purpose: any overflow value other than visible on
+     one axis forces the other axis to compute as auto too (tested — even
+     overflow-y:clip didn't avoid it in this browser), which turns this div
+     into its own scroll container and breaks position:sticky on th below
+     (sticky would stick to this div, which never visibly scrolls, instead
+     of the real page). A table wider than the viewport now scrolls the
+     whole page horizontally instead of just itself — worse for wide
+     tables, but sticky headers are more important and were the actual ask. */
+  .tableWrap { }
   table { width: 100%; border-collapse: collapse; min-width: 720px; }
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th {
@@ -363,6 +371,7 @@
           <th>№ замовлення</th>
           <th>Дата замов.</th>
           <th>Дата відв.</th>
+          <th>Код клієнта</th>
           <th>Клієнт</th>
           <th>Філіал</th>
           <th>Доставка</th>
@@ -477,27 +486,12 @@
 
 <!-- Модалка: деталі замовлення / зміна статусу -->
 <div class="overlay" id="orderOverlay">
-  <div class="modal" style="max-width: 560px;">
+  <div class="modal" style="max-width: 640px;">
     <h2 id="orderModalTitle">Замовлення</h2>
-    <div id="orderLinesContainer" style="margin-bottom: 16px; max-height: 300px; overflow-y: auto;"></div>
-    <div id="orderStatusEditor">
-      <div class="field">
-        <label>Новий статус</label>
-        <select id="orderNewStatus">
-          <option value="нове">нове</option>
-          <option value="в роботі">в роботі</option>
-          <option value="відвантажено">відвантажено</option>
-          <option value="скасовано">скасовано</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>Коментар (напр. причина скасування)</label>
-        <input type="text" id="orderStatusNote" placeholder="необов'язково">
-      </div>
-    </div>
+    <p id="orderModalMeta" style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;"></p>
+    <div id="orderLinesContainer" style="margin-bottom: 16px; max-height: 420px; overflow-y: auto;"></div>
     <div class="modal-actions">
       <button class="secondary" id="btnCancelOrderStatus">Закрити</button>
-      <button id="btnSaveOrderStatus">Змінити статус</button>
     </div>
   </div>
 </div>
@@ -1013,6 +1007,8 @@ function orderStatusTag(status) {
   return '<span class="tag neutral">нове</span>';
 }
 
+const ORDER_STATUS_OPTIONS = ['нове', 'в роботі', 'відвантажено', 'скасовано'];
+
 async function loadOrders() {
   const search = document.getElementById('orderSearch').value.trim();
   const status = document.getElementById('orderStatusFilter').value;
@@ -1035,6 +1031,7 @@ async function loadOrders() {
       <td>${o.order_number}</td>
       <td>${o.order_date ? new Date(o.order_date).toLocaleDateString('uk-UA') : '—'}</td>
       <td>${o.ship_date ? new Date(o.ship_date).toLocaleDateString('uk-UA') : '—'}</td>
+      <td>${o.customer_code || '—'}</td>
       <td>${o.customer_name || '—'}</td>
       <td>${o.branch_name || '—'}</td>
       <td>${o.delivery_method || '—'}</td>
@@ -1063,6 +1060,10 @@ async function openOrder(orderNumber) {
   }
 
   document.getElementById('orderModalTitle').textContent = 'Замовлення № ' + orderNumber;
+  const firstLine = data.lines[0];
+  document.getElementById('orderModalMeta').textContent = firstLine
+    ? `Код клієнта: ${firstLine.customer_code || '—'} · ${firstLine.customer_name || '—'}${firstLine.branch_name ? ' / ' + firstLine.branch_name : ''}`
+    : '';
   document.getElementById('orderLinesContainer').innerHTML = data.lines.map((l) => `
     <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
       <div>${l.product_name_raw || l.product_code} <span style="color: var(--muted);">(${l.product_code})</span></div>
@@ -1076,6 +1077,13 @@ async function openOrder(orderNumber) {
         `).join(' ')}
       </div>
       ${canManageOrders ? `
+        <div style="display:flex; gap:4px; margin-top:6px; flex-wrap: wrap; align-items:center;">
+          <select id="lineStatus_${l.id}" style="font-size:11px;">
+            ${ORDER_STATUS_OPTIONS.map((s) => `<option value="${s}" ${l.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+          </select>
+          <input type="text" id="lineStatusNote_${l.id}" placeholder="коментар (напр. причина скасування)" style="font-size:11px; width:160px;" value="${(l.status_note || '').replace(/"/g, '&quot;')}">
+          <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveLineStatus(${l.id})">Змінити статус позиції</button>
+        </div>
         <details style="margin-top:4px;">
           <summary style="cursor:pointer; font-size:11px; color: var(--muted);">Форс-мажор: замінити пакування для цього рядка</summary>
           <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap;">
@@ -1092,11 +1100,22 @@ async function openOrder(orderNumber) {
       ` : ''}
     </div>
   `).join('');
-  document.getElementById('orderNewStatus').value = data.lines[0]?.status && data.lines[0].status !== 'змішаний' ? data.lines[0].status : 'нове';
-  document.getElementById('orderStatusNote').value = '';
-  document.getElementById('orderStatusEditor').style.display = canManageOrders ? '' : 'none';
-  document.getElementById('btnSaveOrderStatus').style.display = canManageOrders ? '' : 'none';
   document.getElementById('orderOverlay').classList.add('open');
+}
+
+async function saveLineStatus(lineId) {
+  const status = document.getElementById('lineStatus_' + lineId).value;
+  const note = document.getElementById('lineStatusNote_' + lineId).value.trim();
+  const resp = await fetch('/api/order-lines/' + lineId + '/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status, note })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  showToast('Статус позиції оновлено');
+  openOrder(currentOrderNumber);
+  loadOrders();
 }
 
 async function saveOverride(lineId) {
@@ -1124,21 +1143,6 @@ async function deleteOverride(overrideId) {
 
 document.getElementById('btnCancelOrderStatus').onclick = () => {
   document.getElementById('orderOverlay').classList.remove('open');
-};
-
-document.getElementById('btnSaveOrderStatus').onclick = async () => {
-  const status = document.getElementById('orderNewStatus').value;
-  const note = document.getElementById('orderStatusNote').value;
-  const resp = await fetch('/api/orders/' + encodeURIComponent(currentOrderNumber) + '/status', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status, note })
-  });
-  const data = await resp.json();
-  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
-  document.getElementById('orderOverlay').classList.remove('open');
-  showToast('Статус оновлено');
-  loadOrders();
 };
 
 document.getElementById('btnOrderMenu').onclick = (e) => {

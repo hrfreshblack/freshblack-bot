@@ -462,6 +462,25 @@ app.post('/api/orders/:orderNumber/status', requireRole(), async (req, res) => {
   }
 });
 
+app.post('/api/order-lines/:lineId/status', requireRole(), async (req, res) => {
+  try {
+    const { status, note } = req.body || {};
+    if (!db.ORDER_STATUSES.includes(status)) {
+      res.status(400).json({ ok: false, error: 'Невідомий статус' });
+      return;
+    }
+    const rowCount = await db.updateOrderLineStatus(Number(req.params.lineId), status, note);
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Позицію не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/order-lines/:lineId/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
 app.get('/api/clients', requireRole(), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
