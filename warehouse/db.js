@@ -358,7 +358,7 @@ async function listProducts({ search = '', activeOnly = true } = {}) {
      LEFT JOIN stock_movements m ON m.product_code = p.code
      ${where}
      GROUP BY p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active, p.status
-     ORDER BY p.name ASC`,
+     ORDER BY lower(p.name) ASC`,
     params
   );
 
@@ -392,7 +392,7 @@ async function listStock({ search = '' } = {}) {
      LEFT JOIN stock_movements m ON m.product_code = p.code
      ${where}
      GROUP BY p.code, p.name, p.short_name, p.unit, p.station, p.min_stock, p.status
-     ORDER BY p.name ASC`,
+     ORDER BY lower(p.name) ASC`,
     params
   );
 
@@ -411,6 +411,61 @@ async function listMovements(code, limit = 50) {
     [code, limit]
   );
   return rows;
+}
+
+// Дати, коли проводилась інвентаризація (рух типу inventory_adjustment), з
+// кількістю порахованих позицій — щоб було видно всі минулі підрахунки.
+async function listInventoryDates() {
+  const { rows } = await pool.query(
+    `SELECT movement_date, count(*)::int AS item_count
+     FROM stock_movements WHERE movement_type = 'inventory_adjustment'
+     GROUP BY movement_date ORDER BY movement_date DESC`
+  );
+  return rows;
+}
+
+// Деталі одного підрахунку: порахована кількість і розбіжність із тим, що
+// система очікувала побачити (signed_qty цього руху — це вже готова різниця,
+// бо addMovement для inventory_adjustment рахує її як qty - залишок_до_цього).
+async function listInventoryDetail(movementDate) {
+  const { rows } = await pool.query(
+    `SELECT m.id, m.product_code, p.name, m.qty AS counted_qty, m.signed_qty AS discrepancy, m.note
+     FROM stock_movements m
+     JOIN products p ON p.code = m.product_code
+     WHERE m.movement_type = 'inventory_adjustment' AND m.movement_date = $1
+     ORDER BY lower(p.name) ASC`,
+    [movementDate]
+  );
+  return rows.map((r) => ({ ...r, counted_qty: Number(r.counted_qty), discrepancy: Number(r.discrepancy) }));
+}
+
+// Порівняння для кожного порахованого товару: залишок на момент першої
+// інвентаризації, скільки відвантажено/надійшло з тієї дати і поточний
+// розрахунковий залишок — щоб бачити зміну між підрахунками (ТЗ §12).
+async function listInventoryComparison() {
+  const { rows } = await pool.query(
+    `SELECT p.code, p.name,
+            first_inv.qty AS baseline_qty, first_inv.movement_date AS baseline_date,
+            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('shipment','writeoff') THEN m.qty ELSE 0 END), 0) AS issued_since,
+            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('production_in','return') THEN m.qty ELSE 0 END), 0) AS received_since,
+            COALESCE(SUM(m.signed_qty), 0) AS current_balance
+     FROM products p
+     JOIN LATERAL (
+       SELECT qty, movement_date FROM stock_movements
+       WHERE product_code = p.code AND movement_type = 'inventory_adjustment'
+       ORDER BY movement_date ASC, id ASC LIMIT 1
+     ) first_inv ON true
+     LEFT JOIN stock_movements m ON m.product_code = p.code
+     GROUP BY p.code, p.name, first_inv.qty, first_inv.movement_date
+     ORDER BY lower(p.name) ASC`
+  );
+  return rows.map((r) => ({
+    ...r,
+    baseline_qty: Number(r.baseline_qty),
+    issued_since: Number(r.issued_since),
+    received_since: Number(r.received_since),
+    current_balance: Number(r.current_balance)
+  }));
 }
 
 async function addMovement({ product_code, movement_type, qty, note, movement_date, created_by }) {
@@ -704,7 +759,7 @@ async function listOrders({ search = '', status = '' } = {}) {
      FROM order_lines
      ${where}
      GROUP BY order_number
-     ORDER BY MAX(imported_at) DESC`,
+     ORDER BY MIN(ship_date) DESC NULLS LAST, MAX(imported_at) DESC`,
     params
   );
   return rows.map((r) => ({ ...r, total_qty: Number(r.total_qty) }));
@@ -753,15 +808,77 @@ async function deleteOrderLineOverride(id) {
   return rowCount;
 }
 
+// Перехід у "відвантажено" списує зі складу (рух shipment) кожен рядок, який
+// ще не був відвантажений раніше — інакше повторний клік на той самий статус
+// списав би вдруге. Перехід з "відвантажено" в інший статус рух не скасовує
+// (немає single unambiguous "скасувати відвантаження" — за потреби це окремий
+// рух "повернення" вручну).
 async function updateOrderStatus(orderNumber, status, note) {
   if (!ORDER_STATUSES.includes(status)) {
     throw new Error(`Unknown status: ${status}`);
   }
+
+  const { rows: linesBefore } = await pool.query(
+    `SELECT id, product_code, qty, ship_date, status FROM order_lines WHERE order_number = $1`,
+    [orderNumber]
+  );
+
   const { rowCount } = await pool.query(
     `UPDATE order_lines SET status = $1, status_note = $2, status_updated_at = now() WHERE order_number = $3`,
     [status, note || '', orderNumber]
   );
+
+  if (status === 'відвантажено') {
+    for (const line of linesBefore) {
+      if (line.status === 'відвантажено') continue;
+      await addMovement({
+        product_code: line.product_code,
+        movement_type: 'shipment',
+        qty: line.qty,
+        movement_date: line.ship_date || null,
+        note: `Замовлення №${orderNumber}`
+      });
+    }
+  }
+
   return rowCount;
+}
+
+// Одноразово: історичні замовлення (source='SAP-history') по факту вже
+// відвантажені в реальності, тому статус ставимо "відвантажено" для всіх.
+// Але рух складу створюємо лише для рядків із датою відвантаження ПІСЛЯ
+// точки нуль інвентаризації — те, що відвантажилось до неї, вже враховано
+// у порахованому залишку, і повторний рух задвоїв би списання.
+async function backfillHistoricalShipments({ baselineDate }) {
+  const { rows: lines } = await pool.query(
+    `SELECT id, product_code, qty, ship_date, order_number
+     FROM order_lines WHERE source = 'SAP-history' AND status != 'відвантажено'`
+  );
+
+  let movementsCreated = 0;
+  let statusOnly = 0;
+
+  for (const line of lines) {
+    const shipDateStr = line.ship_date ? line.ship_date.toISOString().slice(0, 10) : null;
+    if (shipDateStr && shipDateStr > baselineDate) {
+      await addMovement({
+        product_code: line.product_code,
+        movement_type: 'shipment',
+        qty: line.qty,
+        movement_date: shipDateStr,
+        note: `Замовлення №${line.order_number} (історія)`
+      });
+      movementsCreated += 1;
+    } else {
+      statusOnly += 1;
+    }
+    await pool.query(
+      `UPDATE order_lines SET status = 'відвантажено', status_updated_at = now() WHERE id = $1`,
+      [line.id]
+    );
+  }
+
+  return { movementsCreated, statusOnly };
 }
 
 const MATERIAL_SIGNED_TYPES = {
@@ -1239,6 +1356,9 @@ export default {
   getBalance,
   listProducts,
   listMovements,
+  listInventoryDates,
+  listInventoryDetail,
+  listInventoryComparison,
   addMovement,
   insertBlendRecipesIfMissing,
   listBlendRecipes,
@@ -1249,6 +1369,7 @@ export default {
   upsertOrderLineOverride,
   deleteOrderLineOverride,
   updateOrderStatus,
+  backfillHistoricalShipments,
   insertClientsIfMissing,
   listClients,
   updateClient,

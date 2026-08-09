@@ -79,7 +79,10 @@
   main { padding: 0 24px 40px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; min-width: 720px; }
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+  th {
+    color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em;
+    position: sticky; top: 0; background: var(--bg); z-index: 2; box-shadow: 0 1px 0 var(--border);
+  }
   tr:hover td { background: #1b1f28; }
   .balance { font-variant-numeric: tabular-nums; font-weight: 700; }
   .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
@@ -171,6 +174,7 @@
   <nav class="tabs">
     <button id="tabProducts" onclick="showTab('products')">Товари</button>
     <button id="tabStock" onclick="showTab('stock')">Склад</button>
+    <button id="tabInventory" onclick="showTab('inventory')">Інвентаризації</button>
     <button id="tabStations" onclick="showTab('stations')">Станції</button>
     <button id="tabMaterials" onclick="showTab('materials')">Розхідники</button>
     <button id="tabRecipes" onclick="showTab('recipes')">Рецептури блендів</button>
@@ -225,6 +229,40 @@
       <tbody id="stockBody"></tbody>
     </table>
     <div class="empty" id="stockEmpty" style="display:none;">Складських товарів ще немає.</div>
+  </div>
+
+  <div id="viewInventory" style="display:none;">
+    <div class="chips" id="inventoryDateChips"></div>
+    <p style="color: var(--muted); margin: 12px 0;">Розбіжність = порахована кількість мінус те, що система очікувала побачити (від'ємна — знайшли менше, додатна — більше).</p>
+    <table id="inventoryDetailTable">
+      <thead>
+        <tr>
+          <th>Код</th>
+          <th>Назва</th>
+          <th>Порахували</th>
+          <th>Розбіжність</th>
+          <th>Коментар</th>
+        </tr>
+      </thead>
+      <tbody id="inventoryDetailBody"></tbody>
+    </table>
+    <div class="empty" id="inventoryDetailEmpty" style="display:none;">Інвентаризацій ще не було. Внось через "+ Рух" на вкладці "Склад" — тип "Інвентаризація — фактично порахована кількість".</div>
+
+    <h3 style="margin: 28px 0 12px; font-size: 14px;">Порівняння: перша інвентаризація → зараз</h3>
+    <table id="inventoryComparisonTable">
+      <thead>
+        <tr>
+          <th>Код</th>
+          <th>Назва</th>
+          <th>Залишок при першій інвент.</th>
+          <th>Дата</th>
+          <th>Надійшло з тоді</th>
+          <th>Видано з тоді</th>
+          <th>Поточний залишок</th>
+        </tr>
+      </thead>
+      <tbody id="inventoryComparisonBody"></tbody>
+    </table>
   </div>
 
   <div id="viewStations" style="display:none;">
@@ -716,6 +754,85 @@ async function loadStock() {
   `).join('');
 }
 
+// ---- Інвентаризації ----
+let currentInventoryDate = null;
+
+async function initInventory() {
+  await loadInventoryDates();
+  await loadInventoryComparison();
+}
+
+async function loadInventoryDates() {
+  const resp = await fetch('/api/inventory/dates');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  const container = document.getElementById('inventoryDateChips');
+  if (!data.dates.length) {
+    container.innerHTML = '';
+    document.getElementById('inventoryDetailBody').innerHTML = '';
+    document.getElementById('inventoryDetailEmpty').style.display = 'block';
+    return;
+  }
+  if (!currentInventoryDate) currentInventoryDate = data.dates[0].movement_date;
+
+  container.innerHTML = data.dates.map((d) => {
+    const dateStr = String(d.movement_date).slice(0, 10);
+    const label = new Date(d.movement_date).toLocaleDateString('uk-UA') + ' (' + d.item_count + ')';
+    return `<button class="${dateStr === currentInventoryDate ? 'active' : ''}" onclick="selectInventoryDate('${dateStr}')">${label}</button>`;
+  }).join('');
+
+  await loadInventoryDetail(currentInventoryDate);
+}
+
+function selectInventoryDate(dateStr) {
+  currentInventoryDate = dateStr;
+  loadInventoryDates();
+}
+
+async function loadInventoryDetail(dateStr) {
+  const resp = await fetch('/api/inventory/dates/' + encodeURIComponent(dateStr));
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  const body = document.getElementById('inventoryDetailBody');
+  const empty = document.getElementById('inventoryDetailEmpty');
+  if (!data.detail.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  body.innerHTML = data.detail.map((r) => `
+    <tr>
+      <td>${r.product_code}</td>
+      <td>${r.name}</td>
+      <td class="balance">${fmt(r.counted_qty)}</td>
+      <td class="${r.discrepancy < 0 ? 'tag bad' : r.discrepancy > 0 ? 'tag warn' : 'tag ok'}" style="display:inline-block; margin:4px 0;">${r.discrepancy > 0 ? '+' : ''}${fmt(r.discrepancy)}</td>
+      <td>${r.note || '—'}</td>
+    </tr>
+  `).join('');
+}
+
+async function loadInventoryComparison() {
+  const resp = await fetch('/api/inventory/comparison');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  document.getElementById('inventoryComparisonBody').innerHTML = data.comparison.map((r) => `
+    <tr>
+      <td>${r.code}</td>
+      <td>${r.name}</td>
+      <td class="balance">${fmt(r.baseline_qty)}</td>
+      <td>${new Date(r.baseline_date).toLocaleDateString('uk-UA')}</td>
+      <td>${fmt(r.received_since)}</td>
+      <td>${fmt(r.issued_since)}</td>
+      <td class="balance">${fmt(r.current_balance)}</td>
+    </tr>
+  `).join('');
+}
+
 function openMovement(code, name) {
   currentCode = code;
   document.getElementById('movementTitle').textContent = 'Рух — ' + name;
@@ -807,6 +924,7 @@ let stationsLoaded = false;
 function showTab(tab) {
   document.getElementById('viewProducts').style.display = tab === 'products' ? '' : 'none';
   document.getElementById('viewStock').style.display = tab === 'stock' ? '' : 'none';
+  document.getElementById('viewInventory').style.display = tab === 'inventory' ? '' : 'none';
   document.getElementById('viewStations').style.display = tab === 'stations' ? '' : 'none';
   document.getElementById('viewMaterials').style.display = tab === 'materials' ? '' : 'none';
   document.getElementById('viewRecipes').style.display = tab === 'recipes' ? '' : 'none';
@@ -814,6 +932,7 @@ function showTab(tab) {
   document.getElementById('viewClients').style.display = tab === 'clients' ? '' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', tab === 'products');
   document.getElementById('tabStock').classList.toggle('active', tab === 'stock');
+  document.getElementById('tabInventory').classList.toggle('active', tab === 'inventory');
   document.getElementById('tabStations').classList.toggle('active', tab === 'stations');
   document.getElementById('tabMaterials').classList.toggle('active', tab === 'materials');
   document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
@@ -821,6 +940,7 @@ function showTab(tab) {
   document.getElementById('tabClients').classList.toggle('active', tab === 'clients');
   if (tab === 'products') loadProducts();
   if (tab === 'stock') loadStock();
+  if (tab === 'inventory') initInventory();
   if (tab === 'stations') initStations();
   if (tab === 'materials') loadMaterials();
   if (tab === 'recipes' && !recipesLoaded) loadRecipes();
@@ -1539,7 +1659,7 @@ document.getElementById('btnCloseSpec').onclick = () => {
   document.getElementById('specOverlay').classList.remove('open');
 };
 
-const ADMIN_ONLY_TABS = ['tabProducts', 'tabStock', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
+const ADMIN_ONLY_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
 
 async function initApp() {
   const resp = await fetch('/api/me');

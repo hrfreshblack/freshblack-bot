@@ -498,6 +498,36 @@ app.get('/api/products/:code/movements', requireRole(), async (req, res) => {
   }
 });
 
+app.get('/api/inventory/dates', requireRole(), async (req, res) => {
+  try {
+    const dates = await db.listInventoryDates();
+    res.json({ ok: true, dates });
+  } catch (error) {
+    console.error('GET /api/inventory/dates ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати дати інвентаризацій' });
+  }
+});
+
+app.get('/api/inventory/dates/:date', requireRole(), async (req, res) => {
+  try {
+    const detail = await db.listInventoryDetail(req.params.date);
+    res.json({ ok: true, detail });
+  } catch (error) {
+    console.error('GET /api/inventory/dates/:date ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати деталі інвентаризації' });
+  }
+});
+
+app.get('/api/inventory/comparison', requireRole(), async (req, res) => {
+  try {
+    const comparison = await db.listInventoryComparison();
+    res.json({ ok: true, comparison });
+  } catch (error) {
+    console.error('GET /api/inventory/comparison ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати порівняння' });
+  }
+});
+
 app.post('/api/movements', requireRole(), async (req, res) => {
   try {
     const { product_code, movement_type, qty, note, movement_date, created_by } = req.body || {};
@@ -625,6 +655,14 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
         const result = await db.importOrderLines(historyLines);
         console.log(`Imported historical orders: ${JSON.stringify(result)}`);
       }
+    }
+
+    // Історичні замовлення по факту вже відвантажені в реальності — ставить
+    // статус "відвантажено" всім, і списує зі складу ті, що після точки нуль
+    // інвентаризації (до неї це вже враховано в порахованому залишку).
+    const shipResult = await db.backfillHistoricalShipments({ baselineDate: '2026-08-02' });
+    if (shipResult.movementsCreated > 0 || shipResult.statusOnly > 0) {
+      console.log(`Historical shipments backfill: ${JSON.stringify(shipResult)}`);
     }
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);
