@@ -2,18 +2,20 @@ import ExcelJS from 'exceljs';
 
 // Заголовки в реальному SAP-файлі можуть бути обрізані шириною колонки, тому
 // звіряємо по входженню ключового фрагмента, а не по точному співпадінню.
+// Кілька варіантів на поле — старі вивантаження (влітку 2026) були
+// російськомовні й трохи інакше названі, ніж поточний щоденний SAP-файл.
 const HEADER_MATCHERS = [
   { field: 'order_number', includes: ['номер документа', 'номер замовлення'] },
-  { field: 'order_date', includes: ['дата замов'] },
-  { field: 'ship_date', includes: ['дата відв'] },
-  { field: 'customer_code', includes: ['код замовника'] },
-  { field: 'customer_name', includes: ['назва замовника'] },
-  { field: 'branch_name', includes: ['назва філіал'] },
-  { field: 'product_code', includes: ['код товару'] },
-  { field: 'product_name_raw', includes: ['назва товару'] },
+  { field: 'order_date', includes: ['дата замов', 'дата регистрации', 'дата реєстрації'] },
+  { field: 'ship_date', includes: ['дата відв', 'дата исполнения', 'дата виконання'] },
+  { field: 'customer_code', includes: ['код замовника', 'код заказчика'] },
+  { field: 'customer_name', includes: ['назва замовника', 'название заказчика'] },
+  { field: 'branch_name', includes: ['назва філіал', 'название филиала'] },
+  { field: 'product_code', includes: ['код товару', 'код товара'] },
+  { field: 'product_name_raw', includes: ['назва товару', 'наименование товара'] },
   { field: 'roast_type', includes: ['вид обсм'] },
-  { field: 'qty', includes: ['кількість'] },
-  { field: 'sap_stock_hint', includes: ['залишок на складі'] },
+  { field: 'qty', includes: ['кількість', 'количество'] },
+  { field: 'sap_stock_hint', includes: ['залишок на складі', 'на складе'] },
   { field: 'grind_flag', includes: ['помел кави'] },
   { field: 'grind_type', includes: ['вид помелу'] },
   { field: 'delivery_method', includes: ['спосіб доставки'] }
@@ -54,14 +56,7 @@ function cellNumber(cell) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Парсить SAP-вивантаження замовлень (перший аркуш, перший рядок — заголовки).
-// Повертає масив рядків замовлень, готових для db.importOrderLines.
-export async function parseOrderFile(buffer) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  const sheet = workbook.worksheets[0];
-  if (!sheet) return [];
-
+function parseSheet(sheet, source) {
   const headerRow = sheet.getRow(1);
   const columnFields = {};
   headerRow.eachCell((cell, colNumber) => {
@@ -73,7 +68,7 @@ export async function parseOrderFile(buffer) {
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
 
-    const line = {};
+    const line = { source };
     row.eachCell((cell, colNumber) => {
       const field = columnFields[colNumber];
       if (!field) return;
@@ -92,5 +87,29 @@ export async function parseOrderFile(buffer) {
     }
   });
 
+  return lines;
+}
+
+// Парсить SAP-вивантаження замовлень — лише перший аркуш, перший рядок —
+// заголовки. Використовується для щоденного файлу через веб-інтерфейс.
+export async function parseOrderFile(buffer, source = 'SAP') {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) return [];
+  return parseSheet(sheet, source);
+}
+
+// Парсить УСІ аркуші файлу (кожен окремо, зі своїми заголовками в першому
+// рядку) — для масового разового імпорту історичних замовлень з файлу,
+// де кожен день/зріз — окрема вкладка. Аркуші без розпізнаних колонок просто
+// не дають жодного рядка (не падає).
+export async function parseOrderFileAllSheets(buffer, source = 'SAP') {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  let lines = [];
+  for (const sheet of workbook.worksheets) {
+    lines = lines.concat(parseSheet(sheet, source));
+  }
   return lines;
 }

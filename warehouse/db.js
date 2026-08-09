@@ -155,6 +155,20 @@ async function initSchema() {
       UNIQUE (product_code, role)
     );
 
+    -- Форс-мажорна заміна пакування для конкретного рядка замовлення (наприклад
+    -- потрібної пачки немає на складі і відвантажують в іншій) — не чіпає
+    -- основну специфікацію товару (product_specs), діє тільки на цей рядок.
+    CREATE TABLE IF NOT EXISTS order_line_overrides (
+      id SERIAL PRIMARY KEY,
+      order_line_id INTEGER NOT NULL REFERENCES order_lines(id),
+      role TEXT NOT NULL,
+      material_id INTEGER NOT NULL REFERENCES materials(id),
+      note TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (order_line_id, role)
+    );
+
     -- base_norm/target_norm/unit/employees лишились з першої версії й більше
     -- не пишуться в код — станція може мати кілька операцій із різними
     -- нормами (station_operations) і кількох іменованих співробітників
@@ -269,19 +283,37 @@ async function upsertProduct(product) {
 
 // Часткове оновлення без ризику затерти інші поля (наприклад, зміна лише
 // статусу з таблиці не повинна очистити назву чи станцію).
-async function updateProductFields(code, { status, station, min_stock, unit } = {}) {
+async function updateProductFields(code, { status, station, min_stock, unit, is_stock_item } = {}) {
   const { rows } = await pool.query(
     `UPDATE products SET
        status = COALESCE($2, status),
        station = COALESCE($3, station),
        min_stock = COALESCE($4, min_stock),
        unit = COALESCE($5, unit),
+       is_stock_item = COALESCE($6, is_stock_item),
        updated_at = now()
      WHERE code = $1
      RETURNING *`,
-    [code, status ?? null, station ?? null, min_stock ?? null, unit ?? null]
+    [code, status ?? null, station ?? null, min_stock ?? null, unit ?? null, is_stock_item ?? null]
   );
   return rows[0] || null;
+}
+
+async function countMovementsByNote(note) {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM stock_movements WHERE note = $1', [note]);
+  return rows[0].n;
+}
+
+// Одноразовий імпорт "точки нуль" з реальної інвентаризації: ставить
+// is_stock_item = true (порахувала фізично — значить це складський товар) і
+// записує inventory_adjustment рух на дату підрахунку. Товар, якого ще
+// немає в каталозі, спершу додається (insertProductsIfMissing).
+async function applyInventoryBaseline(rows, { movement_date, note }) {
+  for (const r of rows) {
+    await insertProductsIfMissing([{ code: r.code, name: r.name, is_stock_item: true, min_stock: 0 }]);
+    await updateProductFields(r.code, { is_stock_item: true });
+    await addMovement({ product_code: r.code, movement_type: 'inventory_adjustment', qty: r.qty, movement_date, note });
+  }
 }
 
 async function getProduct(code) {
@@ -549,12 +581,34 @@ async function updateClient(customerCode, { partner_group, client_type, manager 
   return rows[0] || null;
 }
 
+// Клієнти з ручних списків (наприклад вкладка "Капран") не мають коду SAP —
+// шукаємо вже наявного клієнта з такою самою назвою (з імпорту замовлень) і
+// просто проставляємо менеджера; якщо такого клієнта ще нема, створюємо з
+// синтетичним кодом (префікс KAPRAN-), щоб не вигадувати фальшивий SAP-код.
+async function upsertClientByName(name, { manager } = {}) {
+  const { rows: existing } = await pool.query(
+    'SELECT customer_code FROM clients WHERE customer_name = $1 LIMIT 1',
+    [name]
+  );
+  if (existing.length) {
+    return updateClient(existing[0].customer_code, { manager });
+  }
+  const syntheticCode = 'KAPRAN-' + name.replace(/[^a-zA-Zа-яА-ЯіІїЇєЄ0-9]+/g, '_').slice(0, 40);
+  await insertClientsIfMissing([{ customer_code: syntheticCode, customer_name: name }]);
+  return updateClient(syntheticCode, { manager });
+}
+
 // Дедуп по (order_number, product_code) — те саме замовлення, яке з'явилось
 // знову в наступному вивантаженні за день (9:00/12:00/15:00), просто
 // пропускається. Рядки без номера замовлення чи коду товару не імпортуються
 // (це відхилення від ТЗ §10, де рядок без коду теж має потрапляти в план з
 // попередженням — поки не реалізовано, бо в реальних SAP-файлах код завжди є).
 // Товар і клієнт, яких ще немає в довідниках, додаються автоматично.
+async function countOrderLinesBySource(source) {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM order_lines WHERE source = $1', [source]);
+  return rows[0].n;
+}
+
 async function importOrderLines(lines) {
   let inserted = 0;
   let skippedDuplicate = 0;
@@ -587,12 +641,13 @@ async function importOrderLines(lines) {
 
     const { rowCount } = await pool.query(
       `INSERT INTO order_lines (
-         order_number, order_date, ship_date, customer_code, customer_name, branch_name,
+         source, order_number, order_date, ship_date, customer_code, customer_name, branch_name,
          product_code, product_name_raw, roast_type, qty, sap_stock_hint,
          grind_flag, grind_type, delivery_method
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        ON CONFLICT (order_number, product_code) DO NOTHING`,
       [
+        line.source || 'SAP',
         line.order_number,
         line.order_date || null,
         line.ship_date || null,
@@ -657,10 +712,45 @@ async function listOrders({ search = '', status = '' } = {}) {
 
 async function getOrderLines(orderNumber) {
   const { rows } = await pool.query(
-    'SELECT * FROM order_lines WHERE order_number = $1 ORDER BY id ASC',
+    `SELECT ol.*,
+            COALESCE(
+              (SELECT json_agg(json_build_object(
+                 'id', olo.id, 'role', olo.role, 'material_id', olo.material_id,
+                 'material_name', m.name, 'material_size_label', m.size_label, 'note', olo.note
+               ))
+               FROM order_line_overrides olo
+               JOIN materials m ON m.id = olo.material_id
+               WHERE olo.order_line_id = ol.id),
+              '[]'
+            ) AS overrides
+     FROM order_lines ol
+     WHERE ol.order_number = $1
+     ORDER BY ol.id ASC`,
     [orderNumber]
   );
   return rows;
+}
+
+async function upsertOrderLineOverride({ order_line_id, role, material_id, note, created_by }) {
+  if (!PRODUCT_SPEC_ROLES.includes(role)) {
+    throw new Error(`Unknown role: ${role}`);
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO order_line_overrides (order_line_id, role, material_id, note, created_by)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (order_line_id, role) DO UPDATE SET
+       material_id = excluded.material_id,
+       note = excluded.note,
+       created_by = excluded.created_by
+     RETURNING *`,
+    [order_line_id, role, material_id, note || '', created_by || '']
+  );
+  return rows[0];
+}
+
+async function deleteOrderLineOverride(id) {
+  const { rowCount } = await pool.query('DELETE FROM order_line_overrides WHERE id = $1', [id]);
+  return rowCount;
 }
 
 async function updateOrderStatus(orderNumber, status, note) {
@@ -1153,13 +1243,19 @@ export default {
   insertBlendRecipesIfMissing,
   listBlendRecipes,
   importOrderLines,
+  countOrderLinesBySource,
   listOrders,
   getOrderLines,
+  upsertOrderLineOverride,
+  deleteOrderLineOverride,
   updateOrderStatus,
   insertClientsIfMissing,
   listClients,
   updateClient,
+  upsertClientByName,
   updateProductFields,
+  countMovementsByNote,
+  applyInventoryBaseline,
   listStock,
   listStations,
   createTask,

@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import db from './db.js';
@@ -8,6 +9,8 @@ import seedCatalogAdditions from './seed-catalog-additions.js';
 import seedBlendRecipes from './seed-blend-recipes.js';
 import seedMaterials from './seed-materials.js';
 import seedAccounts from './seed-accounts.js';
+import seedInventoryAug2 from './seed-inventory-aug2.js';
+import seedKapranClients from './seed-kapran-clients.js';
 import { STATION_NAME_ALIASES, stationNotes, stationOperations, stationEmployees } from './seed-stations.js';
 import { parseOrderFile } from './parse-order-file.js';
 
@@ -405,6 +408,41 @@ app.get('/api/orders/:orderNumber', requireRole(), async (req, res) => {
   }
 });
 
+app.post('/api/order-lines/:lineId/overrides', requireRole(), async (req, res) => {
+  try {
+    const { role, material_id, note } = req.body || {};
+    if (!role || !material_id) {
+      res.status(400).json({ ok: false, error: 'Потрібні role і material_id' });
+      return;
+    }
+    const override = await db.upsertOrderLineOverride({
+      order_line_id: Number(req.params.lineId),
+      role,
+      material_id,
+      note,
+      created_by: req.account.username
+    });
+    res.json({ ok: true, override });
+  } catch (error) {
+    console.error('POST /api/order-lines/:lineId/overrides ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти заміну' });
+  }
+});
+
+app.delete('/api/order-line-overrides/:id', requireRole(), async (req, res) => {
+  try {
+    const rowCount = await db.deleteOrderLineOverride(Number(req.params.id));
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE /api/order-line-overrides/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити' });
+  }
+});
+
 app.post('/api/orders/:orderNumber/status', requireRole(), async (req, res) => {
   try {
     const { status, note } = req.body || {};
@@ -562,6 +600,31 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
 
     for (const account of seedAccounts) {
       await db.createAccountIfMissingWithHash(account);
+    }
+
+    const INVENTORY_BASELINE_NOTE = 'Інвентаризація 02.08.2026 (файл від Тетяни)';
+    const alreadyImportedBaseline = await db.countMovementsByNote(INVENTORY_BASELINE_NOTE);
+    if (alreadyImportedBaseline === 0) {
+      await db.applyInventoryBaseline(seedInventoryAug2, { movement_date: '2026-08-02', note: INVENTORY_BASELINE_NOTE });
+      console.log(`Applied inventory baseline: ${seedInventoryAug2.length} products (02.08.2026)`);
+    }
+
+    for (const name of seedKapranClients) {
+      await db.upsertClientByName(name, { manager: 'Капран' });
+    }
+
+    // Одноразовий масовий імпорт історичних замовлень (81 вкладка файлу,
+    // серпень 2026) — позначені source='SAP-history', щоб відрізнити від
+    // щоденних імпортів через веб-інтерфейс і щоб не повторювати цей крок
+    // на кожен рестарт сервера.
+    const alreadyImportedHistory = await db.countOrderLinesBySource('SAP-history');
+    if (alreadyImportedHistory === 0) {
+      const historyPath = path.join(__dirname, 'seed-orders-history.json');
+      if (fs.existsSync(historyPath)) {
+        const historyLines = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
+        const result = await db.importOrderLines(historyLines);
+        console.log(`Imported historical orders: ${JSON.stringify(result)}`);
+      }
     }
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);

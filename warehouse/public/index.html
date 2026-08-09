@@ -915,16 +915,66 @@ async function openOrder(orderNumber) {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося завантажити замовлення'); return; }
 
+  if (!window._materialsCache) {
+    const mResp = await fetch('/api/materials');
+    const mData = await mResp.json();
+    window._materialsCache = mData.ok ? mData.materials : [];
+  }
+
   document.getElementById('orderModalTitle').textContent = 'Замовлення № ' + orderNumber;
   document.getElementById('orderLinesContainer').innerHTML = data.lines.map((l) => `
     <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
       <div>${l.product_name_raw || l.product_code} <span style="color: var(--muted);">(${l.product_code})</span></div>
       <div style="color: var(--muted); font-size: 12px;">${fmt(l.qty)} шт · ${l.roast_type || '—'} · ${l.delivery_method || '—'} · ${orderStatusTag(l.status)}</div>
+      <div id="overrides_${l.id}">
+        ${(l.overrides || []).map((o) => `
+          <span class="tag warn" style="margin-top:4px; display:inline-block;" title="${o.note ? o.note.replace(/"/g, '&quot;') : ''}">
+            заміна: ${o.role} → ${o.material_name}${o.material_size_label ? ' (' + o.material_size_label + ')' : ''}
+            <a href="#" onclick="deleteOverride(${o.id}, ${l.id}); return false;" style="color: inherit; margin-left:4px;">×</a>
+          </span>
+        `).join(' ')}
+      </div>
+      <details style="margin-top:4px;">
+        <summary style="cursor:pointer; font-size:11px; color: var(--muted);">Форс-мажор: замінити пакування для цього рядка</summary>
+        <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap;">
+          <select id="ovRole_${l.id}" style="font-size:11px;">
+            ${SPEC_ROLES.map((r) => `<option value="${r.value}">${r.label}</option>`).join('')}
+          </select>
+          <select id="ovMaterial_${l.id}" style="font-size:11px; flex:1; min-width:160px;">
+            ${window._materialsCache.map((m) => `<option value="${m.id}">${m.material_type ? '[' + m.material_type + '] ' : ''}${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</option>`).join('')}
+          </select>
+          <input type="text" id="ovNote_${l.id}" placeholder="причина" style="font-size:11px; width:100px;">
+          <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveOverride(${l.id})">✓</button>
+        </div>
+      </details>
     </div>
   `).join('');
   document.getElementById('orderNewStatus').value = data.lines[0]?.status && data.lines[0].status !== 'змішаний' ? data.lines[0].status : 'нове';
   document.getElementById('orderStatusNote').value = '';
   document.getElementById('orderOverlay').classList.add('open');
+}
+
+async function saveOverride(lineId) {
+  const role = document.getElementById('ovRole_' + lineId).value;
+  const material_id = document.getElementById('ovMaterial_' + lineId).value;
+  const note = document.getElementById('ovNote_' + lineId).value.trim();
+
+  const resp = await fetch('/api/order-lines/' + lineId + '/overrides', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role, material_id: Number(material_id), note })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Заміну збережено');
+  openOrder(currentOrderNumber);
+}
+
+async function deleteOverride(overrideId) {
+  const resp = await fetch('/api/order-line-overrides/' + overrideId, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  openOrder(currentOrderNumber);
 }
 
 document.getElementById('btnCancelOrderStatus').onclick = () => {
