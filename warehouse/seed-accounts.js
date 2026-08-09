@@ -11,6 +11,13 @@ export default [
     "password_hash": "$2b$10$opagC/4sO0Rp7l.J2fr1BexlpMzGdVxS60.yg6MrjkuwUwACnTOUG"
   },
   {
+    "username": "buhgalteria",
+    "role": "бухгалтерія",
+    "home_station": null,
+    "display_name": "Бухгалтерія",
+    "password_hash": "$2b$10$do/a3zWL3c0/i8JrO1cNLeO5X8rxJyu2BnTEmbLklCPPUbhKrQ63m"
+  },
+  {
     "username": "kovalk",
     "role": "тімлід",
     "home_station": null,

@@ -129,7 +129,7 @@ app.post('/api/products/:code', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/stock', requireRole(), async (req, res) => {
+app.get('/api/stock', requireRole('бухгалтерія'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const stock = await db.listStock({ search });
@@ -386,7 +386,7 @@ app.post('/api/orders/import', requireRole(), upload.single('file'), async (req,
   }
 });
 
-app.get('/api/orders', requireRole(), async (req, res) => {
+app.get('/api/orders', requireRole('бухгалтерія'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const status = String(req.query.status || '').trim();
@@ -398,7 +398,7 @@ app.get('/api/orders', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/orders/:orderNumber', requireRole(), async (req, res) => {
+app.get('/api/orders/:orderNumber', requireRole('бухгалтерія'), async (req, res) => {
   try {
     const lines = await db.getOrderLines(req.params.orderNumber);
     res.json({ ok: true, lines });
@@ -498,7 +498,7 @@ app.get('/api/products/:code/movements', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/inventory/dates', requireRole(), async (req, res) => {
+app.get('/api/inventory/dates', requireRole('бухгалтерія'), async (req, res) => {
   try {
     const dates = await db.listInventoryDates();
     res.json({ ok: true, dates });
@@ -508,7 +508,7 @@ app.get('/api/inventory/dates', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/inventory/dates/:date', requireRole(), async (req, res) => {
+app.get('/api/inventory/dates/:date', requireRole('бухгалтерія'), async (req, res) => {
   try {
     const detail = await db.listInventoryDetail(req.params.date);
     res.json({ ok: true, detail });
@@ -518,7 +518,7 @@ app.get('/api/inventory/dates/:date', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/inventory/comparison', requireRole(), async (req, res) => {
+app.get('/api/inventory/comparison', requireRole('бухгалтерія'), async (req, res) => {
   try {
     const comparison = await db.listInventoryComparison();
     res.json({ ok: true, comparison });
@@ -663,6 +663,32 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
     const shipResult = await db.backfillHistoricalShipments({ baselineDate: '2026-08-02' });
     if (shipResult.movementsCreated > 0 || shipResult.statusOnly > 0) {
       console.log(`Historical shipments backfill: ${JSON.stringify(shipResult)}`);
+    }
+
+    // Уточнення від Тетяни: Nutty Boy 1000 (000009761) — 595 кг на 02.08,
+    // не 532. Перший імпорт цю позицію пропустив через конфлікт у файлі.
+    // Вносимо задніх числом (після того, як відвантаження вже записані) —
+    // тому напряму, а не через звичайний addMovement (див. коментар у db.js).
+    const NUTTY_BOY_NOTE = 'Інвентаризація 02.08.2026 (уточнено: 595 кг, Nutty Boy)';
+    const nuttyBoyInserted = await db.insertBackdatedInventoryBaseline('000009761', 595, '2026-08-02', NUTTY_BOY_NOTE);
+    if (nuttyBoyInserted > 0) {
+      console.log('Applied Nutty Boy 1000 baseline correction: 595 kg');
+    }
+    // Лікує вже вставлений раніше (помилковою версією коду) рух, якщо він є.
+    const nuttyBoyFixed = await db.fixBackdatedInventoryMovement('000009761', NUTTY_BOY_NOTE);
+    if (nuttyBoyFixed > 0) {
+      console.log('Fixed incorrectly-computed Nutty Boy baseline movement');
+    }
+
+    // Позиції без фізичної інвентаризації (виготовляються під замовлення) —
+    // Тетяна підтвердила: вважаємо "виготовили стільки, скільки відвантажили",
+    // вирівнюємо історичний мінус до 0 замість вигаданого числа.
+    const MADE_TO_ORDER_NOTE = 'Вирівнювання до 0 (виготовлено під замовлення, історія серпня 2026)';
+    if ((await db.countMovementsByNote(MADE_TO_ORDER_NOTE)) === 0) {
+      const zeroedCount = await db.zeroOutMadeToOrderDeficits(MADE_TO_ORDER_NOTE);
+      if (zeroedCount > 0) {
+        console.log(`Zeroed out ${zeroedCount} made-to-order product deficits`);
+      }
     }
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);

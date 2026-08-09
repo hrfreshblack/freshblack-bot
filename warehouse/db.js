@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 
 const { Pool } = pg;
 
-const ACCOUNT_ROLES = ['адмін', 'тімлід', 'станція'];
+const ACCOUNT_ROLES = ['адмін', 'тімлід', 'станція', 'бухгалтерія'];
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL
@@ -314,6 +314,35 @@ async function applyInventoryBaseline(rows, { movement_date, note }) {
     await updateProductFields(r.code, { is_stock_item: true });
     await addMovement({ product_code: r.code, movement_type: 'inventory_adjustment', qty: r.qty, movement_date, note });
   }
+}
+
+// addMovement для inventory_adjustment рахує signed_qty як "різниця від
+// ПОТОЧНОГО залишку" — правильно, коли рухи вносяться в хронологічному
+// порядку. Але якщо точку нуль додають ЗАДНІМ ЧИСЛОМ, коли пізніші рухи
+// (наприклад відвантаження) вже записані, "поточний залишок" — це вже
+// залишок ПІСЛЯ тих пізніших рухів, і формула рахує неправильно. Тут
+// ставимо signed_qty = qty напряму, як для першого-в-часі руху товару.
+async function insertBackdatedInventoryBaseline(code, qty, movementDate, note) {
+  await insertProductsIfMissing([{ code, is_stock_item: true, min_stock: 0 }]);
+  await updateProductFields(code, { is_stock_item: true });
+  const { rowCount } = await pool.query(
+    `INSERT INTO stock_movements (product_code, movement_type, qty, signed_qty, note, movement_date)
+     SELECT $1, 'inventory_adjustment', $2, $2, $4, $3
+     WHERE NOT EXISTS (SELECT 1 FROM stock_movements WHERE product_code = $1 AND movement_type = 'inventory_adjustment' AND note = $4)`,
+    [code, qty, movementDate, note]
+  );
+  return rowCount;
+}
+
+// Лікує вже вставлений задніх числом рух, у якого signed_qty порахувався
+// неправильно (див. коментар вище) — приводить signed_qty до qty.
+async function fixBackdatedInventoryMovement(code, note) {
+  const { rowCount } = await pool.query(
+    `UPDATE stock_movements SET signed_qty = qty
+     WHERE product_code = $1 AND movement_type = 'inventory_adjustment' AND note = $2 AND signed_qty != qty`,
+    [code, note]
+  );
+  return rowCount;
 }
 
 async function getProduct(code) {
@@ -895,6 +924,36 @@ async function backfillHistoricalShipments({ baselineDate }) {
   return { movementsCreated, statusOnly };
 }
 
+// Позиції, які виготовляють під замовлення (ніколи не рахували фізично на
+// 02.08 — немає inventory_adjustment) після історичного списання пішли в
+// мінус, бо в системі немає записів виробництва за серпень. Тетяна
+// підтвердила: для таких позицій вважаємо, що виготовили рівно стільки,
+// скільки відвантажили — вирівнюємо до 0 одним рухом "приймання
+// виробництва" замість вигаданого числа. Це одноразова історична
+// корекція; нові позиції надалі balance-яться реальними задачами/рухами.
+async function zeroOutMadeToOrderDeficits(note) {
+  const { rows } = await pool.query(
+    `SELECT p.code, COALESCE(SUM(m.signed_qty), 0) AS balance
+     FROM products p
+     LEFT JOIN stock_movements m ON m.product_code = p.code
+     WHERE p.code NOT IN (SELECT DISTINCT product_code FROM stock_movements WHERE movement_type = 'inventory_adjustment')
+     GROUP BY p.code
+     HAVING COALESCE(SUM(m.signed_qty), 0) < 0`
+  );
+
+  for (const r of rows) {
+    await addMovement({
+      product_code: r.code,
+      movement_type: 'production_in',
+      qty: -Number(r.balance),
+      movement_date: null,
+      note
+    });
+  }
+
+  return rows.length;
+}
+
 const MATERIAL_SIGNED_TYPES = {
   receipt: 1,
   consumption: -1,
@@ -1384,6 +1443,7 @@ export default {
   deleteOrderLineOverride,
   updateOrderStatus,
   backfillHistoricalShipments,
+  zeroOutMadeToOrderDeficits,
   insertClientsIfMissing,
   listClients,
   updateClient,
@@ -1391,6 +1451,8 @@ export default {
   updateProductFields,
   countMovementsByNote,
   applyInventoryBaseline,
+  insertBackdatedInventoryBaseline,
+  fixBackdatedInventoryMovement,
   listStock,
   listStations,
   createTask,

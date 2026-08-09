@@ -480,18 +480,20 @@
   <div class="modal" style="max-width: 560px;">
     <h2 id="orderModalTitle">Замовлення</h2>
     <div id="orderLinesContainer" style="margin-bottom: 16px; max-height: 300px; overflow-y: auto;"></div>
-    <div class="field">
-      <label>Новий статус</label>
-      <select id="orderNewStatus">
-        <option value="нове">нове</option>
-        <option value="в роботі">в роботі</option>
-        <option value="відвантажено">відвантажено</option>
-        <option value="скасовано">скасовано</option>
-      </select>
-    </div>
-    <div class="field">
-      <label>Коментар (напр. причина скасування)</label>
-      <input type="text" id="orderStatusNote" placeholder="необов'язково">
+    <div id="orderStatusEditor">
+      <div class="field">
+        <label>Новий статус</label>
+        <select id="orderNewStatus">
+          <option value="нове">нове</option>
+          <option value="в роботі">в роботі</option>
+          <option value="відвантажено">відвантажено</option>
+          <option value="скасовано">скасовано</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Коментар (напр. причина скасування)</label>
+        <input type="text" id="orderStatusNote" placeholder="необов'язково">
+      </div>
     </div>
     <div class="modal-actions">
       <button class="secondary" id="btnCancelOrderStatus">Закрити</button>
@@ -766,7 +768,7 @@ async function loadStock() {
       <td>${fmt(row.min_stock)}</td>
       <td>${stockStatusTag(row)}</td>
       <td>${row.last_movement_date ? new Date(row.last_movement_date).toLocaleDateString('uk-UA') : '—'}</td>
-      <td class="row-actions"><button class="secondary" onclick="openMovement('${row.code}', '${(row.name || row.code).replace(/'/g, "\\'")}')">+ Рух</button></td>
+      <td class="row-actions">${window._me && window._me.role === 'адмін' ? `<button class="secondary" onclick="openMovement('${row.code}', '${(row.name || row.code).replace(/'/g, "\\'")}')">+ Рух</button>` : ''}</td>
     </tr>
   `).join('');
 }
@@ -1052,7 +1054,9 @@ async function openOrder(orderNumber) {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося завантажити замовлення'); return; }
 
-  if (!window._materialsCache) {
+  const canManageOrders = window._me && window._me.role === 'адмін';
+
+  if (canManageOrders && !window._materialsCache) {
     const mResp = await fetch('/api/materials');
     const mData = await mResp.json();
     window._materialsCache = mData.ok ? mData.materials : [];
@@ -1067,27 +1071,31 @@ async function openOrder(orderNumber) {
         ${(l.overrides || []).map((o) => `
           <span class="tag warn" style="margin-top:4px; display:inline-block;" title="${o.note ? o.note.replace(/"/g, '&quot;') : ''}">
             заміна: ${o.role} → ${o.material_name}${o.material_size_label ? ' (' + o.material_size_label + ')' : ''}
-            <a href="#" onclick="deleteOverride(${o.id}, ${l.id}); return false;" style="color: inherit; margin-left:4px;">×</a>
+            ${canManageOrders ? `<a href="#" onclick="deleteOverride(${o.id}, ${l.id}); return false;" style="color: inherit; margin-left:4px;">×</a>` : ''}
           </span>
         `).join(' ')}
       </div>
-      <details style="margin-top:4px;">
-        <summary style="cursor:pointer; font-size:11px; color: var(--muted);">Форс-мажор: замінити пакування для цього рядка</summary>
-        <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap;">
-          <select id="ovRole_${l.id}" style="font-size:11px;">
-            ${SPEC_ROLES.map((r) => `<option value="${r.value}">${r.label}</option>`).join('')}
-          </select>
-          <select id="ovMaterial_${l.id}" style="font-size:11px; flex:1; min-width:160px;">
-            ${window._materialsCache.map((m) => `<option value="${m.id}">${m.material_type ? '[' + m.material_type + '] ' : ''}${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</option>`).join('')}
-          </select>
-          <input type="text" id="ovNote_${l.id}" placeholder="причина" style="font-size:11px; width:100px;">
-          <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveOverride(${l.id})">✓</button>
-        </div>
-      </details>
+      ${canManageOrders ? `
+        <details style="margin-top:4px;">
+          <summary style="cursor:pointer; font-size:11px; color: var(--muted);">Форс-мажор: замінити пакування для цього рядка</summary>
+          <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap;">
+            <select id="ovRole_${l.id}" style="font-size:11px;">
+              ${SPEC_ROLES.map((r) => `<option value="${r.value}">${r.label}</option>`).join('')}
+            </select>
+            <select id="ovMaterial_${l.id}" style="font-size:11px; flex:1; min-width:160px;">
+              ${window._materialsCache.map((m) => `<option value="${m.id}">${m.material_type ? '[' + m.material_type + '] ' : ''}${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</option>`).join('')}
+            </select>
+            <input type="text" id="ovNote_${l.id}" placeholder="причина" style="font-size:11px; width:100px;">
+            <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveOverride(${l.id})">✓</button>
+          </div>
+        </details>
+      ` : ''}
     </div>
   `).join('');
   document.getElementById('orderNewStatus').value = data.lines[0]?.status && data.lines[0].status !== 'змішаний' ? data.lines[0].status : 'нове';
   document.getElementById('orderStatusNote').value = '';
+  document.getElementById('orderStatusEditor').style.display = canManageOrders ? '' : 'none';
+  document.getElementById('btnSaveOrderStatus').style.display = canManageOrders ? '' : 'none';
   document.getElementById('orderOverlay').classList.add('open');
 }
 
@@ -1676,7 +1684,19 @@ document.getElementById('btnCloseSpec').onclick = () => {
   document.getElementById('specOverlay').classList.remove('open');
 };
 
-const ADMIN_ONLY_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
+const ALL_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabStations', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
+const ROLE_TABS = {
+  'адмін': ALL_TABS,
+  'тімлід': ['tabStations'],
+  'станція': ['tabStations'],
+  'бухгалтерія': ['tabStock', 'tabInventory', 'tabOrders']
+};
+const ROLE_DEFAULT_TAB = {
+  'адмін': 'products',
+  'тімлід': 'stations',
+  'станція': 'stations',
+  'бухгалтерія': 'stock'
+};
 
 async function initApp() {
   const resp = await fetch('/api/me');
@@ -1686,9 +1706,14 @@ async function initApp() {
 
   document.title = 'Fresh Black ERP — ' + (window._me.display_name || window._me.username);
 
-  if (window._me.role !== 'адмін') {
-    ADMIN_ONLY_TABS.forEach((id) => { document.getElementById(id).style.display = 'none'; });
-  }
+  const visible = ROLE_TABS[window._me.role] || [];
+  ALL_TABS.forEach((id) => {
+    document.getElementById(id).style.display = visible.includes(id) ? '' : 'none';
+  });
+
+  const canManageOrders = window._me.role === 'адмін';
+  document.getElementById('orderMenuDropdown').parentElement.style.display = canManageOrders ? '' : 'none';
+
   if (window._me.role === 'станція') {
     document.getElementById('btnAddTask').style.display = 'none';
   }
@@ -1696,11 +1721,7 @@ async function initApp() {
     currentStationFilter = window._me.home_station;
   }
 
-  if (window._me.role === 'адмін') {
-    showTab('products');
-  } else {
-    showTab('stations');
-  }
+  showTab(ROLE_DEFAULT_TAB[window._me.role] || 'stations');
 }
 
 initApp();
