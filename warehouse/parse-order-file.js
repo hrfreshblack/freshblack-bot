@@ -8,7 +8,7 @@ const HEADER_MATCHERS = [
   { field: 'order_number', includes: ['номер документа', 'номер замовлення'] },
   { field: 'order_date', includes: ['дата замов', 'дата регистрации', 'дата реєстрації'] },
   { field: 'ship_date', includes: ['дата відв', 'дата исполнения', 'дата виконання'] },
-  { field: 'customer_code', includes: ['код замовника', 'код заказчика'] },
+  { field: 'customer_code', includes: ['код замовника', 'код заказчика', 'код клієнта', 'код клиента'] },
   { field: 'customer_name', includes: ['назва замовника', 'название заказчика'] },
   { field: 'branch_name', includes: ['назва філіал', 'название филиала'] },
   { field: 'product_code', includes: ['код товару', 'код товара'] },

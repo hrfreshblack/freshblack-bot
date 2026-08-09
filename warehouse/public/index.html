@@ -100,6 +100,8 @@
   .tag.bad { background: rgba(224,82,60,0.15); color: var(--bad); }
   .tag.neutral { background: rgba(154,160,171,0.15); color: var(--muted); }
   .row-actions button { padding: 5px 9px; font-size: 12px; }
+  .clientLink { color: var(--accent); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
+  .orderDetailRow td { padding: 0; white-space: normal; }
   .empty { padding: 40px; text-align: center; color: var(--muted); }
   .recipeGroup { margin-bottom: 24px; }
   .recipeGroup h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin: 0 0 8px; }
@@ -378,13 +380,12 @@
           <th>Позицій</th>
           <th>Кількість</th>
           <th>Статус</th>
-          <th></th>
         </tr>
       </thead>
       <tbody id="ordersBody"></tbody>
     </table>
     </div>
-    <div class="empty" id="ordersEmpty" style="display:none;">Замовлень ще немає — завантаж файл через меню "⋯" вгорі.</div>
+    <div class="empty" id="ordersEmpty" style="display:none;">Замовлень ще немає — завантаж файл через меню "⋯" вгорі. Клікни на клієнта в рядку, щоб розгорнути перелік позицій замовлення.</div>
   </div>
 
   <div id="viewClients" style="display:none;">
@@ -480,18 +481,6 @@
     <div class="modal-actions">
       <button class="secondary" id="btnCancelProduct">Скасувати</button>
       <button id="btnSaveProduct">Зберегти</button>
-    </div>
-  </div>
-</div>
-
-<!-- Модалка: деталі замовлення / зміна статусу -->
-<div class="overlay" id="orderOverlay">
-  <div class="modal" style="max-width: 640px;">
-    <h2 id="orderModalTitle">Замовлення</h2>
-    <p id="orderModalMeta" style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;"></p>
-    <div id="orderLinesContainer" style="margin-bottom: 16px; max-height: 420px; overflow-y: auto;"></div>
-    <div class="modal-actions">
-      <button class="secondary" id="btnCancelOrderStatus">Закрити</button>
     </div>
   </div>
 </div>
@@ -1009,6 +998,8 @@ function orderStatusTag(status) {
 
 const ORDER_STATUS_OPTIONS = ['нове', 'в роботі', 'відвантажено', 'скасовано'];
 
+let _ordersData = [];
+
 async function loadOrders() {
   const search = document.getElementById('orderSearch').value.trim();
   const status = document.getElementById('orderStatusFilter').value;
@@ -1018,6 +1009,8 @@ async function loadOrders() {
   const empty = document.getElementById('ordersEmpty');
 
   if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  _ordersData = data.orders;
 
   if (!data.orders.length) {
     body.innerHTML = '';
@@ -1032,21 +1025,38 @@ async function loadOrders() {
       <td>${o.order_date ? new Date(o.order_date).toLocaleDateString('uk-UA') : '—'}</td>
       <td>${o.ship_date ? new Date(o.ship_date).toLocaleDateString('uk-UA') : '—'}</td>
       <td>${o.customer_code || '—'}</td>
-      <td>${o.customer_name || '—'}</td>
+      <td class="clientLink" onclick="toggleOrderRow('${o.order_number}')">${o.customer_name || '—'}</td>
       <td>${o.branch_name || '—'}</td>
       <td>${o.delivery_method || '—'}</td>
       <td>${o.line_count}</td>
       <td class="balance">${fmt(o.total_qty)}</td>
-      <td>${orderStatusTag(o.status)}</td>
-      <td class="row-actions"><button class="secondary" onclick="openOrder('${o.order_number}')">Деталі</button></td>
+      <td id="orderStatusCell_${o.order_number}">${orderStatusTag(o.status)}</td>
+    </tr>
+    <tr class="orderDetailRow" id="orderDetailRow_${o.order_number}" style="display:none;">
+      <td colspan="10" id="orderDetailCell_${o.order_number}"></td>
     </tr>
   `).join('');
 }
 
-let currentOrderNumber = null;
+async function toggleOrderRow(orderNumber) {
+  const row = document.getElementById('orderDetailRow_' + orderNumber);
+  const cell = document.getElementById('orderDetailCell_' + orderNumber);
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    return;
+  }
+  if (!cell.dataset.loaded) {
+    cell.innerHTML = '<div style="padding:10px; color: var(--muted);">Завантаження…</div>';
+    row.style.display = '';
+    await renderOrderDetail(orderNumber);
+    cell.dataset.loaded = '1';
+  } else {
+    row.style.display = '';
+  }
+}
 
-async function openOrder(orderNumber) {
-  currentOrderNumber = orderNumber;
+async function renderOrderDetail(orderNumber) {
+  const cell = document.getElementById('orderDetailCell_' + orderNumber);
   const resp = await fetch('/api/orders/' + encodeURIComponent(orderNumber));
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося завантажити замовлення'); return; }
@@ -1059,51 +1069,55 @@ async function openOrder(orderNumber) {
     window._materialsCache = mData.ok ? mData.materials : [];
   }
 
-  document.getElementById('orderModalTitle').textContent = 'Замовлення № ' + orderNumber;
-  const firstLine = data.lines[0];
-  document.getElementById('orderModalMeta').textContent = firstLine
-    ? `Код клієнта: ${firstLine.customer_code || '—'} · ${firstLine.customer_name || '—'}${firstLine.branch_name ? ' / ' + firstLine.branch_name : ''}`
-    : '';
-  document.getElementById('orderLinesContainer').innerHTML = data.lines.map((l) => `
-    <div style="padding: 8px 0; border-bottom: 1px solid var(--border);">
-      <div>${l.product_name_raw || l.product_code} <span style="color: var(--muted);">(${l.product_code})</span></div>
-      <div style="color: var(--muted); font-size: 12px;">${fmt(l.qty)} шт · ${l.roast_type || '—'} · ${l.delivery_method || '—'} · ${orderStatusTag(l.status)}</div>
-      <div id="overrides_${l.id}">
-        ${(l.overrides || []).map((o) => `
-          <span class="tag warn" style="margin-top:4px; display:inline-block;" title="${o.note ? o.note.replace(/"/g, '&quot;') : ''}">
-            заміна: ${o.role} → ${o.material_name}${o.material_size_label ? ' (' + o.material_size_label + ')' : ''}
-            ${canManageOrders ? `<a href="#" onclick="deleteOverride(${o.id}, ${l.id}); return false;" style="color: inherit; margin-left:4px;">×</a>` : ''}
-          </span>
-        `).join(' ')}
-      </div>
-      ${canManageOrders ? `
-        <div style="display:flex; gap:4px; margin-top:6px; flex-wrap: wrap; align-items:center;">
-          <select id="lineStatus_${l.id}" style="font-size:11px;">
-            ${ORDER_STATUS_OPTIONS.map((s) => `<option value="${s}" ${l.status === s ? 'selected' : ''}>${s}</option>`).join('')}
-          </select>
-          <input type="text" id="lineStatusNote_${l.id}" placeholder="коментар (напр. причина скасування)" style="font-size:11px; width:160px;" value="${(l.status_note || '').replace(/"/g, '&quot;')}">
-          <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveLineStatus(${l.id})">Змінити статус позиції</button>
-        </div>
-        <details style="margin-top:4px;">
-          <summary style="cursor:pointer; font-size:11px; color: var(--muted);">Форс-мажор: замінити пакування для цього рядка</summary>
-          <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap;">
-            <select id="ovRole_${l.id}" style="font-size:11px;">
-              ${SPEC_ROLES.map((r) => `<option value="${r.value}">${r.label}</option>`).join('')}
-            </select>
-            <select id="ovMaterial_${l.id}" style="font-size:11px; flex:1; min-width:160px;">
-              ${window._materialsCache.map((m) => `<option value="${m.id}">${m.material_type ? '[' + m.material_type + '] ' : ''}${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</option>`).join('')}
-            </select>
-            <input type="text" id="ovNote_${l.id}" placeholder="причина" style="font-size:11px; width:100px;">
-            <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveOverride(${l.id})">✓</button>
+  cell.innerHTML = `
+    <div style="padding: 8px 14px; background: var(--panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+      ${data.lines.map((l) => `
+        <div style="padding: 8px 0; border-bottom: 1px solid var(--border); white-space: normal;">
+          <div>${l.product_name_raw || l.product_code} <span style="color: var(--muted);">(${l.product_code})</span></div>
+          <div style="color: var(--muted); font-size: 12px;">${fmt(l.qty)} шт · ${l.roast_type || '—'} · ${l.delivery_method || '—'} · ${orderStatusTag(l.status)}</div>
+          <div id="overrides_${l.id}">
+            ${(l.overrides || []).map((o) => `
+              <span class="tag warn" style="margin-top:4px; display:inline-block;" title="${o.note ? o.note.replace(/"/g, '&quot;') : ''}">
+                заміна: ${o.role} → ${o.material_name}${o.material_size_label ? ' (' + o.material_size_label + ')' : ''}
+                ${canManageOrders ? `<a href="#" onclick="deleteOverride(${o.id}, '${orderNumber}'); return false;" style="color: inherit; margin-left:4px;">×</a>` : ''}
+              </span>
+            `).join(' ')}
           </div>
-        </details>
-      ` : ''}
+          ${canManageOrders ? `
+            <div style="display:flex; gap:4px; margin-top:6px; flex-wrap: wrap; align-items:center;">
+              <select id="lineStatus_${l.id}" style="font-size:11px;">
+                ${ORDER_STATUS_OPTIONS.map((s) => `<option value="${s}" ${l.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+              </select>
+              <input type="text" id="lineStatusNote_${l.id}" placeholder="коментар (напр. причина скасування)" style="font-size:11px; width:160px;" value="${(l.status_note || '').replace(/"/g, '&quot;')}">
+              <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveLineStatus(${l.id}, '${orderNumber}')">Змінити статус позиції</button>
+            </div>
+            <details style="margin-top:4px;">
+              <summary style="cursor:pointer; font-size:11px; color: var(--muted);">Форс-мажор: замінити пакування для цього рядка</summary>
+              <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap;">
+                <select id="ovRole_${l.id}" style="font-size:11px;">
+                  ${SPEC_ROLES.map((r) => `<option value="${r.value}">${r.label}</option>`).join('')}
+                </select>
+                <select id="ovMaterial_${l.id}" style="font-size:11px; flex:1; min-width:160px;">
+                  ${window._materialsCache.map((m) => `<option value="${m.id}">${m.material_type ? '[' + m.material_type + '] ' : ''}${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</option>`).join('')}
+                </select>
+                <input type="text" id="ovNote_${l.id}" placeholder="причина" style="font-size:11px; width:100px;">
+                <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveOverride(${l.id}, '${orderNumber}')">✓</button>
+              </div>
+            </details>
+          ` : ''}
+        </div>
+      `).join('')}
     </div>
-  `).join('');
-  document.getElementById('orderOverlay').classList.add('open');
+  `;
+
+  // Статус зведеного рядка може стати "змішаний", якщо позиції розʼїхались по статусу
+  const statuses = new Set(data.lines.map((l) => l.status));
+  const aggStatus = statuses.size === 1 ? [...statuses][0] : 'змішаний';
+  const statusCell = document.getElementById('orderStatusCell_' + orderNumber);
+  if (statusCell) statusCell.innerHTML = orderStatusTag(aggStatus);
 }
 
-async function saveLineStatus(lineId) {
+async function saveLineStatus(lineId, orderNumber) {
   const status = document.getElementById('lineStatus_' + lineId).value;
   const note = document.getElementById('lineStatusNote_' + lineId).value.trim();
   const resp = await fetch('/api/order-lines/' + lineId + '/status', {
@@ -1114,11 +1128,10 @@ async function saveLineStatus(lineId) {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
   showToast('Статус позиції оновлено');
-  openOrder(currentOrderNumber);
-  loadOrders();
+  await renderOrderDetail(orderNumber);
 }
 
-async function saveOverride(lineId) {
+async function saveOverride(lineId, orderNumber) {
   const role = document.getElementById('ovRole_' + lineId).value;
   const material_id = document.getElementById('ovMaterial_' + lineId).value;
   const note = document.getElementById('ovNote_' + lineId).value.trim();
@@ -1131,19 +1144,15 @@ async function saveOverride(lineId) {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
   showToast('Заміну збережено');
-  openOrder(currentOrderNumber);
+  await renderOrderDetail(orderNumber);
 }
 
-async function deleteOverride(overrideId) {
+async function deleteOverride(overrideId, orderNumber) {
   const resp = await fetch('/api/order-line-overrides/' + overrideId, { method: 'DELETE' });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
-  openOrder(currentOrderNumber);
+  await renderOrderDetail(orderNumber);
 }
-
-document.getElementById('btnCancelOrderStatus').onclick = () => {
-  document.getElementById('orderOverlay').classList.remove('open');
-};
 
 document.getElementById('btnOrderMenu').onclick = (e) => {
   e.stopPropagation();
