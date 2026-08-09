@@ -76,7 +76,8 @@
     border-color: var(--border);
   }
   button:active { transform: translateY(1px); }
-  main { padding: 0 24px 40px; overflow-x: auto; }
+  main { padding: 0 24px 40px; }
+  .tableWrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; min-width: 720px; }
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th {
@@ -190,6 +191,7 @@
       <button class="secondary" id="btnAddProduct">+ Товар</button>
     </div>
     <p style="color: var(--muted); margin: 0 0 14px;">Довідник усіх позицій — код, станція, статус. Залишки й рухи — на вкладці "Склад".</p>
+    <div class="tableWrap">
     <table id="productsTable">
       <thead>
         <tr>
@@ -204,6 +206,7 @@
       </thead>
       <tbody id="productsBody"></tbody>
     </table>
+    </div>
     <div class="empty" id="emptyState" style="display:none;">Товарів ще немає — додай перший кнопкою "+ Товар".</div>
   </div>
 
@@ -211,6 +214,7 @@
     <div class="viewToolbar">
       <input type="search" id="stockSearch" placeholder="Пошук за кодом чи назвою…">
     </div>
+    <div class="tableWrap">
     <table id="stockTable">
       <thead>
         <tr>
@@ -228,12 +232,14 @@
       </thead>
       <tbody id="stockBody"></tbody>
     </table>
+    </div>
     <div class="empty" id="stockEmpty" style="display:none;">Складських товарів ще немає.</div>
   </div>
 
   <div id="viewInventory" style="display:none;">
     <div class="chips" id="inventoryDateChips"></div>
     <p style="color: var(--muted); margin: 12px 0;">Розбіжність = порахована кількість мінус те, що система очікувала побачити (від'ємна — знайшли менше, додатна — більше).</p>
+    <div class="tableWrap">
     <table id="inventoryDetailTable">
       <thead>
         <tr>
@@ -246,9 +252,11 @@
       </thead>
       <tbody id="inventoryDetailBody"></tbody>
     </table>
+    </div>
     <div class="empty" id="inventoryDetailEmpty" style="display:none;">Інвентаризацій ще не було. Внось через "+ Рух" на вкладці "Склад" — тип "Інвентаризація — фактично порахована кількість".</div>
 
     <h3 style="margin: 28px 0 12px; font-size: 14px;">Порівняння: перша інвентаризація → зараз</h3>
+    <div class="tableWrap">
     <table id="inventoryComparisonTable">
       <thead>
         <tr>
@@ -263,6 +271,7 @@
       </thead>
       <tbody id="inventoryComparisonBody"></tbody>
     </table>
+    </div>
   </div>
 
   <div id="viewStations" style="display:none;">
@@ -277,6 +286,7 @@
       <input type="date" id="taskDateTo">
       <button class="secondary" id="btnAddTask">+ Задача</button>
     </div>
+    <div class="tableWrap">
     <table id="tasksTable">
       <thead>
         <tr>
@@ -292,6 +302,7 @@
       </thead>
       <tbody id="tasksBody"></tbody>
     </table>
+    </div>
     <div class="empty" id="tasksEmpty" style="display:none;">Задач немає за обраний період.</div>
   </div>
 
@@ -301,6 +312,7 @@
       <button class="secondary" id="btnAddMaterial">+ Матеріал</button>
     </div>
     <p style="color: var(--muted); margin: 0 0 14px;">Пакувальні матеріали (плівка, пачки, коробки, наліпки) — окремий облік від готової продукції. "Період замовлення" — за скільки днів приходить від постачальника, для розрахунку коли й скільки замовляти.</p>
+    <div class="tableWrap">
     <table id="materialsTable">
       <thead>
         <tr>
@@ -316,6 +328,7 @@
       </thead>
       <tbody id="materialsBody"></tbody>
     </table>
+    </div>
     <div class="empty" id="materialsEmpty" style="display:none;">Розхідників ще немає.</div>
   </div>
 
@@ -343,6 +356,7 @@
       </div>
       <input type="file" id="orderFileInput" accept=".xlsx,.xls" style="display:none;">
     </div>
+    <div class="tableWrap">
     <table id="ordersTable">
       <thead>
         <tr>
@@ -360,6 +374,7 @@
       </thead>
       <tbody id="ordersBody"></tbody>
     </table>
+    </div>
     <div class="empty" id="ordersEmpty" style="display:none;">Замовлень ще немає — завантаж файл через меню "⋯" вгорі.</div>
   </div>
 
@@ -368,6 +383,7 @@
       <input type="search" id="clientSearch" placeholder="Пошук за кодом/назвою/групою…">
     </div>
     <p style="color: var(--muted); margin: 0 0 14px;">Клієнти додаються автоматично з імпортованих замовлень. "Група партнера" — щоб об'єднати кілька ФОП/ТОВ одного фактичного партнера (наприклад, Капран).</p>
+    <div class="tableWrap">
     <table id="clientsTable">
       <thead>
         <tr>
@@ -380,6 +396,7 @@
       </thead>
       <tbody id="clientsBody"></tbody>
     </table>
+    </div>
     <div class="empty" id="clientsEmpty" style="display:none;">Клієнтів ще немає — з'являться після імпорту замовлень.</div>
   </div>
 </main>

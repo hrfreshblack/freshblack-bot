@@ -839,6 +839,20 @@ async function updateOrderStatus(orderNumber, status, note) {
         note: `Замовлення №${orderNumber}`
       });
     }
+  } else {
+    // Замовлення виходить зі стану "відвантажено" (скасовано/повернено в
+    // роботу) — товар, який уже був списаний, повертається на склад
+    // рухом "повернення". Якщо рядок ще не був відвантажений, чіпати нічого.
+    for (const line of linesBefore) {
+      if (line.status !== 'відвантажено') continue;
+      await addMovement({
+        product_code: line.product_code,
+        movement_type: 'return',
+        qty: line.qty,
+        movement_date: null,
+        note: `Скасування/зміна статусу замовлення №${orderNumber}`
+      });
+    }
   }
 
   return rowCount;
