@@ -18,6 +18,13 @@ export default [
     "password_hash": "$2b$10$do/a3zWL3c0/i8JrO1cNLeO5X8rxJyu2BnTEmbLklCPPUbhKrQ63m"
   },
   {
+    "username": "kladovshchyk",
+    "role": "кладовщик",
+    "home_station": null,
+    "display_name": "Кладовщик",
+    "password_hash": "$2b$10$/peSwRTeIEEwCu6bRg3AQuKBUv9ea/SS1RlClFBEDMmZM6vfdcoJO"
+  },
+  {
     "username": "kovalk",
     "role": "тімлід",
     "home_station": null,

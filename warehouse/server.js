@@ -187,7 +187,7 @@ app.post('/api/products/:code', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/stock', requireRole('бухгалтерія'), async (req, res) => {
+app.get('/api/stock', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const stock = await db.listStock({ search });
@@ -313,7 +313,7 @@ app.post('/api/tasks/:id/status', requireRole('тімлід', 'станція'),
   }
 });
 
-app.get('/api/materials', requireRole(), async (req, res) => {
+app.get('/api/materials', requireRole('кладовщик'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const materials = await db.listMaterials({ search });
@@ -444,7 +444,7 @@ app.post('/api/orders/import', requireRole(), upload.single('file'), async (req,
   }
 });
 
-app.get('/api/orders', requireRole('бухгалтерія'), async (req, res) => {
+app.get('/api/orders', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const status = String(req.query.status || '').trim();
@@ -456,7 +456,7 @@ app.get('/api/orders', requireRole('бухгалтерія'), async (req, res) =
   }
 });
 
-app.get('/api/orders/:orderNumber', requireRole('бухгалтерія'), async (req, res) => {
+app.get('/api/orders/:orderNumber', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const lines = await db.getOrderLines(req.params.orderNumber);
     res.json({ ok: true, lines });
@@ -466,7 +466,7 @@ app.get('/api/orders/:orderNumber', requireRole('бухгалтерія'), async
   }
 });
 
-app.post('/api/order-lines/:lineId/overrides', requireRole(), async (req, res) => {
+app.post('/api/order-lines/:lineId/overrides', requireRole('кладовщик'), async (req, res) => {
   try {
     const { role, material_id, note } = req.body || {};
     if (!role || !material_id) {
@@ -487,7 +487,7 @@ app.post('/api/order-lines/:lineId/overrides', requireRole(), async (req, res) =
   }
 });
 
-app.delete('/api/order-line-overrides/:id', requireRole(), async (req, res) => {
+app.delete('/api/order-line-overrides/:id', requireRole('кладовщик'), async (req, res) => {
   try {
     const rowCount = await db.deleteOrderLineOverride(Number(req.params.id));
     if (!rowCount) {
@@ -520,7 +520,7 @@ app.post('/api/orders/:orderNumber/status', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/order-lines/:lineId/status', requireRole(), async (req, res) => {
+app.post('/api/order-lines/:lineId/status', requireRole('кладовщик'), async (req, res) => {
   try {
     const { status, note } = req.body || {};
     if (!db.ORDER_STATUSES.includes(status)) {
@@ -565,7 +565,7 @@ app.post('/api/clients/:customerCode', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/products/:code/movements', requireRole(), async (req, res) => {
+app.get('/api/products/:code/movements', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const movements = await db.listMovements(req.params.code);
     res.json({ ok: true, movements });
@@ -575,7 +575,7 @@ app.get('/api/products/:code/movements', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/inventory/dates', requireRole('бухгалтерія'), async (req, res) => {
+app.get('/api/inventory/dates', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const dates = await db.listInventoryDates();
     res.json({ ok: true, dates });
@@ -585,7 +585,7 @@ app.get('/api/inventory/dates', requireRole('бухгалтерія'), async (re
   }
 });
 
-app.get('/api/inventory/dates/:date', requireRole('бухгалтерія'), async (req, res) => {
+app.get('/api/inventory/dates/:date', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const detail = await db.listInventoryDetail(req.params.date);
     res.json({ ok: true, detail });
@@ -595,7 +595,7 @@ app.get('/api/inventory/dates/:date', requireRole('бухгалтерія'), asy
   }
 });
 
-app.get('/api/inventory/comparison', requireRole('бухгалтерія'), async (req, res) => {
+app.get('/api/inventory/comparison', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const comparison = await db.listInventoryComparison();
     res.json({ ok: true, comparison });
@@ -605,7 +605,7 @@ app.get('/api/inventory/comparison', requireRole('бухгалтерія'), asyn
   }
 });
 
-app.post('/api/movements', requireRole(), async (req, res) => {
+app.post('/api/movements', requireRole('кладовщик'), async (req, res) => {
   try {
     const { product_code, movement_type, qty, note, movement_date, created_by } = req.body || {};
 

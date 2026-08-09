@@ -4,7 +4,7 @@ import crypto from 'crypto';
 
 const { Pool } = pg;
 
-const ACCOUNT_ROLES = ['адмін', 'тімлід', 'станція', 'бухгалтерія'];
+const ACCOUNT_ROLES = ['адмін', 'тімлід', 'станція', 'бухгалтерія', 'кладовщик'];
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL
@@ -805,6 +805,7 @@ async function listOrders({ search = '', status = '' } = {}) {
             COUNT(*)::int AS line_count,
             SUM(qty) AS total_qty,
             CASE WHEN COUNT(DISTINCT status) = 1 THEN MIN(status) ELSE 'змішаний' END AS status,
+            BOOL_OR(grind_flag = 'Так' OR (grind_flag = '' AND grind_type != '')) AS needs_grind,
             MAX(imported_at) AS imported_at
      FROM order_lines
      ${where}

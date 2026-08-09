@@ -402,6 +402,7 @@
           <th>Доставка</th>
           <th>Позицій</th>
           <th>Кількість</th>
+          <th>Помел</th>
           <th>Статус</th>
         </tr>
       </thead>
@@ -545,7 +546,7 @@
     </div>
     <div class="field">
       <label>Коментар</label>
-      <input type="text" id="tComment" placeholder="необов'язково">
+      <input type="text" id="tComment" placeholder="напр. потрібен помел: фільтр машина">
     </div>
     <div class="modal-actions">
       <button class="secondary" id="btnCancelTask">Скасувати</button>
@@ -775,7 +776,7 @@ async function loadStock() {
       <td>${fmt(row.min_stock)}</td>
       <td>${stockStatusTag(row)}</td>
       <td>${row.last_movement_date ? new Date(row.last_movement_date).toLocaleDateString('uk-UA') : '—'}</td>
-      <td class="row-actions">${window._me && window._me.role === 'адмін' ? `<button class="secondary" onclick="openMovement('${row.code}', '${(row.name || row.code).replace(/'/g, "\\'")}')">+ Рух</button>` : ''}</td>
+      <td class="row-actions">${window._me && ['адмін', 'кладовщик'].includes(window._me.role) ? `<button class="secondary" onclick="openMovement('${row.code}', '${(row.name || row.code).replace(/'/g, "\\'")}')">+ Рух</button>` : ''}</td>
     </tr>
   `).join('');
 }
@@ -1022,6 +1023,10 @@ function orderStatusTag(status) {
 
 const ORDER_STATUS_OPTIONS = ['нове', 'в роботі', 'відвантажено', 'скасовано'];
 
+function lineNeedsGrind(l) {
+  return l.grind_flag === 'Так' || (!l.grind_flag && !!l.grind_type);
+}
+
 let _ordersData = [];
 
 async function loadOrders() {
@@ -1054,10 +1059,11 @@ async function loadOrders() {
       <td>${o.delivery_method || '—'}</td>
       <td>${o.line_count}</td>
       <td class="balance">${fmt(o.total_qty)}</td>
+      <td>${o.needs_grind ? '<span class="tag warn">потрібен помел</span>' : '—'}</td>
       <td id="orderStatusCell_${o.order_number}">${orderStatusTag(o.status)}</td>
     </tr>
     <tr class="orderDetailRow" id="orderDetailRow_${o.order_number}" style="display:none;">
-      <td colspan="10" id="orderDetailCell_${o.order_number}"></td>
+      <td colspan="11" id="orderDetailCell_${o.order_number}"></td>
     </tr>
   `).join('');
 }
@@ -1085,7 +1091,7 @@ async function renderOrderDetail(orderNumber) {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося завантажити замовлення'); return; }
 
-  const canManageOrders = window._me && window._me.role === 'адмін';
+  const canManageOrders = window._me && ['адмін', 'кладовщик'].includes(window._me.role);
 
   if (canManageOrders && !window._materialsCache) {
     const mResp = await fetch('/api/materials');
@@ -1099,6 +1105,7 @@ async function renderOrderDetail(orderNumber) {
         <div style="padding: 8px 0; border-bottom: 1px solid var(--border); white-space: normal;">
           <div>${l.product_name_raw || l.product_code} <span style="color: var(--muted);">(${l.product_code})</span></div>
           <div style="color: var(--muted); font-size: 12px;">${fmt(l.qty)} шт · ${l.roast_type || '—'} · ${l.delivery_method || '—'} · ${orderStatusTag(l.status)}</div>
+          ${lineNeedsGrind(l) ? `<div style="margin-top:4px;"><span class="tag warn">⚠ потрібен помел${l.grind_type ? ': ' + l.grind_type : ''}</span> <span style="color: var(--muted); font-size: 11px;">— відвантажити мелену каву, не зерно</span></div>` : ''}
           <div id="overrides_${l.id}">
             ${(l.overrides || []).map((o) => `
               <span class="tag warn" style="margin-top:4px; display:inline-block;" title="${o.note ? o.note.replace(/"/g, '&quot;') : ''}">
@@ -1427,7 +1434,7 @@ async function loadTasks() {
     <tr>
       <td>${new Date(t.task_date).toLocaleDateString('uk-UA')}</td>
       <td>${t.station}</td>
-      <td>${t.product_name || t.product_code || '—'}</td>
+      <td>${t.product_name || t.product_code || '—'}${t.comment ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${t.comment}</div>` : ''}</td>
       <td class="balance">${fmt(t.planned_qty)}${t.actual_qty !== null ? ' (факт ' + fmt(t.actual_qty) + ')' : ''}</td>
       <td>${t.unit || ''}</td>
       <td>${t.reason}</td>
@@ -1726,13 +1733,15 @@ const ROLE_TABS = {
   'адмін': ALL_TABS,
   'тімлід': ['tabStations'],
   'станція': ['tabStations'],
-  'бухгалтерія': ['tabStock', 'tabInventory', 'tabOrders']
+  'бухгалтерія': ['tabStock', 'tabInventory', 'tabOrders'],
+  'кладовщик': ['tabStock', 'tabInventory', 'tabOrders']
 };
 const ROLE_DEFAULT_TAB = {
   'адмін': 'products',
   'тімлід': 'stations',
   'станція': 'stations',
-  'бухгалтерія': 'stock'
+  'бухгалтерія': 'stock',
+  'кладовщик': 'stock'
 };
 
 async function initApp() {
