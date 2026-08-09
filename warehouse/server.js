@@ -32,33 +32,56 @@ app.get('/health', (_req, res) => {
   res.status(200).send('OK');
 });
 
-// Basic Auth, але облікові записи — з бази (таблиця accounts), не спільний
-// пароль на весь сайт. role: 'адмін' (весь доступ), 'тімлід' (усе на
-// вкладці "Станції" для всіх станцій), 'станція' (тільки свої задачі —
-// почати/пауза/завершити — з перемикачем станції в інтерфейсі).
+// Кукі-сесія зі "ковзним" таймаутом замість Basic Auth. Basic Auth браузер
+// кешує назавжди (поки вкладку/браузер не закрити) — не було способу
+// вийти, і "якщо годину нічого не робили — вихід" неможливо було зробити
+// в принципі. Токен у httpOnly-кукі + рядок у таблиці sessions;
+// db.touchSession() на кожен запит подовжує термін дії ще на годину від
+// поточного моменту, і так само подовжується Max-Age самої кукі нижче.
+const SESSION_COOKIE = 'fb_session';
+const SESSION_MAX_AGE_SECONDS = 60 * 60;
+
+function parseCookies(req) {
+  const header = req.get('Cookie') || '';
+  const cookies = {};
+  header.split(';').forEach((pair) => {
+    const idx = pair.indexOf('=');
+    if (idx === -1) return;
+    const key = pair.slice(0, idx).trim();
+    if (key) cookies[key] = decodeURIComponent(pair.slice(idx + 1).trim());
+  });
+  return cookies;
+}
+
+function setSessionCookie(res, token) {
+  const secure = process.env.NODE_ENV === 'production' ? ' Secure;' : '';
+  res.append('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}`);
+}
+
+function clearSessionCookie(res) {
+  res.append('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
 async function authMiddleware(req, res, next) {
-  const header = req.get('Authorization') || '';
-  const [scheme, encoded] = header.split(' ');
+  const token = parseCookies(req)[SESSION_COOKIE];
 
-  if (scheme === 'Basic' && encoded) {
+  if (token) {
     try {
-      const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-      const separatorIndex = decoded.indexOf(':');
-      const username = decoded.slice(0, separatorIndex);
-      const password = decoded.slice(separatorIndex + 1);
-
-      const account = await db.findAccountByUsername(username);
-      if (account && (await db.verifyAccountPassword(account, password))) {
-        req.account = account;
-        return next();
+      const username = await db.touchSession(token);
+      if (username) {
+        const account = await db.findAccountByUsername(username);
+        if (account) {
+          req.account = account;
+          setSessionCookie(res, token); // подовжуємо й кукі в браузері, не лише запис у базі
+          return next();
+        }
       }
     } catch (error) {
       console.error('Auth ERROR:', error?.message || error);
     }
   }
 
-  res.set('WWW-Authenticate', 'Basic realm="FreshBlack ERP"');
-  res.sendStatus(401);
+  res.status(401).json({ ok: false, error: 'Сесія завершена, увійдіть знову' });
 }
 
 // адмін завжди проходить. Якщо перелік ролей порожній — це адмін-only маршрут.
@@ -69,9 +92,44 @@ function requireRole(...roles) {
   };
 }
 
-app.use(authMiddleware);
-
+// Статика (сторінка, стилі, JS) віддається без авторизації — інакше
+// сторінка входу сама не змогла б завантажитись. Дані йдуть лише через
+// /api/*, який вже за authMiddleware нижче.
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      res.status(400).json({ ok: false, error: 'Потрібні логін і пароль' });
+      return;
+    }
+    const account = await db.findAccountByUsername(username);
+    if (!account || !(await db.verifyAccountPassword(account, password))) {
+      res.status(401).json({ ok: false, error: 'Невірний логін або пароль' });
+      return;
+    }
+    const token = await db.createSession(account.username);
+    setSessionCookie(res, token);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/login ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося увійти' });
+  }
+});
+
+app.post('/api/logout', async (req, res) => {
+  try {
+    const token = parseCookies(req)[SESSION_COOKIE];
+    if (token) await db.deleteSession(token);
+  } catch (error) {
+    console.error('POST /api/logout ERROR:', error?.message || error);
+  }
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.use(authMiddleware);
 
 app.get('/api/me', (req, res) => {
   const { username, role, home_station, display_name } = req.account;
@@ -676,6 +734,24 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
       }
     }
 
+    // Одноразова міграція + виправлення багу: попередня версія backfill-у
+    // орієнтувалась на "статус != відвантажено", що на кожному рестарті
+    // сервера сприймало ручне скасування замовлення як "ще не оброблено" —
+    // повертало статус на "відвантажено" і додавало дублікат руху списання.
+    // migrateHistoricalBackfillMarker() спершу позначає вже оброблені рядки
+    // назавжди (щоб новий backfill їх більше не чіпав), а
+    // cleanupDuplicateHistoricalBackfillMovements() прибирає накопичені
+    // дублікати рухів і повертає статус "скасовано" там, де його помилково
+    // відкотило назад.
+    const markedCount = await db.migrateHistoricalBackfillMarker();
+    if (markedCount > 0) {
+      console.log(`Marked ${markedCount} historical order lines as already backfilled`);
+    }
+    const cleanupResult = await db.cleanupDuplicateHistoricalBackfillMovements();
+    if (cleanupResult.dupesRemoved > 0 || cleanupResult.statusesFixed > 0) {
+      console.log(`Cleaned up historical backfill bug: ${JSON.stringify(cleanupResult)}`);
+    }
+
     // Історичні замовлення по факту вже відвантажені в реальності — ставить
     // статус "відвантажено" всім, і списує зі складу ті, що після точки нуль
     // інвентаризації (до неї це вже враховано в порахованому залишку).
@@ -717,4 +793,11 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Warehouse server started on port ${PORT}`);
   });
+
+  // Прибирає прострочені сесії з таблиці (не впливає на те, коли саме
+  // токен перестає працювати — це вирішує touchSession на кожен запит,
+  // тут лише прибирання, щоб таблиця не росла безмежно).
+  setInterval(() => {
+    db.cleanupExpiredSessions().catch((error) => console.error('cleanupExpiredSessions ERROR:', error?.message || error));
+  }, 15 * 60 * 1000);
 })();

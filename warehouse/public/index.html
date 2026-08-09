@@ -178,9 +178,32 @@
 </head>
 <body>
 
+<div class="overlay open" id="loginScreen">
+  <div class="modal" style="max-width: 340px;">
+    <h2>📦 Fresh Black ERP — Вхід</h2>
+    <div class="field">
+      <label>Логін</label>
+      <input type="text" id="loginUsername" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Пароль</label>
+      <input type="password" id="loginPassword" autocomplete="current-password">
+    </div>
+    <div id="loginError" style="color: var(--bad); font-size: 12px; margin-bottom: 8px; display: none;"></div>
+    <div class="modal-actions">
+      <button id="btnLogin">Увійти</button>
+    </div>
+  </div>
+</div>
+
+<div id="appShell" style="display: none;">
 <header>
   <div class="brandRow">
     <h1>📦 Fresh Black ERP — Виробництво</h1>
+    <div style="display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted);">
+      <span id="currentUserLabel"></span>
+      <button class="secondary" id="btnLogout" style="padding: 5px 10px; font-size: 12px;">Вийти</button>
+    </div>
   </div>
   <nav class="tabs">
     <button id="tabProducts" onclick="showTab('products')">Товари</button>
@@ -650,6 +673,7 @@
 </div>
 
 <div id="toast"></div>
+</div>
 
 <script>
 let currentCode = null;
@@ -1714,10 +1738,14 @@ const ROLE_DEFAULT_TAB = {
 async function initApp() {
   const resp = await fetch('/api/me');
   const data = await resp.json();
-  if (!data.ok) { showToast('Не вдалося авторизуватись'); return; }
+  if (!data.ok) { showLoginScreen(); return; }
   window._me = data.account;
 
+  document.getElementById('loginScreen').classList.remove('open');
+  document.getElementById('appShell').style.display = '';
+
   document.title = 'Fresh Black ERP — ' + (window._me.display_name || window._me.username);
+  document.getElementById('currentUserLabel').textContent = window._me.display_name || window._me.username;
 
   const visible = ROLE_TABS[window._me.role] || [];
   ALL_TABS.forEach((id) => {
@@ -1736,6 +1764,66 @@ async function initApp() {
 
   showTab(ROLE_DEFAULT_TAB[window._me.role] || 'stations');
 }
+
+function showLoginScreen() {
+  document.getElementById('appShell').style.display = 'none';
+  document.getElementById('loginScreen').classList.add('open');
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('loginError').style.display = 'none';
+  document.getElementById('loginUsername').focus();
+}
+
+async function doLogin() {
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errorBox = document.getElementById('loginError');
+  errorBox.style.display = 'none';
+
+  if (!username || !password) {
+    errorBox.textContent = 'Введи логін і пароль';
+    errorBox.style.display = 'block';
+    return;
+  }
+
+  const resp = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  });
+  const data = await resp.json();
+  if (!data.ok) {
+    errorBox.textContent = data.error || 'Не вдалося увійти';
+    errorBox.style.display = 'block';
+    return;
+  }
+  initApp();
+}
+
+document.getElementById('btnLogin').onclick = doLogin;
+document.getElementById('loginPassword').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doLogin();
+});
+document.getElementById('loginUsername').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('loginPassword').focus();
+});
+
+document.getElementById('btnLogout').onclick = async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  window._me = null;
+  showLoginScreen();
+};
+
+// Якщо сесія завершилась (минула година бездіяльності) — будь-який наступний
+// запит до /api/* поверне 401, і треба показати екран входу, а не мовчки
+// провалювати дію чи показувати порожні дані.
+const _origFetch = window.fetch;
+window.fetch = async (...args) => {
+  const resp = await _origFetch(...args);
+  if (resp.status === 401 && typeof args[0] === 'string' && args[0].startsWith('/api/') && args[0] !== '/api/login') {
+    showLoginScreen();
+  }
+  return resp;
+};
 
 initApp();
 </script>

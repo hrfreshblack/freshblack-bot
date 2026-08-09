@@ -1,5 +1,6 @@
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 
 const { Pool } = pg;
 
@@ -97,6 +98,13 @@ async function initSchema() {
       UNIQUE (order_number, product_code)
     );
     ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'SAP';
+    -- Позначає, що backfillHistoricalShipments уже обробив цей рядок — НАЗАВЖДИ,
+    -- незалежно від того, який статус користувач виставить пізніше вручну.
+    -- Без цього прапорця backfill орієнтувався на "status != 'відвантажено'",
+    -- що збігалося і з "ще не оброблено", і з "вручну скасовано" — тому на
+    -- кожному рестарті сервера він повертав ручне скасування назад і додавав
+    -- дублікат руху списання.
+    ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS historical_backfilled_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_order_lines_order_number ON order_lines(order_number);
     CREATE INDEX IF NOT EXISTS idx_order_lines_status ON order_lines(status);
 
@@ -229,6 +237,18 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Сесії входу: замінили Basic Auth (браузер кешує його логін/пароль
+    -- назавжди, без способу вийти) на кукі-токен зі "ковзним" таймаутом —
+    -- кожен запит з валідним токеном подовжує last_seen_at ще на годину;
+    -- якщо годину не було жодного запиту, токен більше не проходить.
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      username TEXT NOT NULL REFERENCES accounts(username),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_last_seen ON sessions(last_seen_at);
 
     CREATE TABLE IF NOT EXISTS production_tasks (
       id SERIAL PRIMARY KEY,
@@ -934,10 +954,12 @@ async function updateOrderLineStatus(lineId, status, note) {
 // Але рух складу створюємо лише для рядків із датою відвантаження ПІСЛЯ
 // точки нуль інвентаризації — те, що відвантажилось до неї, вже враховано
 // у порахованому залишку, і повторний рух задвоїв би списання.
+// Ідемпотентність — через historical_backfilled_at, а НЕ через поточний
+// статус (див. коментар біля колонки): рядок обробляється рівно один раз.
 async function backfillHistoricalShipments({ baselineDate }) {
   const { rows: lines } = await pool.query(
     `SELECT id, product_code, qty, ship_date, order_number
-     FROM order_lines WHERE source = 'SAP-history' AND status != 'відвантажено'`
+     FROM order_lines WHERE source = 'SAP-history' AND historical_backfilled_at IS NULL`
   );
 
   let movementsCreated = 0;
@@ -958,12 +980,84 @@ async function backfillHistoricalShipments({ baselineDate }) {
       statusOnly += 1;
     }
     await pool.query(
-      `UPDATE order_lines SET status = 'відвантажено', status_updated_at = now() WHERE id = $1`,
+      `UPDATE order_lines SET status = 'відвантажено', status_updated_at = now(), historical_backfilled_at = now() WHERE id = $1`,
       [line.id]
     );
   }
 
   return { movementsCreated, statusOnly };
+}
+
+// Одноразова міграція (виконується рівно один раз за весь час існування
+// бази — гейт на "чи вже хоч один рядок має historical_backfilled_at"):
+// стара версія backfillHistoricalShipments уже пройшлась по ВСІХ
+// source='SAP-history' рядках (можливо, кілька разів через баг вище), тож
+// на момент додавання нової колонки вони всі фактично вже оброблені.
+// Позначаємо їх такими одразу, щоб фікс нижче (cleanupDuplicate...) міг
+// безпечно прибрати наслідки багу, а нові майбутні імпорти історичних
+// замовлень і далі коректно проходили через реальний backfill.
+async function migrateHistoricalBackfillMarker() {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM order_lines WHERE historical_backfilled_at IS NOT NULL`
+  );
+  if (rows[0].n > 0) return 0;
+
+  const { rowCount } = await pool.query(
+    `UPDATE order_lines SET historical_backfilled_at = now() WHERE source = 'SAP-history'`
+  );
+  return rowCount;
+}
+
+// Одноразове (за суттю ідемпотентне) виправлення наслідків багу вище: на
+// кожному рестарті сервера backfillHistoricalShipments помилково повторно
+// "обробляв" рядки, які Тетяна вручну перевела в "скасовано" (бо їхній
+// статус теж підпадав під "status != 'відвантажено'") — це (1) повертало
+// статус назад на "відвантажено" і (2) щоразу додавало ще один дублікат
+// руху списання/повернення. Тут: спершу лишаємо по одному руху на кожен
+// унікальний коментар (дублікати з однаковим product_code+type+note —
+// це завжди один і той самий рух, повторений через баг), потім — де рух
+// "повернення" (тобто підтверджене ручне скасування) не має ЖОДНОГО
+// пізнішого руху відвантаження по цьому самому замовленню — повертаємо
+// статус рядка на "скасовано".
+async function cleanupDuplicateHistoricalBackfillMovements() {
+  const { rowCount: dupesRemoved } = await pool.query(`
+    DELETE FROM stock_movements a USING stock_movements b
+    WHERE a.id > b.id
+      AND a.product_code = b.product_code
+      AND a.movement_type = b.movement_type
+      AND a.note = b.note
+      AND (
+        a.note LIKE 'Замовлення №%(історія)'
+        OR a.note LIKE 'Скасування/зміна статусу замовлення №%(позиція)'
+      )
+  `);
+
+  const { rowCount: statusesFixed } = await pool.query(`
+    UPDATE order_lines ol
+    SET status = 'скасовано',
+        status_note = COALESCE(NULLIF(ol.status_note, ''), 'відновлено після виправлення дубльованого списання (авто)'),
+        status_updated_at = now()
+    WHERE ol.source = 'SAP-history'
+      AND ol.status = 'відвантажено'
+      AND EXISTS (
+        SELECT 1 FROM stock_movements ret
+        WHERE ret.product_code = ol.product_code
+          AND ret.movement_type = 'return'
+          AND ret.note = 'Скасування/зміна статусу замовлення №' || ol.order_number || ' (позиція)'
+          AND NOT EXISTS (
+            SELECT 1 FROM stock_movements laterShip
+            WHERE laterShip.product_code = ol.product_code
+              AND laterShip.movement_type = 'shipment'
+              AND laterShip.note IN (
+                'Замовлення №' || ol.order_number,
+                'Замовлення №' || ol.order_number || ' (історія)'
+              )
+              AND laterShip.created_at > ret.created_at
+          )
+      )
+  `);
+
+  return { dupesRemoved, statusesFixed };
 }
 
 // Позиції, які виготовляють під замовлення (ніколи не рахували фізично на
@@ -1461,6 +1555,39 @@ async function updateAccountPassword(username, newPassword) {
   return rowCount;
 }
 
+const SESSION_IDLE_MINUTES = 60;
+
+async function createSession(username) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query('INSERT INTO sessions (token, username) VALUES ($1, $2)', [token, username]);
+  return token;
+}
+
+// "Ковзний" таймаут: кожен успішний виклик подовжує last_seen_at ще на
+// SESSION_IDLE_MINUTES від поточного моменту. Якщо токен не знайдено або
+// з моменту останньої активності минуло більше за таймаут — повертає null,
+// сесія вважається завершеною (навіть якщо рядок ще фізично лежить у базі).
+async function touchSession(token) {
+  const { rows } = await pool.query(
+    `UPDATE sessions SET last_seen_at = now()
+     WHERE token = $1 AND last_seen_at > now() - interval '${SESSION_IDLE_MINUTES} minutes'
+     RETURNING username`,
+    [token]
+  );
+  return rows[0]?.username || null;
+}
+
+async function deleteSession(token) {
+  await pool.query('DELETE FROM sessions WHERE token = $1', [token]);
+}
+
+async function cleanupExpiredSessions() {
+  const { rowCount } = await pool.query(
+    `DELETE FROM sessions WHERE last_seen_at < now() - interval '${SESSION_IDLE_MINUTES} minutes'`
+  );
+  return rowCount;
+}
+
 export default {
   initSchema,
   upsertProduct,
@@ -1486,6 +1613,8 @@ export default {
   updateOrderStatus,
   updateOrderLineStatus,
   backfillHistoricalShipments,
+  migrateHistoricalBackfillMarker,
+  cleanupDuplicateHistoricalBackfillMovements,
   zeroOutMadeToOrderDeficits,
   insertClientsIfMissing,
   listClients,
@@ -1517,6 +1646,10 @@ export default {
   verifyAccountPassword,
   listAccounts,
   updateAccountPassword,
+  createSession,
+  touchSession,
+  deleteSession,
+  cleanupExpiredSessions,
   countMaterials,
   bulkCreateMaterialsWithBaseline,
   getMaterialBalance,
