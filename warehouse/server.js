@@ -241,6 +241,21 @@ app.post('/api/green-coffee/:code/needs-photoseparation', requireRole(), async (
   }
 });
 
+app.post('/api/green-coffee/:code/short-names', requireRole(), async (req, res) => {
+  try {
+    const { napivfabrykat_names } = req.body || {};
+    const rowCount = await db.updateGreenCoffeeShortNames(req.params.code, napivfabrykat_names);
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Лот не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/green-coffee/:code/short-names ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
 app.get('/api/roasting-batches', requireRole('тімлід', 'станція'), async (req, res) => {
   try {
     const status = String(req.query.status || '').trim();
@@ -676,6 +691,21 @@ app.post('/api/order-lines/:lineId/delivery', requireRole('кладовщик'),
     res.json({ ok: true });
   } catch (error) {
     console.error('POST /api/order-lines/:lineId/delivery ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти доставку' });
+  }
+});
+
+app.post('/api/orders/:orderNumber/delivery', requireRole('кладовщик'), async (req, res) => {
+  try {
+    const { delivery_method, ttn } = req.body || {};
+    const rowCount = await db.updateOrderDelivery(req.params.orderNumber, delivery_method, ttn);
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Замовлення не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/orders/:orderNumber/delivery ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти доставку' });
   }
 });

@@ -19,7 +19,8 @@ const SIGNED_TYPES = {
   adjustment_plus: 1,
   adjustment_minus: -1,
   component_used: -1,
-  roasted_out: -1
+  roasted_out: -1,
+  supplier_received: 1
 };
 
 // Рухи, де qty — це фактично порахована (абсолютна) кількість, а не дельта.
@@ -506,7 +507,7 @@ async function listStock({ search = '' } = {}) {
   const { rows } = await pool.query(
     `SELECT p.code, p.name, p.short_name, p.unit, p.station, p.min_stock, p.status,
             COALESCE(SUM(m.signed_qty), 0) AS balance,
-            COALESCE(SUM(CASE WHEN m.movement_type IN ('production_in', 'return') THEN m.qty ELSE 0 END), 0) AS received,
+            COALESCE(SUM(CASE WHEN m.movement_type IN ('production_in', 'return', 'supplier_received') THEN m.qty ELSE 0 END), 0) AS received,
             COALESCE(SUM(CASE WHEN m.movement_type IN ('shipment', 'writeoff', 'component_used', 'roasted_out') THEN m.qty ELSE 0 END), 0) AS issued,
             MAX(m.movement_date) AS last_movement_date
      FROM products p
@@ -568,7 +569,7 @@ async function listInventoryComparison() {
     `SELECT p.code, p.name,
             first_inv.qty AS baseline_qty, first_inv.movement_date AS baseline_date,
             COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('shipment','writeoff','component_used','roasted_out') THEN m.qty ELSE 0 END), 0) AS issued_since,
-            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('production_in','return') THEN m.qty ELSE 0 END), 0) AS received_since,
+            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('production_in','return','supplier_received') THEN m.qty ELSE 0 END), 0) AS received_since,
             COALESCE(SUM(m.signed_qty), 0) AS current_balance
      FROM products p
      JOIN LATERAL (
@@ -781,6 +782,17 @@ async function updateGreenCoffeeNeedsPhotoseparation(code, needsPhotoseparation)
   const { rowCount } = await pool.query(
     `UPDATE products SET needs_photoseparation = $2, updated_at = now() WHERE code = $1 AND category = 'зелена кава'`,
     [code, needsPhotoseparation]
+  );
+  return rowCount;
+}
+
+// Дає можливість виправити/доповнити короткі назви (у дужках), якщо файл
+// лот-листа мав неповні дані — саме за цими назвами buildGreenCoffeeShortNameLookup
+// зв'язує компоненти рецептур блендів із конкретним лотом.
+async function updateGreenCoffeeShortNames(code, napivfabrykatNames) {
+  const { rowCount } = await pool.query(
+    `UPDATE products SET napivfabrykat_names = $2, updated_at = now() WHERE code = $1 AND category = 'зелена кава'`,
+    [code, napivfabrykatNames || '']
   );
   return rowCount;
 }
@@ -1128,6 +1140,7 @@ async function listOrders({ search = '', status = '' } = {}) {
             MAX(customer_name) AS customer_name,
             MAX(branch_name) AS branch_name,
             MAX(delivery_method) AS delivery_method,
+            MAX(ttn) AS ttn,
             COUNT(*)::int AS line_count,
             SUM(qty) AS total_qty,
             CASE WHEN COUNT(DISTINCT status) = 1 THEN MIN(status) ELSE 'змішаний' END AS status,
@@ -1286,6 +1299,22 @@ async function updateOrderLineDelivery(lineId, deliveryMethod, ttn) {
   const { rowCount } = await pool.query(
     `UPDATE order_lines SET delivery_method = $1, ttn = $2 WHERE id = $3`,
     [deliveryMethod || '', (ttn || '').trim(), lineId]
+  );
+  return rowCount;
+}
+
+// Те саме, але одразу для ВСІХ позицій замовлення — більшість замовлень
+// їдуть одним способом доставки, тож зручніше міняти це в зведеному
+// рядку замовлення, а не заходити в кожну позицію окремо. Для нетипового
+// випадку (частина замовлення іншим способом) лишається редагування
+// по одній позиції в деталях замовлення.
+async function updateOrderDelivery(orderNumber, deliveryMethod, ttn) {
+  if (DELIVERY_METHODS_REQUIRING_TTN.includes(deliveryMethod) && !(ttn || '').trim()) {
+    throw new Error(`Для "${deliveryMethod}" обов'язково вкажи ТТН`);
+  }
+  const { rowCount } = await pool.query(
+    `UPDATE order_lines SET delivery_method = $1, ttn = $2 WHERE order_number = $3`,
+    [deliveryMethod || '', (ttn || '').trim(), orderNumber]
   );
   return rowCount;
 }
@@ -2100,6 +2129,7 @@ export default {
   listGreenCoffee,
   listGreenCoffeeMovementsSummary,
   updateGreenCoffeeNeedsPhotoseparation,
+  updateGreenCoffeeShortNames,
   createRoastingBatch,
   recordPhotoseparation,
   listRoastingBatches,
@@ -2123,6 +2153,7 @@ export default {
   updateOrderStatus,
   updateOrderLineStatus,
   updateOrderLineDelivery,
+  updateOrderDelivery,
   DELIVERY_METHODS,
   DELIVERY_METHODS_REQUIRING_TTN,
   backfillHistoricalShipments,

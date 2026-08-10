@@ -353,6 +353,7 @@
         <tr>
           <th>Код</th>
           <th>Назва</th>
+          <th>Короткі назви (для блендів)</th>
           <th>Локація</th>
           <th>Залишок, кг</th>
           <th>Потрібна фотосепарація</th>
@@ -529,6 +530,7 @@
       <label>Тип руху</label>
       <select id="movementType">
         <option value="production_in">Приймання виробництва (+)</option>
+        <option value="supplier_received">Отримано від постачальника (+)</option>
         <option value="shipment">Відвантаження (−)</option>
         <option value="return">Повернення (+)</option>
         <option value="writeoff">Списання (−)</option>
@@ -795,6 +797,32 @@
     <div class="modal-actions">
       <button class="secondary" id="btnCancelPhotosep">Скасувати</button>
       <button id="btnSavePhotosep">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: доставка замовлення (всі позиції разом) -->
+<div class="overlay" id="orderDeliveryOverlay">
+  <div class="modal">
+    <h2 id="orderDeliveryTitle">Доставка замовлення</h2>
+    <p style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;">Застосується до всіх позицій цього замовлення. Якщо частина замовлення їде іншим способом — заходь у деталі замовлення (клік на клієнта) і зміни доставку для конкретної позиції окремо.</p>
+    <div class="field">
+      <label>Спосіб доставки</label>
+      <select id="odDeliveryMethod">
+        <option value="">— не вказано —</option>
+        <option value="Водій">Водій</option>
+        <option value="Самовивіз">Самовивіз</option>
+        <option value="Нова пошта">Нова пошта</option>
+        <option value="Поштомат">Поштомат</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>ТТН (обов'язково для Нової пошти й Поштомату)</label>
+      <input type="text" id="odTtn" placeholder="номер ТТН">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelOrderDelivery">Скасувати</button>
+      <button id="btnSaveOrderDelivery">Зберегти</button>
     </div>
   </div>
 </div>
@@ -1210,10 +1238,14 @@ async function loadGreenCoffee() {
           <option value="false" ${g.needs_photoseparation === false ? 'selected' : ''}>ні</option>
         </select>`
       : flagLabel;
+    const shortNamesCell = isAdmin
+      ? `<input type="text" value="${escAttr(g.napivfabrykat_names || '')}" placeholder="напр. Djimmah GR5 3 (Ed3)" style="font-size:12px; min-width:200px;" onchange="saveShortNames('${g.code}', this.value)">`
+      : (g.napivfabrykat_names || '—');
     return `
       <tr>
         <td>${g.code}</td>
         <td>${g.name}</td>
+        <td>${shortNamesCell}</td>
         <td>${g.location || '—'}</td>
         <td class="balance">${fmt(g.balance)}</td>
         <td>${flagCell}</td>
@@ -1221,6 +1253,17 @@ async function loadGreenCoffee() {
       </tr>
     `;
   }).join('');
+}
+
+async function saveShortNames(code, value) {
+  const resp = await fetch('/api/green-coffee/' + encodeURIComponent(code) + '/short-names', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ napivfabrykat_names: value.trim() })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
 }
 
 async function saveNeedsPhotoseparation(code, value) {
@@ -1432,6 +1475,8 @@ async function loadOrders() {
   }
   empty.style.display = 'none';
 
+  const canManageOrders = window._me && ['адмін', 'кладовщик'].includes(window._me.role);
+
   body.innerHTML = data.orders.map((o) => `
     <tr>
       <td>${o.order_number}</td>
@@ -1440,7 +1485,7 @@ async function loadOrders() {
       <td>${o.customer_code || '—'}</td>
       <td class="clientLink" onclick="toggleOrderRow('${o.order_number}')">${o.customer_name || '—'}</td>
       <td>${o.branch_name || '—'}</td>
-      <td>${o.delivery_method || '—'}</td>
+      <td class="${canManageOrders ? 'clientLink' : ''}" ${canManageOrders ? `onclick="openOrderDelivery('${o.order_number}', '${escAttr(o.delivery_method || '')}', '${escAttr(o.ttn || '')}')"` : ''}>${o.delivery_method || '—'}${o.ttn ? ' (ТТН: ' + o.ttn + ')' : ''}</td>
       <td>${o.line_count}</td>
       <td class="balance">${fmt(o.total_qty)}</td>
       <td>${o.needs_grind ? '<span class="tag warn">потрібен помел</span>' : '—'}</td>
@@ -1567,6 +1612,35 @@ async function saveLineDelivery(lineId, orderNumber) {
   showToast('Доставку збережено');
   await renderOrderDetail(orderNumber);
 }
+
+let currentOrderDeliveryNumber = null;
+
+function openOrderDelivery(orderNumber, deliveryMethod, ttn) {
+  currentOrderDeliveryNumber = orderNumber;
+  document.getElementById('orderDeliveryTitle').textContent = 'Доставка замовлення № ' + orderNumber;
+  document.getElementById('odDeliveryMethod').value = deliveryMethod || '';
+  document.getElementById('odTtn').value = ttn || '';
+  document.getElementById('orderDeliveryOverlay').classList.add('open');
+}
+
+document.getElementById('btnCancelOrderDelivery').onclick = () => {
+  document.getElementById('orderDeliveryOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveOrderDelivery').onclick = async () => {
+  const delivery_method = document.getElementById('odDeliveryMethod').value;
+  const ttn = document.getElementById('odTtn').value.trim();
+  const resp = await fetch('/api/orders/' + encodeURIComponent(currentOrderDeliveryNumber) + '/delivery', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ delivery_method, ttn })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти доставку'); return; }
+  document.getElementById('orderDeliveryOverlay').classList.remove('open');
+  showToast('Доставку збережено');
+  loadOrders();
+};
 
 async function saveOverride(lineId, orderNumber) {
   const role = document.getElementById('ovRole_' + lineId).value;
