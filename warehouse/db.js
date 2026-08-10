@@ -18,7 +18,8 @@ const SIGNED_TYPES = {
   writeoff: -1,
   adjustment_plus: 1,
   adjustment_minus: -1,
-  component_used: -1
+  component_used: -1,
+  roasted_out: -1
 };
 
 // Рухи, де qty — це фактично порахована (абсолютна) кількість, а не дельта.
@@ -43,6 +44,23 @@ async function initSchema() {
     );
     ALTER TABLE products ADD COLUMN IF NOT EXISTS station TEXT NOT NULL DEFAULT '';
     ALTER TABLE products ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'активний';
+    -- Багаторівневий склад для зеленої кави: 'готова продукція' (все, що було
+    -- і є) / 'зелена кава' (сирий запас, з файлу лот-листа) / 'напівфабрикат'
+    -- (кава після обсмажки — і після фотосепарації, якщо вона потрібна) /
+    -- 'квакер' (побічний продукт фотосепарації — недороз. зерно). Останні
+    -- два створюються автоматично на першу партію обсмажки конкретного лоту
+    -- зеленої кави (source_green_coffee_code показує, з чого вони походять).
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'готова продукція';
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS location TEXT NOT NULL DEFAULT '';
+    -- NULL = ще не вирішено (Тетяна проставляє вручну по кожному лоту
+    -- зеленої кави), true/false — чи смажена з цього лоту кава йде на
+    -- Фотосепаратор перед тим, як стати напівфабрикатом, чи ні.
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS needs_photoseparation BOOLEAN;
+    -- Сирий текст із файлу лот-листа — під якими короткими назвами/позначками
+    -- (у дужках) цей лот зеленої кави фігурує в рецептурах блендів. Поки
+    -- лише довідково, автоматичного зв'язку з blend_components ще немає.
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS napivfabrykat_names TEXT NOT NULL DEFAULT '';
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS source_green_coffee_code TEXT REFERENCES products(code);
 
     CREATE TABLE IF NOT EXISTS stock_movements (
       id SERIAL PRIMARY KEY,
@@ -56,6 +74,31 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_movements_product ON stock_movements(product_code);
+
+    -- Партія обсмажки: Обсмажка записує, скільки взяли зеленої кави і
+    -- скільки смаженої вийшло (втрату у відсотках свідомо НЕ рахуємо —
+    -- лише реальні зважені числа). needs_photoseparation_snapshot — знімок
+    -- прапорця products.needs_photoseparation на момент партії (щоб пізня
+    -- зміна прапорця в довіднику не переписувала вже створені партії).
+    -- Якщо фотосепарація потрібна — партія "висить" (photoseparated_at
+    -- IS NULL) до запису ваг до/після на Фотосепараторі; якщо ні — партія
+    -- одразу завершується, смажена кава йде в напівфабрикат без різниці.
+    CREATE TABLE IF NOT EXISTS roasting_batches (
+      id SERIAL PRIMARY KEY,
+      green_coffee_code TEXT NOT NULL REFERENCES products(code),
+      qty_green_kg NUMERIC NOT NULL,
+      qty_roasted_kg NUMERIC NOT NULL,
+      batch_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      needs_photoseparation_snapshot BOOLEAN,
+      weight_before_kg NUMERIC,
+      weight_after_kg NUMERIC,
+      quaker_kg NUMERIC,
+      photoseparated_at TIMESTAMPTZ,
+      note TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_roasting_batches_green ON roasting_batches(green_coffee_code);
 
     CREATE TABLE IF NOT EXISTS blend_recipes (
       id SERIAL PRIMARY KEY,
@@ -408,7 +451,7 @@ async function getBalance(code) {
 // Список товарів з полічений залишком (сумма рухів). Порожній список рухів
 // -> залишок 0, товар усе одно показується.
 async function listProducts({ search = '', activeOnly = true } = {}) {
-  const conditions = [];
+  const conditions = [`p.category != 'зелена кава'`];
   const params = [];
 
   if (activeOnly) {
@@ -443,7 +486,7 @@ async function listProducts({ search = '', activeOnly = true } = {}) {
 // Операційний вигляд складу — лише товари, що фізично зберігаються (не
 // "тільки під замовлення"): залишок, скільки надійшло, скільки видано.
 async function listStock({ search = '' } = {}) {
-  const conditions = ['p.is_stock_item = true'];
+  const conditions = ['p.is_stock_item = true', `p.category != 'зелена кава'`];
   const params = [];
 
   if (search) {
@@ -457,7 +500,7 @@ async function listStock({ search = '' } = {}) {
     `SELECT p.code, p.name, p.short_name, p.unit, p.station, p.min_stock, p.status,
             COALESCE(SUM(m.signed_qty), 0) AS balance,
             COALESCE(SUM(CASE WHEN m.movement_type IN ('production_in', 'return') THEN m.qty ELSE 0 END), 0) AS received,
-            COALESCE(SUM(CASE WHEN m.movement_type IN ('shipment', 'writeoff', 'component_used') THEN m.qty ELSE 0 END), 0) AS issued,
+            COALESCE(SUM(CASE WHEN m.movement_type IN ('shipment', 'writeoff', 'component_used', 'roasted_out') THEN m.qty ELSE 0 END), 0) AS issued,
             MAX(m.movement_date) AS last_movement_date
      FROM products p
      LEFT JOIN stock_movements m ON m.product_code = p.code
@@ -517,7 +560,7 @@ async function listInventoryComparison() {
   const { rows } = await pool.query(
     `SELECT p.code, p.name,
             first_inv.qty AS baseline_qty, first_inv.movement_date AS baseline_date,
-            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('shipment','writeoff','component_used') THEN m.qty ELSE 0 END), 0) AS issued_since,
+            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('shipment','writeoff','component_used','roasted_out') THEN m.qty ELSE 0 END), 0) AS issued_since,
             COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('production_in','return') THEN m.qty ELSE 0 END), 0) AS received_since,
             COALESCE(SUM(m.signed_qty), 0) AS current_balance
      FROM products p
@@ -603,6 +646,190 @@ async function insertProductsIfMissing(products) {
     inserted += rowCount;
   }
   return inserted;
+}
+
+// Одноразовий імпорт лот-листа зеленої кави: створює товар (категорія
+// "зелена кава") і, лише для щойно створених (не для вже наявних —
+// інакше на кожному рестарті знову додавало б стартовий залишок поверх
+// того, що вже змінилося рухами), стартовий залишок рухом
+// "inventory_baseline" — так само, як porahovaний фізичний підрахунок.
+async function insertGreenCoffeeIfMissing(rows) {
+  let inserted = 0;
+  for (const row of rows) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO products (code, name, unit, is_stock_item, category, location, napivfabrykat_names, updated_at)
+       VALUES ($1,$2,'кг',true,'зелена кава',$3,$4, now())
+       ON CONFLICT (code) DO NOTHING`,
+      [row.code, row.name || '', row.location || '', row.napivfabrykat_names || '']
+    );
+    if (rowCount > 0) {
+      inserted += 1;
+      if (Number(row.weight_kg) > 0) {
+        await addMovement({
+          product_code: row.code,
+          movement_type: 'inventory_baseline',
+          qty: row.weight_kg,
+          movement_date: null,
+          note: 'Початковий залишок з лот-листа зеленої кави'
+        });
+      }
+    }
+  }
+  return inserted;
+}
+
+async function listGreenCoffee({ search = '' } = {}) {
+  const conditions = [`p.category = 'зелена кава'`];
+  const params = [];
+
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    conditions.push(`(lower(p.code) LIKE $${params.length} OR lower(p.name) LIKE $${params.length})`);
+  }
+
+  const { rows } = await pool.query(
+    `SELECT p.code, p.name, p.location, p.needs_photoseparation, p.napivfabrykat_names,
+            COALESCE(SUM(m.signed_qty), 0) AS balance
+     FROM products p
+     LEFT JOIN stock_movements m ON m.product_code = p.code
+     WHERE ${conditions.join(' AND ')}
+     GROUP BY p.code, p.name, p.location, p.needs_photoseparation, p.napivfabrykat_names
+     ORDER BY lower(p.name) ASC`,
+    params
+  );
+  return rows.map((r) => ({ ...r, balance: Number(r.balance) }));
+}
+
+async function updateGreenCoffeeNeedsPhotoseparation(code, needsPhotoseparation) {
+  const { rowCount } = await pool.query(
+    `UPDATE products SET needs_photoseparation = $2, updated_at = now() WHERE code = $1 AND category = 'зелена кава'`,
+    [code, needsPhotoseparation]
+  );
+  return rowCount;
+}
+
+// Автоматично заводить похідний товар (напівфабрикат або квакер конкретного
+// лоту зеленої кави) при першій потребі — щоб не змушувати вручну створювати
+// його в Товарах перед першою партією обсмажки цього лоту.
+async function getOrCreateDerivedProduct(sourceCode, sourceName, codeSuffix, category, namePrefix) {
+  const code = `${sourceCode}${codeSuffix}`;
+  await pool.query(
+    `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, updated_at)
+     VALUES ($1,$2,'кг',true,$3,$4, now())
+     ON CONFLICT (code) DO NOTHING`,
+    [code, `${namePrefix}: ${sourceName}`, category, sourceCode]
+  );
+  return code;
+}
+
+// Партія обсмажки: списує з зеленої кави рівно те, що взяли (реальна вага,
+// без формули втрати — її свідомо не рахуємо). Якщо для цього лоту
+// фотосепарація явно НЕ потрібна (прапорець === false) — партія одразу
+// завершується, смажена кава йде в напівфабрикат без різниці (квакер = 0).
+// Інакше (потрібна або ще не вирішено) — партія висить до запису ваг
+// до/після на Фотосепараторі.
+async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, created_by }) {
+  const { rows: gcRows } = await pool.query(
+    `SELECT code, name, needs_photoseparation FROM products WHERE code = $1 AND category = 'зелена кава'`,
+    [green_coffee_code]
+  );
+  const greenCoffee = gcRows[0];
+  if (!greenCoffee) {
+    throw new Error('Лот зеленої кави не знайдено');
+  }
+
+  await addMovement({
+    product_code: green_coffee_code,
+    movement_type: 'roasted_out',
+    qty: qty_green_kg,
+    movement_date: batch_date || null,
+    note: note || 'Взято на обсмажку'
+  });
+
+  const { rows } = await pool.query(
+    `INSERT INTO roasting_batches (green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, needs_photoseparation_snapshot, note, created_by)
+     VALUES ($1,$2,$3, COALESCE($4, CURRENT_DATE), $5, $6, $7)
+     RETURNING *`,
+    [green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date || null, greenCoffee.needs_photoseparation, note || '', created_by || '']
+  );
+  const batch = rows[0];
+
+  if (greenCoffee.needs_photoseparation === false) {
+    return finalizeRoastingBatch(batch, greenCoffee.name, { weight_before_kg: qty_roasted_kg, weight_after_kg: qty_roasted_kg });
+  }
+
+  return batch;
+}
+
+async function finalizeRoastingBatch(batch, greenCoffeeName, { weight_before_kg, weight_after_kg }) {
+  const quakerKg = Math.round((Number(weight_before_kg) - Number(weight_after_kg)) * 1000) / 1000;
+
+  const napivfabrykatCode = await getOrCreateDerivedProduct(batch.green_coffee_code, greenCoffeeName, '-NF', 'напівфабрикат', 'Напівфабрикат');
+  await addMovement({
+    product_code: napivfabrykatCode,
+    movement_type: 'production_in',
+    qty: weight_after_kg,
+    movement_date: batch.batch_date,
+    note: `Партія обсмажки №${batch.id} (після фотосепарації)`
+  });
+
+  if (quakerKg > 0) {
+    const quakerCode = await getOrCreateDerivedProduct(batch.green_coffee_code, greenCoffeeName, '-QUAKER', 'квакер', 'Квакер');
+    await addMovement({
+      product_code: quakerCode,
+      movement_type: 'production_in',
+      qty: quakerKg,
+      movement_date: batch.batch_date,
+      note: `Партія обсмажки №${batch.id} — квакер (різниця ваги до/після фотосепарації)`
+    });
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE roasting_batches SET weight_before_kg = $2, weight_after_kg = $3, quaker_kg = $4, photoseparated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [batch.id, weight_before_kg, weight_after_kg, quakerKg]
+  );
+  return rows[0];
+}
+
+async function recordPhotoseparation(batchId, { weight_before_kg, weight_after_kg }) {
+  const { rows } = await pool.query(
+    `SELECT rb.*, p.name AS green_coffee_name FROM roasting_batches rb
+     JOIN products p ON p.code = rb.green_coffee_code
+     WHERE rb.id = $1`,
+    [batchId]
+  );
+  const batch = rows[0];
+  if (!batch) {
+    throw new Error('Партію не знайдено');
+  }
+  if (batch.photoseparated_at) {
+    throw new Error('Ваги для цієї партії вже внесені');
+  }
+  return finalizeRoastingBatch(batch, batch.green_coffee_name, { weight_before_kg, weight_after_kg });
+}
+
+async function listRoastingBatches({ status = '' } = {}) {
+  const conditions = [];
+  if (status === 'pending') conditions.push('rb.photoseparated_at IS NULL');
+  if (status === 'done') conditions.push('rb.photoseparated_at IS NOT NULL');
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const { rows } = await pool.query(
+    `SELECT rb.*, p.name AS green_coffee_name
+     FROM roasting_batches rb
+     JOIN products p ON p.code = rb.green_coffee_code
+     ${where}
+     ORDER BY rb.created_at DESC`
+  );
+  return rows.map((r) => ({
+    ...r,
+    qty_green_kg: Number(r.qty_green_kg),
+    qty_roasted_kg: Number(r.qty_roasted_kg),
+    weight_before_kg: r.weight_before_kg === null ? null : Number(r.weight_before_kg),
+    weight_after_kg: r.weight_after_kg === null ? null : Number(r.weight_after_kg),
+    quaker_kg: r.quaker_kg === null ? null : Number(r.quaker_kg)
+  }));
 }
 
 // Так само, як insertProductsIfMissing — ніколи не перезаписує вже наявний
@@ -1715,6 +1942,12 @@ export default {
   upsertProduct,
   bulkUpsertProducts,
   insertProductsIfMissing,
+  insertGreenCoffeeIfMissing,
+  listGreenCoffee,
+  updateGreenCoffeeNeedsPhotoseparation,
+  createRoastingBatch,
+  recordPhotoseparation,
+  listRoastingBatches,
   getProduct,
   countProducts,
   getBalance,

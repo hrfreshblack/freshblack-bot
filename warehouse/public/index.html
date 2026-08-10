@@ -210,6 +210,7 @@
     <button id="tabStock" onclick="showTab('stock')">Склад</button>
     <button id="tabInventory" onclick="showTab('inventory')">Інвентаризації</button>
     <button id="tabStations" onclick="showTab('stations')">Станції</button>
+    <button id="tabGreenCoffee" onclick="showTab('greenCoffee')">Зелена кава</button>
     <button id="tabMaterials" onclick="showTab('materials')">Розхідники</button>
     <button id="tabRecipes" onclick="showTab('recipes')">Рецептури блендів</button>
     <button id="tabOrders" onclick="showTab('orders')">Замовлення</button>
@@ -337,6 +338,66 @@
     </table>
     </div>
     <div class="empty" id="tasksEmpty" style="display:none;">Задач немає за обраний період.</div>
+  </div>
+
+  <div id="viewGreenCoffee" style="display:none;">
+    <p style="color: var(--muted); margin: 0 0 14px;">Зелена кава → Обсмажка (партія: скільки взяли, скільки посмажили — без формули втрати, лише реальні ваги) → не для всіх позицій потрібна Фотосепарація (вага до і після; різниця — квакер) → напівфабрикат, готовий для виробництва.</p>
+
+    <div class="viewToolbar">
+      <input type="search" id="greenCoffeeSearch" placeholder="Пошук за кодом чи назвою…">
+      <button id="btnAddRoastingBatch">+ Партія обсмажки</button>
+    </div>
+    <div class="tableWrap">
+    <table id="greenCoffeeTable">
+      <thead>
+        <tr>
+          <th>Код</th>
+          <th>Назва</th>
+          <th>Локація</th>
+          <th>Залишок, кг</th>
+          <th>Потрібна фотосепарація</th>
+        </tr>
+      </thead>
+      <tbody id="greenCoffeeBody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="greenCoffeeEmpty" style="display:none;">Зеленої кави ще немає.</div>
+
+    <h3 style="font-size:13px; color: var(--muted); text-transform: uppercase; letter-spacing:0.03em; margin: 24px 0 8px;">Партії, що чекають фотосепарації</h3>
+    <div class="tableWrap">
+    <table id="pendingBatchesTable">
+      <thead>
+        <tr>
+          <th>Дата</th>
+          <th>Лот</th>
+          <th>Взято зеленої, кг</th>
+          <th>Посмажено, кг</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="pendingBatchesBody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="pendingBatchesEmpty" style="display:none;">Партій, що чекають фотосепарації, немає.</div>
+
+    <h3 style="font-size:13px; color: var(--muted); text-transform: uppercase; letter-spacing:0.03em; margin: 24px 0 8px;">Історія партій обсмажки</h3>
+    <div class="tableWrap">
+    <table id="doneBatchesTable">
+      <thead>
+        <tr>
+          <th>Дата</th>
+          <th>Лот</th>
+          <th>Взято зеленої, кг</th>
+          <th>Посмажено, кг</th>
+          <th>Вага до фотосеп., кг</th>
+          <th>Вага після, кг</th>
+          <th>Квакер, кг</th>
+        </tr>
+      </thead>
+      <tbody id="doneBatchesBody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="doneBatchesEmpty" style="display:none;">Завершених партій ще немає.</div>
   </div>
 
   <div id="viewMaterials" style="display:none;">
@@ -655,6 +716,58 @@
   </div>
 </div>
 
+<!-- Модалка: нова партія обсмажки -->
+<div class="overlay" id="roastingBatchOverlay">
+  <div class="modal">
+    <h2>Нова партія обсмажки</h2>
+    <div class="field">
+      <label>Лот зеленої кави</label>
+      <input type="text" id="rbGreenCoffee" list="greenCoffeeList" placeholder="код або назва">
+      <datalist id="greenCoffeeList"></datalist>
+    </div>
+    <div class="field">
+      <label>Взято зеленої кави, кг</label>
+      <input type="number" id="rbQtyGreen" min="0" step="any" placeholder="напр. 60">
+    </div>
+    <div class="field">
+      <label>Посмажено, кг (фактична вага)</label>
+      <input type="number" id="rbQtyRoasted" min="0" step="any" placeholder="напр. 51">
+    </div>
+    <div class="field">
+      <label>Дата</label>
+      <input type="date" id="rbDate">
+    </div>
+    <div class="field">
+      <label>Коментар (необов'язково)</label>
+      <input type="text" id="rbNote" placeholder="необов'язково">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelRoastingBatch">Скасувати</button>
+      <button id="btnSaveRoastingBatch">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: ваги фотосепарації -->
+<div class="overlay" id="photosepOverlay">
+  <div class="modal">
+    <h2 id="photosepTitle">Фотосепарація партії</h2>
+    <div class="field">
+      <label>Вага до фотосепарації, кг</label>
+      <input type="number" id="psWeightBefore" min="0" step="any">
+    </div>
+    <div class="field">
+      <label>Вага після фотосепарації, кг</label>
+      <input type="number" id="psWeightAfter" min="0" step="any">
+    </div>
+    <p style="color: var(--muted); font-size: 12px;">Різниця (квакер) порахується автоматично.</p>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelPhotosep">Скасувати</button>
+      <button id="btnSavePhotosep">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <!-- Модалка: зміна статусу задачі -->
 <div class="overlay" id="taskStatusOverlay">
   <div class="modal">
@@ -968,6 +1081,7 @@ function showTab(tab) {
   document.getElementById('viewStock').style.display = tab === 'stock' ? '' : 'none';
   document.getElementById('viewInventory').style.display = tab === 'inventory' ? '' : 'none';
   document.getElementById('viewStations').style.display = tab === 'stations' ? '' : 'none';
+  document.getElementById('viewGreenCoffee').style.display = tab === 'greenCoffee' ? '' : 'none';
   document.getElementById('viewMaterials').style.display = tab === 'materials' ? '' : 'none';
   document.getElementById('viewRecipes').style.display = tab === 'recipes' ? '' : 'none';
   document.getElementById('viewOrders').style.display = tab === 'orders' ? '' : 'none';
@@ -976,6 +1090,7 @@ function showTab(tab) {
   document.getElementById('tabStock').classList.toggle('active', tab === 'stock');
   document.getElementById('tabInventory').classList.toggle('active', tab === 'inventory');
   document.getElementById('tabStations').classList.toggle('active', tab === 'stations');
+  document.getElementById('tabGreenCoffee').classList.toggle('active', tab === 'greenCoffee');
   document.getElementById('tabMaterials').classList.toggle('active', tab === 'materials');
   document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
   document.getElementById('tabOrders').classList.toggle('active', tab === 'orders');
@@ -984,11 +1099,192 @@ function showTab(tab) {
   if (tab === 'stock') loadStock();
   if (tab === 'inventory') initInventory();
   if (tab === 'stations') initStations();
+  if (tab === 'greenCoffee') initGreenCoffee();
   if (tab === 'materials') loadMaterials();
   if (tab === 'recipes' && !recipesLoaded) loadRecipes();
   if (tab === 'orders') loadOrders();
   if (tab === 'clients') loadClients();
 }
+
+// ---- Зелена кава → Обсмажка → Фотосепарація → напівфабрикат/квакер ----
+function initGreenCoffee() {
+  loadGreenCoffee();
+  loadRoastingBatches();
+}
+
+async function loadGreenCoffee() {
+  const search = document.getElementById('greenCoffeeSearch').value.trim();
+  const resp = await fetch('/api/green-coffee?search=' + encodeURIComponent(search));
+  const data = await resp.json();
+  const body = document.getElementById('greenCoffeeBody');
+  const empty = document.getElementById('greenCoffeeEmpty');
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  window._greenCoffeeCache = data.greenCoffee;
+
+  if (!data.greenCoffee.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  const isAdmin = window._me && window._me.role === 'адмін';
+
+  body.innerHTML = data.greenCoffee.map((g) => {
+    const flagLabel = g.needs_photoseparation === true ? 'так' : (g.needs_photoseparation === false ? 'ні' : 'не вирішено');
+    const flagCell = isAdmin
+      ? `<select onchange="saveNeedsPhotoseparation('${g.code}', this.value)" style="font-size:12px;">
+          <option value="" ${g.needs_photoseparation === null ? 'selected' : ''}>не вирішено</option>
+          <option value="true" ${g.needs_photoseparation === true ? 'selected' : ''}>так</option>
+          <option value="false" ${g.needs_photoseparation === false ? 'selected' : ''}>ні</option>
+        </select>`
+      : flagLabel;
+    return `
+      <tr>
+        <td>${g.code}</td>
+        <td>${g.name}</td>
+        <td>${g.location || '—'}</td>
+        <td class="balance">${fmt(g.balance)}</td>
+        <td>${flagCell}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function saveNeedsPhotoseparation(code, value) {
+  const needs_photoseparation = value === '' ? null : value === 'true';
+  const resp = await fetch('/api/green-coffee/' + encodeURIComponent(code) + '/needs-photoseparation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ needs_photoseparation })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+}
+
+async function loadRoastingBatches() {
+  const [pendingResp, doneResp] = await Promise.all([
+    fetch('/api/roasting-batches?status=pending'),
+    fetch('/api/roasting-batches?status=done')
+  ]);
+  const pendingData = await pendingResp.json();
+  const doneData = await doneResp.json();
+
+  const pendingBody = document.getElementById('pendingBatchesBody');
+  const pendingEmpty = document.getElementById('pendingBatchesEmpty');
+  if (pendingData.ok && pendingData.batches.length) {
+    pendingEmpty.style.display = 'none';
+    pendingBody.innerHTML = pendingData.batches.map((b) => `
+      <tr>
+        <td>${new Date(b.batch_date).toLocaleDateString('uk-UA')}</td>
+        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span></td>
+        <td class="balance">${fmt(b.qty_green_kg)}</td>
+        <td class="balance">${fmt(b.qty_roasted_kg)}</td>
+        <td class="row-actions"><button class="secondary" onclick="openPhotosep(${b.id}, '${escAttr(b.green_coffee_name)}')">Ввести ваги</button></td>
+      </tr>
+    `).join('');
+  } else {
+    pendingBody.innerHTML = '';
+    pendingEmpty.style.display = 'block';
+  }
+
+  const doneBody = document.getElementById('doneBatchesBody');
+  const doneEmpty = document.getElementById('doneBatchesEmpty');
+  if (doneData.ok && doneData.batches.length) {
+    doneEmpty.style.display = 'none';
+    doneBody.innerHTML = doneData.batches.map((b) => `
+      <tr>
+        <td>${new Date(b.batch_date).toLocaleDateString('uk-UA')}</td>
+        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span></td>
+        <td class="balance">${fmt(b.qty_green_kg)}</td>
+        <td class="balance">${fmt(b.qty_roasted_kg)}</td>
+        <td class="balance">${fmt(b.weight_before_kg)}</td>
+        <td class="balance">${fmt(b.weight_after_kg)}</td>
+        <td class="balance">${fmt(b.quaker_kg)}</td>
+      </tr>
+    `).join('');
+  } else {
+    doneBody.innerHTML = '';
+    doneEmpty.style.display = 'block';
+  }
+}
+
+document.getElementById('btnAddRoastingBatch').onclick = () => {
+  document.getElementById('rbGreenCoffee').value = '';
+  document.getElementById('rbQtyGreen').value = '';
+  document.getElementById('rbQtyRoasted').value = '';
+  document.getElementById('rbDate').value = isoDate(new Date());
+  document.getElementById('rbNote').value = '';
+  document.getElementById('greenCoffeeList').innerHTML = (window._greenCoffeeCache || []).map((g) => `<option value="${g.code} — ${escAttr(g.name)}">`).join('');
+  document.getElementById('roastingBatchOverlay').classList.add('open');
+};
+
+document.getElementById('btnCancelRoastingBatch').onclick = () => {
+  document.getElementById('roastingBatchOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveRoastingBatch').onclick = async () => {
+  const input = document.getElementById('rbGreenCoffee').value.trim();
+  const [maybeCode] = input.split(' — ');
+  const matched = (window._greenCoffeeCache || []).find((g) => g.code === maybeCode);
+  const green_coffee_code = matched ? matched.code : maybeCode;
+  const qty_green_kg = document.getElementById('rbQtyGreen').value;
+  const qty_roasted_kg = document.getElementById('rbQtyRoasted').value;
+  const batch_date = document.getElementById('rbDate').value;
+  const note = document.getElementById('rbNote').value.trim();
+
+  if (!green_coffee_code || !qty_green_kg || !qty_roasted_kg) { showToast('Заповни лот, вагу взятого і вагу посмаженого'); return; }
+
+  const resp = await fetch('/api/roasting-batches', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти партію'); return; }
+  document.getElementById('roastingBatchOverlay').classList.remove('open');
+  showToast('Партію збережено');
+  loadGreenCoffee();
+  loadRoastingBatches();
+};
+
+let currentPhotosepBatchId = null;
+
+function openPhotosep(batchId, label) {
+  currentPhotosepBatchId = batchId;
+  document.getElementById('photosepTitle').textContent = 'Фотосепарація партії — ' + label;
+  document.getElementById('psWeightBefore').value = '';
+  document.getElementById('psWeightAfter').value = '';
+  document.getElementById('photosepOverlay').classList.add('open');
+}
+
+document.getElementById('btnCancelPhotosep').onclick = () => {
+  document.getElementById('photosepOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSavePhotosep').onclick = async () => {
+  const weight_before_kg = document.getElementById('psWeightBefore').value;
+  const weight_after_kg = document.getElementById('psWeightAfter').value;
+  if (!weight_before_kg || !weight_after_kg) { showToast('Заповни обидві ваги'); return; }
+
+  const resp = await fetch('/api/roasting-batches/' + currentPhotosepBatchId + '/photoseparation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ weight_before_kg, weight_after_kg })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти ваги'); return; }
+  document.getElementById('photosepOverlay').classList.remove('open');
+  showToast('Ваги збережено');
+  loadRoastingBatches();
+};
+
+document.getElementById('greenCoffeeSearch').addEventListener('input', () => {
+  clearTimeout(window._greenCoffeeSearchTimer);
+  window._greenCoffeeSearchTimer = setTimeout(loadGreenCoffee, 250);
+});
 
 async function loadRecipes() {
   const resp = await fetch('/api/blend-recipes');
@@ -1936,11 +2232,11 @@ document.getElementById('btnCloseDripComponents').onclick = () => {
   document.getElementById('dripComponentsOverlay').classList.remove('open');
 };
 
-const ALL_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabStations', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
+const ALL_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
 const ROLE_TABS = {
   'адмін': ALL_TABS,
-  'тімлід': ['tabStations'],
-  'станція': ['tabStations'],
+  'тімлід': ['tabStations', 'tabGreenCoffee'],
+  'станція': ['tabStations', 'tabGreenCoffee'],
   'бухгалтерія': ['tabStock', 'tabInventory', 'tabOrders'],
   'кладовщик': ['tabStock', 'tabInventory', 'tabOrders']
 };

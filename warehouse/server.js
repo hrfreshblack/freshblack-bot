@@ -11,6 +11,7 @@ import seedMaterials from './seed-materials.js';
 import seedAccounts from './seed-accounts.js';
 import seedInventoryAug2 from './seed-inventory-aug2.js';
 import seedKapranClients from './seed-kapran-clients.js';
+import seedGreenCoffee from './seed-green-coffee.js';
 import { STATION_NAME_ALIASES, stationNotes, stationOperations, stationEmployees } from './seed-stations.js';
 import { parseOrderFile } from './parse-order-file.js';
 
@@ -195,6 +196,76 @@ app.get('/api/stock', requireRole('бухгалтерія', 'кладовщик'
   } catch (error) {
     console.error('GET /api/stock ERROR:', error?.message || error);
     res.status(500).json({ ok: false, error: 'Не вдалося отримати склад' });
+  }
+});
+
+app.get('/api/green-coffee', requireRole('тімлід', 'станція'), async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const greenCoffee = await db.listGreenCoffee({ search });
+    res.json({ ok: true, greenCoffee });
+  } catch (error) {
+    console.error('GET /api/green-coffee ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати зелену каву' });
+  }
+});
+
+app.post('/api/green-coffee/:code/needs-photoseparation', requireRole(), async (req, res) => {
+  try {
+    const { needs_photoseparation } = req.body || {};
+    const rowCount = await db.updateGreenCoffeeNeedsPhotoseparation(req.params.code, needs_photoseparation);
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Лот не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/green-coffee/:code/needs-photoseparation ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.get('/api/roasting-batches', requireRole('тімлід', 'станція'), async (req, res) => {
+  try {
+    const status = String(req.query.status || '').trim();
+    const batches = await db.listRoastingBatches({ status });
+    res.json({ ok: true, batches });
+  } catch (error) {
+    console.error('GET /api/roasting-batches ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати партії обсмажки' });
+  }
+});
+
+app.post('/api/roasting-batches', requireRole('тімлід', 'станція'), async (req, res) => {
+  try {
+    const { green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note } = req.body || {};
+    if (!green_coffee_code || !qty_green_kg || !qty_roasted_kg) {
+      res.status(400).json({ ok: false, error: "Потрібні лот зеленої кави, вага взятого і вага смаженого" });
+      return;
+    }
+    const batch = await db.createRoastingBatch({
+      green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note,
+      created_by: req.account.username
+    });
+    res.json({ ok: true, batch });
+  } catch (error) {
+    console.error('POST /api/roasting-batches ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося записати партію' });
+  }
+});
+
+app.post('/api/roasting-batches/:id/photoseparation', requireRole('тімлід', 'станція'), async (req, res) => {
+  try {
+    const { weight_before_kg, weight_after_kg } = req.body || {};
+    if (weight_before_kg === undefined || weight_after_kg === undefined) {
+      res.status(400).json({ ok: false, error: 'Потрібні вага до і вага після' });
+      return;
+    }
+    const batch = await db.recordPhotoseparation(Number(req.params.id), { weight_before_kg, weight_after_kg });
+    res.json({ ok: true, batch });
+  } catch (error) {
+    console.error('POST /api/roasting-batches/:id/photoseparation ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти ваги' });
   }
 });
 
@@ -772,6 +843,11 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
 
     for (const name of seedKapranClients) {
       await db.upsertClientByName(name, { manager: 'Капран' });
+    }
+
+    const greenCoffeeInserted = await db.insertGreenCoffeeIfMissing(seedGreenCoffee);
+    if (greenCoffeeInserted > 0) {
+      console.log(`Imported green coffee lots: ${greenCoffeeInserted}`);
     }
 
     // Одноразовий масовий імпорт історичних замовлень (81 вкладка файлу,
