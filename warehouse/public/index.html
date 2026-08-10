@@ -523,6 +523,7 @@
       <input type="text" id="tProduct" list="taskProductsList" placeholder="код або назва">
       <datalist id="taskProductsList"></datalist>
     </div>
+    <div id="tDripComponentsPreview" style="display:none; color: var(--warn); font-size: 12px; margin: -8px 0 12px;"></div>
     <div class="field">
       <label>Планова кількість</label>
       <input type="number" id="tPlannedQty" min="0" step="any" placeholder="0">
@@ -643,6 +644,17 @@
   </div>
 </div>
 
+<div class="overlay" id="dripComponentsOverlay">
+  <div class="modal" style="max-width: 480px;">
+    <h2 id="dripComponentsTitle">Склад набору</h2>
+    <p style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;">Які окремі смаки дріпів (кожен — свій код SAP, виробляється на Дріп станку) і в якій кількості йдуть в один цей набір. Використовується для показу складу на задачі Дріп станка/Збірки дріпів і для списання компонентів при завершенні задачі.</p>
+    <div id="dripComponentsRows"></div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCloseDripComponents">Закрити</button>
+    </div>
+  </div>
+</div>
+
 <!-- Модалка: зміна статусу задачі -->
 <div class="overlay" id="taskStatusOverlay">
   <div class="modal">
@@ -738,7 +750,10 @@ async function loadProducts() {
           ${PRODUCT_STATUSES.map((s) => `<option value="${s}" ${s === row.status ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
       </td>
-      <td class="row-actions"><button class="secondary" onclick="openSpec('${row.code}', '${(row.name || row.code).replace(/'/g, "\\'")}')">Специфікація</button></td>
+      <td class="row-actions" style="display:flex; gap:6px;">
+        <button class="secondary" onclick="openSpec('${row.code}', '${escAttr(row.name || row.code)}')">Специфікація</button>
+        <button class="secondary" onclick="openDripComponents('${row.code}', '${escAttr(row.name || row.code)}')">Склад набору</button>
+      </td>
     </tr>
   `).join('');
 }
@@ -776,7 +791,7 @@ async function loadStock() {
       <td>${fmt(row.min_stock)}</td>
       <td>${stockStatusTag(row)}</td>
       <td>${row.last_movement_date ? new Date(row.last_movement_date).toLocaleDateString('uk-UA') : '—'}</td>
-      <td class="row-actions">${window._me && ['адмін', 'кладовщик'].includes(window._me.role) ? `<button class="secondary" onclick="openMovement('${row.code}', '${(row.name || row.code).replace(/'/g, "\\'")}')">+ Рух</button>` : ''}</td>
+      <td class="row-actions">${window._me && ['адмін', 'кладовщик'].includes(window._me.role) ? `<button class="secondary" onclick="openMovement('${row.code}', '${escAttr(row.name || row.code)}')">+ Рух</button>` : ''}</td>
     </tr>
   `).join('');
 }
@@ -1022,6 +1037,8 @@ function orderStatusTag(status) {
 }
 
 const ORDER_STATUS_OPTIONS = ['нове', 'в роботі', 'відвантажено', 'скасовано'];
+const DELIVERY_METHOD_OPTIONS = ['Водій', 'Самовивіз', 'Нова пошта', 'Поштомат'];
+const DELIVERY_METHODS_REQUIRING_TTN = ['Нова пошта', 'Поштомат'];
 
 function lineNeedsGrind(l) {
   return l.grind_flag === 'Так' || (!l.grind_flag && !!l.grind_type);
@@ -1104,7 +1121,7 @@ async function renderOrderDetail(orderNumber) {
       ${data.lines.map((l) => `
         <div style="padding: 8px 0; border-bottom: 1px solid var(--border); white-space: normal;">
           <div>${l.product_name_raw || l.product_code} <span style="color: var(--muted);">(${l.product_code})</span></div>
-          <div style="color: var(--muted); font-size: 12px;">${fmt(l.qty)} шт · ${l.roast_type || '—'} · ${l.delivery_method || '—'} · ${orderStatusTag(l.status)}</div>
+          <div style="color: var(--muted); font-size: 12px;">${fmt(l.qty)} шт · ${l.roast_type || '—'} · ${l.delivery_method || '—'}${l.ttn ? ' (ТТН: ' + l.ttn + ')' : ''} · ${orderStatusTag(l.status)}</div>
           ${lineNeedsGrind(l) ? `<div style="margin-top:4px;"><span class="tag warn">⚠ потрібен помел${l.grind_type ? ': ' + l.grind_type : ''}</span> <span style="color: var(--muted); font-size: 11px;">— відвантажити мелену каву, не зерно</span></div>` : ''}
           <div id="overrides_${l.id}">
             ${(l.overrides || []).map((o) => `
@@ -1122,12 +1139,20 @@ async function renderOrderDetail(orderNumber) {
               <input type="text" id="lineStatusNote_${l.id}" placeholder="коментар (напр. причина скасування)" style="font-size:11px; width:160px;" value="${(l.status_note || '').replace(/"/g, '&quot;')}">
               <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveLineStatus(${l.id}, '${orderNumber}')">Змінити статус позиції</button>
             </div>
+            <div style="display:flex; gap:4px; margin-top:6px; flex-wrap: wrap; align-items:center;">
+              <select id="lineDelivery_${l.id}" style="font-size:11px;">
+                <option value="">— не вказано —</option>
+                ${DELIVERY_METHOD_OPTIONS.map((d) => `<option value="${d}" ${l.delivery_method === d ? 'selected' : ''}>${d}</option>`).join('')}
+                ${l.delivery_method && !DELIVERY_METHOD_OPTIONS.includes(l.delivery_method) ? `<option value="${l.delivery_method.replace(/"/g, '&quot;')}" selected>${l.delivery_method} (з файлу)</option>` : ''}
+              </select>
+              <input type="text" id="lineTtn_${l.id}" placeholder="ТТН" value="${(l.ttn || '').replace(/"/g, '&quot;')}" style="font-size:11px; width:130px;">
+              <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveLineDelivery(${l.id}, '${orderNumber}')">Зберегти доставку</button>
+            </div>
             <details style="margin-top:4px;">
               <summary style="cursor:pointer; font-size:11px; color: var(--muted);">Форс-мажор: замінити пакування для цього рядка</summary>
               <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap;">
-                <select id="ovRole_${l.id}" style="font-size:11px;">
-                  ${SPEC_ROLES.map((r) => `<option value="${r.value}">${r.label}</option>`).join('')}
-                </select>
+                <input type="text" id="ovRole_${l.id}" list="ovRolePresets_${l.id}" placeholder="поле, напр. пачка" style="font-size:11px; width:110px;">
+                <datalist id="ovRolePresets_${l.id}">${SPEC_ROLES.map((r) => `<option value="${r.value}">`).join('')}</datalist>
                 <select id="ovMaterial_${l.id}" style="font-size:11px; flex:1; min-width:160px;">
                   ${window._materialsCache.map((m) => `<option value="${m.id}">${m.material_type ? '[' + m.material_type + '] ' : ''}${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</option>`).join('')}
                 </select>
@@ -1159,6 +1184,20 @@ async function saveLineStatus(lineId, orderNumber) {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
   showToast('Статус позиції оновлено');
+  await renderOrderDetail(orderNumber);
+}
+
+async function saveLineDelivery(lineId, orderNumber) {
+  const delivery_method = document.getElementById('lineDelivery_' + lineId).value;
+  const ttn = document.getElementById('lineTtn_' + lineId).value.trim();
+  const resp = await fetch('/api/order-lines/' + lineId + '/delivery', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ delivery_method, ttn })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти доставку'); return; }
+  showToast('Доставку збережено');
   await renderOrderDetail(orderNumber);
 }
 
@@ -1280,7 +1319,16 @@ async function initStations() {
   await loadTasks();
 }
 
-function escAttr(s) { return String(s || '').replace(/'/g, "\\'"); }
+// Для вставки в onclick="...('${escAttr(x)}')" — і назви товарів реально
+// містять лапки (напр. Набір дріпів "Шукай в Києві"), які інакше зламали б
+// HTML-атрибут onclick="..." ще до того, як JS-рядок у ньому взагалі
+// почав парситись.
+function escAttr(s) {
+  return String(s || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '&quot;');
+}
 
 async function loadStationCards() {
   const resp = await fetch('/api/stations-status');
@@ -1392,7 +1440,7 @@ async function loadStationChips() {
   const container = document.getElementById('stationChips');
   const stations = ['', ...data.stations];
   container.innerHTML = stations.map((s) => `
-    <button class="${s === currentStationFilter ? 'active' : ''}" onclick="setStationFilter('${s.replace(/'/g, "\\'")}')">${s || 'Всі станції'}</button>
+    <button class="${s === currentStationFilter ? 'active' : ''}" onclick="setStationFilter('${escAttr(s)}')">${s || 'Всі станції'}</button>
   `).join('');
 
   const datalist = document.getElementById('stationsList');
@@ -1434,7 +1482,7 @@ async function loadTasks() {
     <tr>
       <td>${new Date(t.task_date).toLocaleDateString('uk-UA')}</td>
       <td>${t.station}</td>
-      <td>${t.product_name || t.product_code || '—'}${t.comment ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${t.comment}</div>` : ''}</td>
+      <td>${t.product_name || t.product_code || '—'}${t.comment ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${t.comment}</div>` : ''}${(t.drip_components && t.drip_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад набору: ${t.drip_components.map((c) => `${c.component_name} ×${fmt(c.total_qty)}`).join(', ')}</div>` : ''}</td>
       <td class="balance">${fmt(t.planned_qty)}${t.actual_qty !== null ? ' (факт ' + fmt(t.actual_qty) + ')' : ''}</td>
       <td>${t.unit || ''}</td>
       <td>${t.reason}</td>
@@ -1455,6 +1503,7 @@ document.getElementById('btnAddTask').onclick = async () => {
   document.getElementById('tDate').value = document.getElementById('taskDateFrom').value || isoDate(new Date());
   document.getElementById('tReason').value = 'ручне';
   document.getElementById('tComment').value = '';
+  document.getElementById('tDripComponentsPreview').style.display = 'none';
 
   const products = window._productsCache || (await (await fetch('/api/products')).json()).products || [];
   window._productsCache = products;
@@ -1462,6 +1511,26 @@ document.getElementById('btnAddTask').onclick = async () => {
 
   document.getElementById('taskOverlay').classList.add('open');
 };
+
+async function updateTaskDripPreview() {
+  const productInput = document.getElementById('tProduct').value.trim();
+  const [maybeCode] = productInput.split(' — ');
+  const matched = (window._productsCache || []).find((p) => p.code === maybeCode);
+  const preview = document.getElementById('tDripComponentsPreview');
+  if (!matched) { preview.style.display = 'none'; preview.innerHTML = ''; return; }
+
+  const resp = await fetch('/api/products/' + encodeURIComponent(matched.code) + '/drip-components');
+  const data = await resp.json();
+  const components = data.ok ? data.components : [];
+  if (!components.length) { preview.style.display = 'none'; preview.innerHTML = ''; return; }
+
+  const plannedQty = Number(document.getElementById('tPlannedQty').value) || 1;
+  preview.innerHTML = 'Склад набору (на ' + fmt(plannedQty) + '): ' + components.map((c) => `${c.component_name} ×${fmt(c.qty_per_set * plannedQty)}`).join(', ');
+  preview.style.display = 'block';
+}
+
+document.getElementById('tProduct').addEventListener('input', updateTaskDripPreview);
+document.getElementById('tPlannedQty').addEventListener('input', updateTaskDripPreview);
 
 document.getElementById('btnCancelTask').onclick = () => {
   document.getElementById('taskOverlay').classList.remove('open');
@@ -1581,7 +1650,7 @@ async function loadMaterials() {
       <td class="balance">${fmt(m.balance)} ${materialStatusTag(m)}</td>
       <td>${fmt(m.min_stock)}</td>
       <td>${m.reorder_period_days ?? '—'}</td>
-      <td class="row-actions"><button class="secondary" onclick="openMaterialMovement(${m.id}, '${m.name.replace(/'/g, "\\'")}')">+ Рух</button></td>
+      <td class="row-actions"><button class="secondary" onclick="openMaterialMovement(${m.id}, '${escAttr(m.name)}')">+ Рух</button></td>
     </tr>
   `).join('');
 }
@@ -1663,13 +1732,13 @@ document.getElementById('btnSaveMaterialMovement').onclick = async () => {
   loadMaterials();
 };
 
-// ---- Специфікація товару (пачка/плівка/наліпки/коробка відвантаження) ----
+// ---- Специфікація товару: довільні поля (пачка/плівка/наліпка/...), які
+// Тетяна сама додає й видаляє — нічого не форсується (напр. у Центршова
+// немає наліпки, там плівка з бабіни; на Ручній буває індивідуальне
+// пакування). SPEC_ROLES тут лише підказка автозаповнення, не обмеження.
 const SPEC_ROLES = [
-  { value: 'пачка', label: 'Пачка' },
-  { value: 'плівка', label: 'Плівка' },
-  { value: 'наліпка_перед', label: 'Наліпка (перед)' },
-  { value: 'наліпка_зад', label: 'Наліпка (зад)' },
-  { value: 'коробка_відвантаження', label: 'Коробка відвантаження' }
+  { value: 'пачка' }, { value: 'плівка' }, { value: 'наліпка_перед' },
+  { value: 'наліпка_зад' }, { value: 'коробка_відвантаження' }
 ];
 let currentSpecProductCode = null;
 
@@ -1682,36 +1751,52 @@ async function openSpec(code, name) {
     const data = await resp.json();
     window._materialsCache = data.ok ? data.materials : [];
   }
-  const materials = window._materialsCache;
-
-  const resp = await fetch('/api/products/' + encodeURIComponent(code) + '/specs');
-  const data = await resp.json();
-  const specs = data.ok ? data.specs : [];
-
-  document.getElementById('specRows').innerHTML = SPEC_ROLES.map((r) => {
-    const existing = specs.find((s) => s.role === r.value);
-    return `
-      <div class="field" style="border-bottom: 1px solid var(--border); padding-bottom: 10px;">
-        <label>${r.label}</label>
-        <select id="specMaterial_${r.value}" style="margin-bottom: 6px;">
-          <option value="">— не задано —</option>
-          ${materials.map((m) => `<option value="${m.id}" ${existing && existing.material_id === m.id ? 'selected' : ''}>${m.material_type ? '[' + m.material_type + '] ' : ''}${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</option>`).join('')}
-        </select>
-        <div style="display:flex; gap:8px;">
-          <input type="number" id="specQty_${r.value}" min="0" step="any" placeholder="к-сть на 1 од." value="${existing ? existing.qty_per_unit : (r.value === 'коробка_відвантаження' ? '' : 1)}" style="flex:1;">
-          <button class="secondary" onclick="saveSpec('${r.value}')">Зберегти</button>
-        </div>
-      </div>
-    `;
-  }).join('');
-
+  await renderSpecRows();
   document.getElementById('specOverlay').classList.add('open');
 }
 
-async function saveSpec(role) {
-  const materialId = document.getElementById('specMaterial_' + role).value;
-  const qty = document.getElementById('specQty_' + role).value;
+function specMaterialOptions(selectedId) {
+  return `
+    <option value="">— не задано —</option>
+    ${window._materialsCache.map((m) => `<option value="${m.id}" ${selectedId === m.id ? 'selected' : ''}>${m.material_type ? '[' + m.material_type + '] ' : ''}${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</option>`).join('')}
+  `;
+}
 
+async function renderSpecRows() {
+  const resp = await fetch('/api/products/' + encodeURIComponent(currentSpecProductCode) + '/specs');
+  const data = await resp.json();
+  const specs = data.ok ? data.specs : [];
+
+  const existingRows = specs.map((s) => `
+    <div class="field" style="border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+      <label>${s.role} <a href="#" onclick="deleteSpec(${s.id}); return false;" style="color: var(--bad); font-size: 11px; margin-left: 6px;">видалити поле</a></label>
+      <select id="specMaterial_${s.id}" style="margin-bottom: 6px;">${specMaterialOptions(s.material_id)}</select>
+      <div style="display:flex; gap:8px;">
+        <input type="number" id="specQty_${s.id}" min="0" step="any" placeholder="к-сть на 1 од." value="${s.qty_per_unit}" style="flex:1;">
+        <button class="secondary" onclick="saveExistingSpec(${s.id}, '${escAttr(s.role)}')">Зберегти</button>
+      </div>
+    </div>
+  `).join('') || '<p style="color: var(--muted); font-size: 12px; margin: 0 0 10px;">Полів ще немає — додай перше нижче.</p>';
+
+  const newRow = `
+    <div class="field">
+      <label>Додати нове поле</label>
+      <input type="text" id="specNewRole" list="specRolePresets" placeholder="назва поля, напр. наліпка_бокова" style="margin-bottom:6px;">
+      <datalist id="specRolePresets">${SPEC_ROLES.map((r) => `<option value="${r.value}">`).join('')}</datalist>
+      <select id="specNewMaterial" style="margin-bottom: 6px;">${specMaterialOptions(null)}</select>
+      <div style="display:flex; gap:8px;">
+        <input type="number" id="specNewQty" min="0" step="any" placeholder="к-сть на 1 од." value="1" style="flex:1;">
+        <button onclick="addSpec()">Додати поле</button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('specRows').innerHTML = existingRows + newRow;
+}
+
+async function saveExistingSpec(id, role) {
+  const materialId = document.getElementById('specMaterial_' + id).value;
+  const qty = document.getElementById('specQty_' + id).value;
   if (!materialId) { showToast('Обери матеріал'); return; }
 
   const resp = await fetch('/api/products/' + encodeURIComponent(currentSpecProductCode) + '/specs', {
@@ -1721,11 +1806,134 @@ async function saveSpec(role) {
   });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
-  showToast('Специфікацію збережено');
+  showToast('Збережено');
+  await renderSpecRows();
+}
+
+async function addSpec() {
+  const role = document.getElementById('specNewRole').value.trim();
+  const materialId = document.getElementById('specNewMaterial').value;
+  const qty = document.getElementById('specNewQty').value;
+  if (!role) { showToast('Вкажи назву поля'); return; }
+  if (!materialId) { showToast('Обери матеріал'); return; }
+
+  const resp = await fetch('/api/products/' + encodeURIComponent(currentSpecProductCode) + '/specs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role, material_id: Number(materialId), qty_per_unit: qty || 1 })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося додати'); return; }
+  showToast('Поле додано');
+  await renderSpecRows();
+}
+
+async function deleteSpec(id) {
+  const resp = await fetch('/api/product-specs/' + id, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  showToast('Поле видалено');
+  await renderSpecRows();
 }
 
 document.getElementById('btnCloseSpec').onclick = () => {
   document.getElementById('specOverlay').classList.remove('open');
+};
+
+// ---- Склад набору дріпів: із яких окремих смаків (свій код SAP кожен) ----
+let currentDripSetCode = null;
+
+async function openDripComponents(code, name) {
+  currentDripSetCode = code;
+  document.getElementById('dripComponentsTitle').textContent = 'Склад набору — ' + name;
+
+  if (!window._productsCache) {
+    const resp = await fetch('/api/products');
+    const data = await resp.json();
+    window._productsCache = data.ok ? data.products : [];
+  }
+
+  await renderDripComponentRows();
+  document.getElementById('dripComponentsOverlay').classList.add('open');
+}
+
+async function renderDripComponentRows() {
+  const resp = await fetch('/api/products/' + encodeURIComponent(currentDripSetCode) + '/drip-components');
+  const data = await resp.json();
+  const components = data.ok ? data.components : [];
+
+  const existingRows = components.map((c) => `
+    <div class="field" style="border-bottom: 1px solid var(--border); padding-bottom: 10px; display:flex; gap:8px; align-items:flex-end;">
+      <div style="flex:1;">
+        <label>${c.component_name || c.component_product_code} <span style="color: var(--muted);">(${c.component_product_code})</span></label>
+        <input type="number" id="dripQty_${c.id}" min="0" step="any" value="${c.qty_per_set}">
+      </div>
+      <button class="secondary" onclick="saveDripComponentQty(${c.id}, '${c.component_product_code}')">Зберегти</button>
+      <a href="#" onclick="deleteDripComponent(${c.id}); return false;" style="color: var(--bad); font-size: 12px;">видалити</a>
+    </div>
+  `).join('') || '<p style="color: var(--muted); font-size: 12px; margin: 0 0 10px;">Компонентів ще немає — додай перший нижче.</p>';
+
+  const newRow = `
+    <div class="field">
+      <label>Додати компонент</label>
+      <input type="text" id="dripComponentNewCode" list="dripComponentProductsList" placeholder="код або назва смаку" style="margin-bottom:6px;">
+      <datalist id="dripComponentProductsList">
+        ${window._productsCache.map((p) => `<option value="${p.code} — ${(p.name || '').replace(/"/g, '&quot;')}">`).join('')}
+      </datalist>
+      <div style="display:flex; gap:8px;">
+        <input type="number" id="dripComponentNewQty" min="0" step="any" placeholder="к-сть на 1 набір" value="1" style="flex:1;">
+        <button onclick="addDripComponent()">Додати</button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('dripComponentsRows').innerHTML = existingRows + newRow;
+}
+
+async function saveDripComponentQty(id, componentCode) {
+  const qty = document.getElementById('dripQty_' + id).value;
+
+  const resp = await fetch('/api/products/' + encodeURIComponent(currentDripSetCode) + '/drip-components', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ component_product_code: componentCode, qty_per_set: qty || 1 })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+  await renderDripComponentRows();
+}
+
+async function addDripComponent() {
+  const input = document.getElementById('dripComponentNewCode').value.trim();
+  const [maybeCode] = input.split(' — ');
+  const matched = (window._productsCache || []).find((p) => p.code === maybeCode);
+  const componentCode = matched ? matched.code : maybeCode;
+  const qty = document.getElementById('dripComponentNewQty').value;
+
+  if (!componentCode) { showToast('Обери товар'); return; }
+
+  const resp = await fetch('/api/products/' + encodeURIComponent(currentDripSetCode) + '/drip-components', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ component_product_code: componentCode, qty_per_set: qty || 1 })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося додати'); return; }
+  showToast('Компонент додано');
+  await renderDripComponentRows();
+}
+
+async function deleteDripComponent(id) {
+  const resp = await fetch('/api/drip-set-components/' + id, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  showToast('Компонент видалено');
+  await renderDripComponentRows();
+}
+
+document.getElementById('btnCloseDripComponents').onclick = () => {
+  document.getElementById('dripComponentsOverlay').classList.remove('open');
 };
 
 const ALL_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabStations', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];

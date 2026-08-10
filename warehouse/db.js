@@ -17,7 +17,8 @@ const SIGNED_TYPES = {
   return: 1,
   writeoff: -1,
   adjustment_plus: 1,
-  adjustment_minus: -1
+  adjustment_minus: -1,
+  component_used: -1
 };
 
 // Рухи, де qty — це фактично порахована (абсолютна) кількість, а не дельта.
@@ -105,6 +106,9 @@ async function initSchema() {
     -- кожному рестарті сервера він повертав ручне скасування назад і додавав
     -- дублікат руху списання.
     ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS historical_backfilled_at TIMESTAMPTZ;
+    -- ТТН (номер транспортної накладної) — обов'язкове поле, коли доставка
+    -- через Нову пошту чи Поштомат (перевіряється в updateOrderLineDelivery).
+    ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS ttn TEXT NOT NULL DEFAULT '';
     CREATE INDEX IF NOT EXISTS idx_order_lines_order_number ON order_lines(order_number);
     CREATE INDEX IF NOT EXISTS idx_order_lines_status ON order_lines(status);
 
@@ -161,6 +165,20 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (product_code, role)
+    );
+
+    -- Склад набору дріпів: із яких окремих смаків (кожен — свій код SAP,
+    -- виробляється на Дріп станку) складається готовий набір (збирається на
+    -- Збірці дріпів). qty_per_set — скільки одиниць цього смаку йде в ОДИН
+    -- набір. Використовується і для показу складу набору на задачі станції,
+    -- і для списання компонентів зі складу при завершенні задачі на набір.
+    CREATE TABLE IF NOT EXISTS drip_set_components (
+      id SERIAL PRIMARY KEY,
+      set_product_code TEXT NOT NULL REFERENCES products(code),
+      component_product_code TEXT NOT NULL REFERENCES products(code),
+      qty_per_set NUMERIC NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (set_product_code, component_product_code)
     );
 
     -- Форс-мажорна заміна пакування для конкретного рядка замовлення (наприклад
@@ -265,6 +283,10 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    -- Коли задача на набір дріпів (продукт зі складом у drip_set_components)
+    -- завершується — рухи складу (набір +, кожен компонент −) створюються
+    -- рівно один раз; цей прапорець про це.
+    ALTER TABLE production_tasks ADD COLUMN IF NOT EXISTS stock_applied_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_tasks_station_date ON production_tasks(station, task_date);
   `);
 }
@@ -435,7 +457,7 @@ async function listStock({ search = '' } = {}) {
     `SELECT p.code, p.name, p.short_name, p.unit, p.station, p.min_stock, p.status,
             COALESCE(SUM(m.signed_qty), 0) AS balance,
             COALESCE(SUM(CASE WHEN m.movement_type IN ('production_in', 'return') THEN m.qty ELSE 0 END), 0) AS received,
-            COALESCE(SUM(CASE WHEN m.movement_type IN ('shipment', 'writeoff') THEN m.qty ELSE 0 END), 0) AS issued,
+            COALESCE(SUM(CASE WHEN m.movement_type IN ('shipment', 'writeoff', 'component_used') THEN m.qty ELSE 0 END), 0) AS issued,
             MAX(m.movement_date) AS last_movement_date
      FROM products p
      LEFT JOIN stock_movements m ON m.product_code = p.code
@@ -495,7 +517,7 @@ async function listInventoryComparison() {
   const { rows } = await pool.query(
     `SELECT p.code, p.name,
             first_inv.qty AS baseline_qty, first_inv.movement_date AS baseline_date,
-            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('shipment','writeoff') THEN m.qty ELSE 0 END), 0) AS issued_since,
+            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('shipment','writeoff','component_used') THEN m.qty ELSE 0 END), 0) AS issued_since,
             COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('production_in','return') THEN m.qty ELSE 0 END), 0) AS received_since,
             COALESCE(SUM(m.signed_qty), 0) AS current_balance
      FROM products p
@@ -838,8 +860,8 @@ async function getOrderLines(orderNumber) {
 }
 
 async function upsertOrderLineOverride({ order_line_id, role, material_id, note, created_by }) {
-  if (!PRODUCT_SPEC_ROLES.includes(role)) {
-    throw new Error(`Unknown role: ${role}`);
+  if (!role || !role.trim()) {
+    throw new Error('Роль не може бути порожньою');
   }
   const { rows } = await pool.query(
     `INSERT INTO order_line_overrides (order_line_id, role, material_id, note, created_by)
@@ -947,6 +969,20 @@ async function updateOrderLineStatus(lineId, status, note) {
     });
   }
 
+  return rowCount;
+}
+
+const DELIVERY_METHODS = ['Водій', 'Самовивіз', 'Нова пошта', 'Поштомат'];
+const DELIVERY_METHODS_REQUIRING_TTN = ['Нова пошта', 'Поштомат'];
+
+async function updateOrderLineDelivery(lineId, deliveryMethod, ttn) {
+  if (DELIVERY_METHODS_REQUIRING_TTN.includes(deliveryMethod) && !(ttn || '').trim()) {
+    throw new Error(`Для "${deliveryMethod}" обов'язково вкажи ТТН`);
+  }
+  const { rowCount } = await pool.query(
+    `UPDATE order_lines SET delivery_method = $1, ttn = $2 WHERE id = $3`,
+    [deliveryMethod || '', (ttn || '').trim(), lineId]
+  );
   return rowCount;
 }
 
@@ -1224,6 +1260,10 @@ async function addMaterialMovement({ material_id, movement_type, qty, note, move
   return rows[0];
 }
 
+// Це лише готові варіанти для підказки в інтерфейсі — саму специфікацію
+// більше не обмежено цим списком: Тетяна може додати чи прибрати будь-яке
+// поле сама (наприклад, у Центршова немає наліпки — там плівка з бабіни,
+// а на Ручній станції в частини товару індивідуальне пакування).
 const PRODUCT_SPEC_ROLES = ['пачка', 'плівка', 'наліпка_перед', 'наліпка_зад', 'коробка_відвантаження'];
 
 async function listProductSpecs(productCode) {
@@ -1239,8 +1279,8 @@ async function listProductSpecs(productCode) {
 }
 
 async function upsertProductSpec({ product_code, role, material_id, qty_per_unit }) {
-  if (!PRODUCT_SPEC_ROLES.includes(role)) {
-    throw new Error(`Unknown role: ${role}`);
+  if (!role || !role.trim()) {
+    throw new Error('Назва поля не може бути порожньою');
   }
   const { rows } = await pool.query(
     `INSERT INTO product_specs (product_code, role, material_id, qty_per_unit, updated_at)
@@ -1257,6 +1297,38 @@ async function upsertProductSpec({ product_code, role, material_id, qty_per_unit
 
 async function deleteProductSpec(id) {
   const { rowCount } = await pool.query('DELETE FROM product_specs WHERE id = $1', [id]);
+  return rowCount;
+}
+
+async function listDripSetComponents(setProductCode) {
+  const { rows } = await pool.query(
+    `SELECT dsc.*, p.name AS component_name, p.short_name AS component_short_name, p.unit AS component_unit
+     FROM drip_set_components dsc
+     JOIN products p ON p.code = dsc.component_product_code
+     WHERE dsc.set_product_code = $1
+     ORDER BY lower(p.name) ASC`,
+    [setProductCode]
+  );
+  return rows.map((r) => ({ ...r, qty_per_set: Number(r.qty_per_set) }));
+}
+
+async function upsertDripSetComponent({ set_product_code, component_product_code, qty_per_set }) {
+  if (set_product_code === component_product_code) {
+    throw new Error('Набір не може містити сам себе як компонент');
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO drip_set_components (set_product_code, component_product_code, qty_per_set)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (set_product_code, component_product_code) DO UPDATE SET
+       qty_per_set = excluded.qty_per_set
+     RETURNING *`,
+    [set_product_code, component_product_code, qty_per_set || 1]
+  );
+  return rows[0];
+}
+
+async function deleteDripSetComponent(id) {
+  const { rowCount } = await pool.query('DELETE FROM drip_set_components WHERE id = $1', [id]);
   return rowCount;
 }
 
@@ -1477,12 +1549,33 @@ async function listTasks({ station = '', dateFrom = '', dateTo = '', status = ''
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const { rows } = await pool.query(
-    `SELECT * FROM production_tasks ${where} ORDER BY task_date ASC, station ASC, id ASC`,
+    `SELECT pt.*,
+            COALESCE(
+              (SELECT json_agg(json_build_object(
+                 'component_product_code', dsc.component_product_code,
+                 'component_name', p.name,
+                 'qty_per_set', dsc.qty_per_set,
+                 'total_qty', dsc.qty_per_set * COALESCE(pt.actual_qty, pt.planned_qty)
+               ) ORDER BY p.name)
+               FROM drip_set_components dsc
+               JOIN products p ON p.code = dsc.component_product_code
+               WHERE dsc.set_product_code = pt.product_code),
+              '[]'
+            ) AS drip_components
+     FROM production_tasks pt
+     ${where}
+     ORDER BY task_date ASC, station ASC, id ASC`,
     params
   );
   return rows.map((r) => ({ ...r, planned_qty: Number(r.planned_qty), actual_qty: r.actual_qty === null ? null : Number(r.actual_qty) }));
 }
 
+// Завершення задачі на набір дріпів (продукт зі складом компонентів у
+// drip_set_components) автоматично: (1) заводить на склад готовий набір
+// рухом "приймання виробництва", (2) списує з кожного компонента рівно
+// стільки, скільки пішло на зібрану кількість (qty_per_set × actual_qty).
+// Для товарів без визначеного складу набору (усі інші задачі станцій)
+// поведінка не змінюється — рухів складу не створюється, як і раніше.
 async function updateTaskStatus(id, { status, actual_qty, comment }) {
   if (!TASK_STATUSES.includes(status)) {
     throw new Error(`Unknown status: ${status}`);
@@ -1497,7 +1590,35 @@ async function updateTaskStatus(id, { status, actual_qty, comment }) {
      RETURNING *`,
     [id, status, actual_qty ?? null, comment ?? null]
   );
-  return rows[0] || null;
+  const task = rows[0] || null;
+  if (!task) return null;
+
+  if (task.status === 'завершено' && task.actual_qty !== null && !task.stock_applied_at) {
+    const components = await listDripSetComponents(task.product_code);
+    if (components.length > 0) {
+      const qty = Number(task.actual_qty);
+      await addMovement({
+        product_code: task.product_code,
+        movement_type: 'production_in',
+        qty,
+        movement_date: task.task_date,
+        note: `Задача станції №${task.id} (набір дріпів)`
+      });
+      for (const c of components) {
+        await addMovement({
+          product_code: c.component_product_code,
+          movement_type: 'component_used',
+          qty: qty * c.qty_per_set,
+          movement_date: task.task_date,
+          note: `Задача станції №${task.id} — компонент набору ${task.product_code}`
+        });
+      }
+      await pool.query('UPDATE production_tasks SET stock_applied_at = now() WHERE id = $1', [task.id]);
+      task.stock_applied_at = new Date();
+    }
+  }
+
+  return task;
 }
 
 // Ніколи не перезаписує пароль уже наявного акаунта — безпечно викликати на
@@ -1613,6 +1734,9 @@ export default {
   deleteOrderLineOverride,
   updateOrderStatus,
   updateOrderLineStatus,
+  updateOrderLineDelivery,
+  DELIVERY_METHODS,
+  DELIVERY_METHODS_REQUIRING_TTN,
   backfillHistoricalShipments,
   migrateHistoricalBackfillMarker,
   cleanupDuplicateHistoricalBackfillMovements,
@@ -1662,6 +1786,9 @@ export default {
   listProductSpecs,
   upsertProductSpec,
   deleteProductSpec,
+  listDripSetComponents,
+  upsertDripSetComponent,
+  deleteDripSetComponent,
   ORDER_STATUSES,
   PRODUCT_STATUSES,
   TASK_STATUSES,

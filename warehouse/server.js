@@ -419,6 +419,45 @@ app.delete('/api/product-specs/:id', requireRole(), async (req, res) => {
   }
 });
 
+app.get('/api/products/:code/drip-components', requireRole('тімлід'), async (req, res) => {
+  try {
+    const components = await db.listDripSetComponents(req.params.code);
+    res.json({ ok: true, components });
+  } catch (error) {
+    console.error('GET /api/products/:code/drip-components ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати склад набору' });
+  }
+});
+
+app.post('/api/products/:code/drip-components', requireRole(), async (req, res) => {
+  try {
+    const { component_product_code, qty_per_set } = req.body || {};
+    if (!component_product_code) {
+      res.status(400).json({ ok: false, error: 'Потрібен component_product_code' });
+      return;
+    }
+    const component = await db.upsertDripSetComponent({ set_product_code: req.params.code, component_product_code, qty_per_set });
+    res.json({ ok: true, component });
+  } catch (error) {
+    console.error('POST /api/products/:code/drip-components ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти склад набору' });
+  }
+});
+
+app.delete('/api/drip-set-components/:id', requireRole(), async (req, res) => {
+  try {
+    const rowCount = await db.deleteDripSetComponent(Number(req.params.id));
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE /api/drip-set-components/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити' });
+  }
+});
+
 app.get('/api/blend-recipes', requireRole(), async (req, res) => {
   try {
     const recipes = await db.listBlendRecipes();
@@ -536,6 +575,21 @@ app.post('/api/order-lines/:lineId/status', requireRole('кладовщик'), a
   } catch (error) {
     console.error('POST /api/order-lines/:lineId/status ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+app.post('/api/order-lines/:lineId/delivery', requireRole('кладовщик'), async (req, res) => {
+  try {
+    const { delivery_method, ttn } = req.body || {};
+    const rowCount = await db.updateOrderLineDelivery(Number(req.params.lineId), delivery_method, ttn);
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Позицію не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/order-lines/:lineId/delivery ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти доставку' });
   }
 });
 
