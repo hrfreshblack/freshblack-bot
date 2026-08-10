@@ -356,6 +356,7 @@
           <th>Локація</th>
           <th>Залишок, кг</th>
           <th>Потрібна фотосепарація</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="greenCoffeeBody"></tbody>
@@ -398,6 +399,30 @@
     </table>
     </div>
     <div class="empty" id="doneBatchesEmpty" style="display:none;">Завершених партій ще немає.</div>
+
+    <h3 style="font-size:13px; color: var(--muted); text-transform: uppercase; letter-spacing:0.03em; margin: 24px 0 8px;">Аналітика за період</h3>
+    <div class="viewToolbar">
+      <button class="secondary" onclick="setGcAnalyticsPreset(0)">Сьогодні</button>
+      <button class="secondary" onclick="setGcAnalyticsPreset(3)">3 дні</button>
+      <button class="secondary" onclick="setGcAnalyticsPreset(7)">Тиждень</button>
+      <input type="date" id="gcAnalyticsFrom">
+      <input type="date" id="gcAnalyticsTo">
+      <button onclick="loadGreenCoffeeAnalytics()">Показати</button>
+    </div>
+    <div class="tableWrap">
+    <table id="gcAnalyticsTable">
+      <thead>
+        <tr>
+          <th>Лот</th>
+          <th>Пішло на обсмажку, кг</th>
+          <th>Надійшло/коригування, кг</th>
+          <th>Зміна за період, кг</th>
+        </tr>
+      </thead>
+      <tbody id="gcAnalyticsBody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="gcAnalyticsEmpty" style="display:none;">За цей період рухів по зеленій каві не було.</div>
   </div>
 
   <div id="viewMaterials" style="display:none;">
@@ -585,6 +610,12 @@
       <datalist id="taskProductsList"></datalist>
     </div>
     <div id="tDripComponentsPreview" style="display:none; color: var(--warn); font-size: 12px; margin: -8px 0 12px;"></div>
+    <div class="field">
+      <label>Рецептура бленду (необов'язково — якщо задача на бленд і треба показати/списати склад по зеленій каві)</label>
+      <input type="text" id="tRecipe" list="taskRecipesList" placeholder="напр. Black Blend — Nutty Boy">
+      <datalist id="taskRecipesList"></datalist>
+    </div>
+    <div id="tBlendComponentsPreview" style="display:none; color: var(--warn); font-size: 12px; margin: -8px 0 12px;"></div>
     <div class="field">
       <label>Планова кількість</label>
       <input type="number" id="tPlannedQty" min="0" step="any" placeholder="0">
@@ -1021,6 +1052,7 @@ document.getElementById('btnSaveMovement').onclick = async () => {
   document.getElementById('movementOverlay').classList.remove('open');
   showToast('Збережено. Новий залишок: ' + fmt(data.balance));
   loadStock();
+  if (document.getElementById('viewGreenCoffee').style.display !== 'none') loadGreenCoffee();
 };
 
 document.getElementById('btnAddProduct').onclick = () => {
@@ -1110,6 +1142,44 @@ function showTab(tab) {
 function initGreenCoffee() {
   loadGreenCoffee();
   loadRoastingBatches();
+  if (!document.getElementById('gcAnalyticsFrom').value) setGcAnalyticsPreset(0);
+  else loadGreenCoffeeAnalytics();
+}
+
+function setGcAnalyticsPreset(daysBack) {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - daysBack);
+  document.getElementById('gcAnalyticsFrom').value = isoDate(from);
+  document.getElementById('gcAnalyticsTo').value = isoDate(to);
+  loadGreenCoffeeAnalytics();
+}
+
+async function loadGreenCoffeeAnalytics() {
+  const dateFrom = document.getElementById('gcAnalyticsFrom').value;
+  const dateTo = document.getElementById('gcAnalyticsTo').value;
+  if (!dateFrom || !dateTo) return;
+
+  const resp = await fetch('/api/green-coffee/movements-summary?dateFrom=' + dateFrom + '&dateTo=' + dateTo);
+  const data = await resp.json();
+  const body = document.getElementById('gcAnalyticsBody');
+  const empty = document.getElementById('gcAnalyticsEmpty');
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  if (!data.summary.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  body.innerHTML = data.summary.map((s) => `
+    <tr>
+      <td>${s.name} <span style="color: var(--muted);">(${s.code})</span></td>
+      <td class="balance">${fmt(s.issued)}</td>
+      <td class="balance">${fmt(s.received)}</td>
+      <td class="balance">${s.net_change >= 0 ? '+' : ''}${fmt(s.net_change)}</td>
+    </tr>
+  `).join('');
 }
 
 async function loadGreenCoffee() {
@@ -1147,6 +1217,7 @@ async function loadGreenCoffee() {
         <td>${g.location || '—'}</td>
         <td class="balance">${fmt(g.balance)}</td>
         <td>${flagCell}</td>
+        <td class="row-actions">${isAdmin ? `<button class="secondary" onclick="openMovement('${g.code}', '${escAttr(g.name)}')">+ Рух</button>` : ''}</td>
       </tr>
     `;
   }).join('');
@@ -1778,7 +1849,7 @@ async function loadTasks() {
     <tr>
       <td>${new Date(t.task_date).toLocaleDateString('uk-UA')}</td>
       <td>${t.station}</td>
-      <td>${t.product_name || t.product_code || '—'}${t.comment ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${t.comment}</div>` : ''}${(t.drip_components && t.drip_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад набору: ${t.drip_components.map((c) => `${c.component_name} ×${fmt(c.total_qty)}`).join(', ')}</div>` : ''}</td>
+      <td>${t.product_name || t.product_code || '—'}${t.comment ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${t.comment}</div>` : ''}${(t.drip_components && t.drip_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад набору: ${t.drip_components.map((c) => `${c.component_name} ×${fmt(c.total_qty)}`).join(', ')}</div>` : ''}${(t.blend_components && t.blend_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад бленду (${t.blend_name}): ${t.blend_components.map((c) => `${c.name}${c.green_coffee_code ? '' : ' ⚠не знайдено в зел. каві'} ×${fmt(c.total_qty)}кг`).join(', ')}</div>` : ''}</td>
       <td class="balance">${fmt(t.planned_qty)}${t.actual_qty !== null ? ' (факт ' + fmt(t.actual_qty) + ')' : ''}</td>
       <td>${t.unit || ''}</td>
       <td>${t.reason}</td>
@@ -1794,16 +1865,25 @@ document.getElementById('taskDateTo').addEventListener('change', loadTasks);
 document.getElementById('btnAddTask').onclick = async () => {
   document.getElementById('tStation').value = currentStationFilter;
   document.getElementById('tProduct').value = '';
+  document.getElementById('tRecipe').value = '';
   document.getElementById('tPlannedQty').value = '';
   document.getElementById('tUnit').value = '';
   document.getElementById('tDate').value = document.getElementById('taskDateFrom').value || isoDate(new Date());
   document.getElementById('tReason').value = 'ручне';
   document.getElementById('tComment').value = '';
   document.getElementById('tDripComponentsPreview').style.display = 'none';
+  document.getElementById('tBlendComponentsPreview').style.display = 'none';
 
   const products = window._productsCache || (await (await fetch('/api/products')).json()).products || [];
   window._productsCache = products;
   document.getElementById('taskProductsList').innerHTML = products.map((p) => `<option value="${p.code} — ${(p.name || '').replace(/"/g, '&quot;')}">`).join('');
+
+  if (!window._recipesCache) {
+    const rResp = await fetch('/api/blend-recipes');
+    const rData = await rResp.json();
+    window._recipesCache = rData.ok ? rData.recipes : [];
+  }
+  document.getElementById('taskRecipesList').innerHTML = window._recipesCache.map((r) => `<option value="${r.id} — ${escAttr(r.category)} — ${escAttr(r.blend_name)}">`).join('');
 
   document.getElementById('taskOverlay').classList.add('open');
 };
@@ -1825,8 +1905,27 @@ async function updateTaskDripPreview() {
   preview.style.display = 'block';
 }
 
+function getSelectedRecipe() {
+  const input = document.getElementById('tRecipe').value.trim();
+  const [maybeId] = input.split(' — ');
+  return (window._recipesCache || []).find((r) => String(r.id) === maybeId) || null;
+}
+
+function updateTaskBlendPreview() {
+  const preview = document.getElementById('tBlendComponentsPreview');
+  const recipe = getSelectedRecipe();
+  if (!recipe || !recipe.components.length) { preview.style.display = 'none'; preview.innerHTML = ''; return; }
+
+  const plannedQty = Number(document.getElementById('tPlannedQty').value) || recipe.batch_size;
+  const scale = plannedQty / (recipe.batch_size || 1);
+  preview.innerHTML = 'Склад бленду (на ' + fmt(plannedQty) + ' від партії ' + fmt(recipe.batch_size) + '): ' +
+    recipe.components.map((c) => `${c.name} ×${fmt(c.qty * scale)}`).join(', ');
+  preview.style.display = 'block';
+}
+
 document.getElementById('tProduct').addEventListener('input', updateTaskDripPreview);
-document.getElementById('tPlannedQty').addEventListener('input', updateTaskDripPreview);
+document.getElementById('tPlannedQty').addEventListener('input', () => { updateTaskDripPreview(); updateTaskBlendPreview(); });
+document.getElementById('tRecipe').addEventListener('input', updateTaskBlendPreview);
 
 document.getElementById('btnCancelTask').onclick = () => {
   document.getElementById('taskOverlay').classList.remove('open');
@@ -1843,6 +1942,7 @@ document.getElementById('btnSaveTask').onclick = async () => {
   const matched = products.find((p) => p.code === maybeCode);
   const product_code = matched ? matched.code : '';
   const product_name = matched ? matched.name : productInput;
+  const recipe = getSelectedRecipe();
 
   const resp = await fetch('/api/tasks', {
     method: 'POST',
@@ -1855,7 +1955,8 @@ document.getElementById('btnSaveTask').onclick = async () => {
       unit: document.getElementById('tUnit').value.trim(),
       task_date,
       reason: document.getElementById('tReason').value,
-      comment: document.getElementById('tComment').value.trim()
+      comment: document.getElementById('tComment').value.trim(),
+      recipe_id: recipe ? recipe.id : null
     })
   });
   const data = await resp.json();

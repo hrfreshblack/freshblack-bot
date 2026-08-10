@@ -330,6 +330,13 @@ async function initSchema() {
     -- завершується — рухи складу (набір +, кожен компонент −) створюються
     -- рівно один раз; цей прапорець про це.
     ALTER TABLE production_tasks ADD COLUMN IF NOT EXISTS stock_applied_at TIMESTAMPTZ;
+    -- Задача на бленд (напр. "замішай 300кг Наті Бой") може явно вказати,
+    -- яка технологічна карта застосовується — щоб показати склад бленду в
+    -- зеленій каві на самій задачі і (за завершення) списати компоненти.
+    -- Явний вибір, а не пошук за назвою товару: назви блендів (напр. "Black",
+    -- "Ethiopia") збігаються з десятками різних товарів, автоматично вгадати
+    -- небезпечно.
+    ALTER TABLE production_tasks ADD COLUMN IF NOT EXISTS recipe_id INTEGER REFERENCES blend_recipes(id);
     CREATE INDEX IF NOT EXISTS idx_tasks_station_date ON production_tasks(station, task_date);
   `);
 }
@@ -678,6 +685,54 @@ async function insertGreenCoffeeIfMissing(rows) {
   return inserted;
 }
 
+// Одноразово (ідемпотентно через ON CONFLICT): заводить напівфабрикат-товар
+// для КОЖНОГО лоту зеленої кави одразу, а не лише коли трапиться перша
+// партія обсмажки — щоб було куди вносити задньочислові коригування
+// (напр. порахований залишок напівфабрикату на 02.08, ще до того, як через
+// цю систему пройшла хоч одна партія обсмажки).
+async function ensureNapivfabrykatProducts() {
+  const { rows } = await pool.query(`SELECT code, name FROM products WHERE category = 'зелена кава'`);
+  let created = 0;
+  for (const g of rows) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, updated_at)
+       VALUES ($1,$2,'кг',true,'напівфабрикат',$3, now())
+       ON CONFLICT (code) DO NOTHING`,
+      [`${g.code}-NF`, `Напівфабрикат: ${g.name}`, g.code]
+    );
+    created += rowCount;
+  }
+  return created;
+}
+
+function normalizeGreenCoffeeName(s) {
+  return String(s || '').trim().toLowerCase();
+}
+
+// Короткі назви в дужках (напр. "Djimmah GR5 3 (Ed3)") і повні назви кожного
+// лоту зеленої кави → пошуковий довідник "як бленд-рецептура називає цей
+// компонент" → код лоту зеленої кави. Лише ТОЧНІ (без підрядкового
+// вгадування) збіги — "burundi" в рецептурі повинен збігтись із назвою рівно
+// одного лоту, а не мовчки прив'язатись до першого, що містить це слово
+// (лотів із "Burundi" в назві — три).
+async function buildGreenCoffeeShortNameLookup() {
+  const { rows } = await pool.query(
+    `SELECT code, name, napivfabrykat_names FROM products WHERE category = 'зелена кава'`
+  );
+  const lookup = new Map();
+  for (const g of rows) {
+    if (g.name) lookup.set(normalizeGreenCoffeeName(g.name), g.code);
+    const segments = (g.napivfabrykat_names || '').split(',').map((s) => s.trim()).filter(Boolean);
+    for (const seg of segments) {
+      const bracketMatch = seg.match(/\(([^)]+)\)/);
+      if (bracketMatch) lookup.set(normalizeGreenCoffeeName(bracketMatch[1]), g.code);
+      const label = seg.replace(/\([^)]*\)/, '').trim();
+      if (label) lookup.set(normalizeGreenCoffeeName(label), g.code);
+    }
+  }
+  return lookup;
+}
+
 async function listGreenCoffee({ search = '' } = {}) {
   const conditions = [`p.category = 'зелена кава'`];
   const params = [];
@@ -698,6 +753,28 @@ async function listGreenCoffee({ search = '' } = {}) {
     params
   );
   return rows.map((r) => ({ ...r, balance: Number(r.balance) }));
+}
+
+// Аналітика за період (сьогодні / тиждень / довільні дати): скільки якого
+// лоту зеленої кави пішло на обсмажку (roasted_out) і скільки надійшло
+// (коригування/повернення) — відсортовано за тим, що рухалось найбільше,
+// щоб одразу бачити топ позицій за період.
+async function listGreenCoffeeMovementsSummary({ dateFrom, dateTo }) {
+  const { rows } = await pool.query(
+    `SELECT p.code, p.name,
+            COALESCE(SUM(CASE WHEN m.movement_type = 'roasted_out' THEN m.qty ELSE 0 END), 0) AS issued,
+            COALESCE(SUM(CASE WHEN m.movement_type != 'roasted_out' AND m.signed_qty > 0 THEN m.signed_qty ELSE 0 END), 0) AS received,
+            COALESCE(SUM(m.signed_qty), 0) AS net_change
+     FROM products p
+     LEFT JOIN stock_movements m ON m.product_code = p.code AND m.movement_date BETWEEN $1 AND $2
+     WHERE p.category = 'зелена кава'
+     GROUP BY p.code, p.name
+     HAVING COALESCE(SUM(CASE WHEN m.movement_type = 'roasted_out' THEN m.qty ELSE 0 END), 0) > 0
+         OR COALESCE(SUM(CASE WHEN m.movement_type != 'roasted_out' AND m.signed_qty > 0 THEN m.signed_qty ELSE 0 END), 0) > 0
+     ORDER BY issued DESC, received DESC`,
+    [dateFrom, dateTo]
+  );
+  return rows.map((r) => ({ ...r, issued: Number(r.issued), received: Number(r.received), net_change: Number(r.net_change) }));
 }
 
 async function updateGreenCoffeeNeedsPhotoseparation(code, needsPhotoseparation) {
@@ -1731,13 +1808,13 @@ async function listStationsWithStatus() {
   return result;
 }
 
-async function createTask({ station, product_code, product_name, planned_qty, unit, task_date, reason, comment }) {
+async function createTask({ station, product_code, product_name, planned_qty, unit, task_date, reason, comment, recipe_id }) {
   if (!station || !task_date) {
     throw new Error('station і task_date обов’язкові');
   }
   const { rows } = await pool.query(
-    `INSERT INTO production_tasks (station, product_code, product_name, planned_qty, unit, task_date, reason, comment)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    `INSERT INTO production_tasks (station, product_code, product_name, planned_qty, unit, task_date, reason, comment, recipe_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      RETURNING *`,
     [
       station,
@@ -1747,7 +1824,8 @@ async function createTask({ station, product_code, product_name, planned_qty, un
       unit || '',
       task_date,
       reason || 'ручне',
-      comment || ''
+      comment || '',
+      recipe_id || null
     ]
   );
   return rows[0];
@@ -1777,6 +1855,7 @@ async function listTasks({ station = '', dateFrom = '', dateTo = '', status = ''
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const { rows } = await pool.query(
     `SELECT pt.*,
+            br.blend_name, br.category AS recipe_category, br.batch_size,
             COALESCE(
               (SELECT json_agg(json_build_object(
                  'component_product_code', dsc.component_product_code,
@@ -1788,13 +1867,40 @@ async function listTasks({ station = '', dateFrom = '', dateTo = '', status = ''
                JOIN products p ON p.code = dsc.component_product_code
                WHERE dsc.set_product_code = pt.product_code),
               '[]'
-            ) AS drip_components
+            ) AS drip_components,
+            COALESCE(
+              (SELECT json_agg(json_build_object('name', bc.component_name, 'qty', bc.qty))
+               FROM blend_components bc WHERE bc.recipe_id = pt.recipe_id),
+              '[]'
+            ) AS blend_components_raw
      FROM production_tasks pt
+     LEFT JOIN blend_recipes br ON br.id = pt.recipe_id
      ${where}
      ORDER BY task_date ASC, station ASC, id ASC`,
     params
   );
-  return rows.map((r) => ({ ...r, planned_qty: Number(r.planned_qty), actual_qty: r.actual_qty === null ? null : Number(r.actual_qty) }));
+
+  const greenCoffeeLookup = rows.some((r) => r.recipe_id) ? await buildGreenCoffeeShortNameLookup() : null;
+
+  return rows.map((r) => {
+    const planned = Number(r.planned_qty);
+    const actual = r.actual_qty === null ? null : Number(r.actual_qty);
+    let blend_components = null;
+    if (r.recipe_id && r.blend_components_raw.length > 0) {
+      const scale = (actual ?? planned) / (Number(r.batch_size) || 1);
+      blend_components = r.blend_components_raw.map((c) => {
+        const greenCoffeeCode = greenCoffeeLookup.get(normalizeGreenCoffeeName(c.name)) || null;
+        return {
+          name: c.name,
+          qty_per_batch: Number(c.qty),
+          total_qty: Number(c.qty) * scale,
+          green_coffee_code: greenCoffeeCode
+        };
+      });
+    }
+    const { blend_components_raw, ...rest } = r;
+    return { ...rest, planned_qty: planned, actual_qty: actual, blend_components };
+  });
 }
 
 // Завершення задачі на набір дріпів (продукт зі складом компонентів у
@@ -1842,6 +1948,53 @@ async function updateTaskStatus(id, { status, actual_qty, comment }) {
       }
       await pool.query('UPDATE production_tasks SET stock_applied_at = now() WHERE id = $1', [task.id]);
       task.stock_applied_at = new Date();
+    } else if (task.recipe_id) {
+      // Задача на бленд із явно вказаною рецептурою: списує напівфабрикат
+      // кожного розпізнаного компонента (масштабовано під actual_qty відносно
+      // batch_size рецептури) і заводить готовий бленд на склад — так само,
+      // як набір дріпів, але компоненти — це НАПІВФАБРИКАТ конкретних лотів
+      // зеленої кави (Ed3 → PG-0010-NF), а не готові товари. Компоненти, які
+      // не вдалось розпізнати (немає точного збігу серед лотів зеленої
+      // кави) — просто пропускаються, без помилки.
+      const { rows: comps } = await pool.query(
+        `SELECT component_name, qty FROM blend_components WHERE recipe_id = $1`,
+        [task.recipe_id]
+      );
+      const { rows: recipeRows } = await pool.query('SELECT batch_size FROM blend_recipes WHERE id = $1', [task.recipe_id]);
+      const batchSize = Number(recipeRows[0]?.batch_size) || 1;
+
+      if (comps.length > 0) {
+        const lookup = await buildGreenCoffeeShortNameLookup();
+        const qty = Number(task.actual_qty);
+        const scale = qty / batchSize;
+        let anyResolved = false;
+
+        for (const c of comps) {
+          const greenCoffeeCode = lookup.get(normalizeGreenCoffeeName(c.component_name));
+          if (!greenCoffeeCode) continue;
+          anyResolved = true;
+          await addMovement({
+            product_code: `${greenCoffeeCode}-NF`,
+            movement_type: 'component_used',
+            qty: Number(c.qty) * scale,
+            movement_date: task.task_date,
+            note: `Задача станції №${task.id} — компонент бленду (${task.product_name || task.product_code})`
+          });
+        }
+
+        if (anyResolved && task.product_code) {
+          await addMovement({
+            product_code: task.product_code,
+            movement_type: 'production_in',
+            qty,
+            movement_date: task.task_date,
+            note: `Задача станції №${task.id} (бленд)`
+          });
+        }
+
+        await pool.query('UPDATE production_tasks SET stock_applied_at = now() WHERE id = $1', [task.id]);
+        task.stock_applied_at = new Date();
+      }
     }
   }
 
@@ -1943,7 +2096,9 @@ export default {
   bulkUpsertProducts,
   insertProductsIfMissing,
   insertGreenCoffeeIfMissing,
+  ensureNapivfabrykatProducts,
   listGreenCoffee,
+  listGreenCoffeeMovementsSummary,
   updateGreenCoffeeNeedsPhotoseparation,
   createRoastingBatch,
   recordPhotoseparation,

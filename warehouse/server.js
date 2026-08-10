@@ -210,6 +210,22 @@ app.get('/api/green-coffee', requireRole('тімлід', 'станція'), asyn
   }
 });
 
+app.get('/api/green-coffee/movements-summary', requireRole('тімлід', 'станція'), async (req, res) => {
+  try {
+    const dateFrom = String(req.query.dateFrom || '').trim();
+    const dateTo = String(req.query.dateTo || '').trim();
+    if (!dateFrom || !dateTo) {
+      res.status(400).json({ ok: false, error: 'Потрібні dateFrom і dateTo' });
+      return;
+    }
+    const summary = await db.listGreenCoffeeMovementsSummary({ dateFrom, dateTo });
+    res.json({ ok: true, summary });
+  } catch (error) {
+    console.error('GET /api/green-coffee/movements-summary ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати аналітику' });
+  }
+});
+
 app.post('/api/green-coffee/:code/needs-photoseparation', requireRole(), async (req, res) => {
   try {
     const { needs_photoseparation } = req.body || {};
@@ -332,12 +348,12 @@ app.post('/api/stations/:name/employees', requireRole(), async (req, res) => {
 
 app.post('/api/tasks', requireRole('тімлід'), async (req, res) => {
   try {
-    const { station, product_code, product_name, planned_qty, unit, task_date, reason, comment } = req.body || {};
+    const { station, product_code, product_name, planned_qty, unit, task_date, reason, comment, recipe_id } = req.body || {};
     if (!station || !task_date) {
       res.status(400).json({ ok: false, error: 'Станція і дата обов’язкові' });
       return;
     }
-    const task = await db.createTask({ station, product_code, product_name, planned_qty, unit, task_date, reason, comment });
+    const task = await db.createTask({ station, product_code, product_name, planned_qty, unit, task_date, reason, comment, recipe_id: recipe_id || null });
     res.json({ ok: true, task });
   } catch (error) {
     console.error('POST /api/tasks ERROR:', error?.message || error);
@@ -529,7 +545,7 @@ app.delete('/api/drip-set-components/:id', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/blend-recipes', requireRole(), async (req, res) => {
+app.get('/api/blend-recipes', requireRole('тімлід', 'станція'), async (req, res) => {
   try {
     const recipes = await db.listBlendRecipes();
     res.json({ ok: true, recipes });
@@ -848,6 +864,15 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
     const greenCoffeeInserted = await db.insertGreenCoffeeIfMissing(seedGreenCoffee);
     if (greenCoffeeInserted > 0) {
       console.log(`Imported green coffee lots: ${greenCoffeeInserted}`);
+    }
+
+    // Напівфабрикат-товар заводиться одразу для КОЖНОГО лоту зеленої кави
+    // (а не лише коли трапиться перша партія обсмажки), щоб було куди
+    // одразу вносити задньочислові коригування (напр. порахований залишок
+    // напівфабрикату на 02.08).
+    const napivfabrykatCreated = await db.ensureNapivfabrykatProducts();
+    if (napivfabrykatCreated > 0) {
+      console.log(`Created napivfabrykat products: ${napivfabrykatCreated}`);
     }
 
     // Одноразовий масовий імпорт історичних замовлень (81 вкладка файлу,
