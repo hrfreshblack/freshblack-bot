@@ -361,6 +361,34 @@ app.post('/api/stations/:name/employees', requireRole(), async (req, res) => {
   }
 });
 
+app.delete('/api/station-operations/:id', requireRole(), async (req, res) => {
+  try {
+    const rowCount = await db.deleteStationOperation(Number(req.params.id));
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE /api/station-operations/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити' });
+  }
+});
+
+app.delete('/api/station-employees/:id', requireRole(), async (req, res) => {
+  try {
+    const rowCount = await db.deleteStationEmployee(Number(req.params.id));
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE /api/station-employees/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити' });
+  }
+});
+
 app.post('/api/tasks', requireRole('тімлід'), async (req, res) => {
   try {
     const { station, product_code, product_name, planned_qty, unit, task_date, reason, comment, recipe_id } = req.body || {};
@@ -373,6 +401,16 @@ app.post('/api/tasks', requireRole('тімлід'), async (req, res) => {
   } catch (error) {
     console.error('POST /api/tasks ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити задачу' });
+  }
+});
+
+app.post('/api/tasks/auto-assign', requireRole('тімлід'), async (req, res) => {
+  try {
+    const created = await db.autoAssignOrdersToStations();
+    res.json({ ok: true, created });
+  } catch (error) {
+    console.error('POST /api/tasks/auto-assign ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося розподілити замовлення' });
   }
 });
 
@@ -578,10 +616,21 @@ app.post('/api/orders/import', requireRole(), upload.single('file'), async (req,
     }
     const lines = await parseOrderFile(req.file.buffer);
     const result = await db.importOrderLines(lines);
-    res.json({ ok: true, ...result, totalRows: lines.length });
+    const autoAssigned = await db.autoAssignOrdersToStations();
+    res.json({ ok: true, ...result, totalRows: lines.length, autoAssigned });
   } catch (error) {
     console.error('POST /api/orders/import ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося розпізнати файл' });
+  }
+});
+
+app.get('/api/orders/import-duplicates', requireRole(), async (req, res) => {
+  try {
+    const duplicates = await db.listImportDuplicates();
+    res.json({ ok: true, duplicates });
+  } catch (error) {
+    console.error('GET /api/orders/import-duplicates ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати список дублікатів' });
   }
 });
 
