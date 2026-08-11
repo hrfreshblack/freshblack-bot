@@ -158,6 +158,16 @@ async function initSchema() {
     ALTER TABLE order_lines ADD COLUMN IF NOT EXISTS ttn TEXT NOT NULL DEFAULT '';
     CREATE INDEX IF NOT EXISTS idx_order_lines_order_number ON order_lines(order_number);
     CREATE INDEX IF NOT EXISTS idx_order_lines_status ON order_lines(status);
+    -- Один товар МОЖЕ повторюватись у тому самому замовленні кількома
+    -- рядками з різною кількістю (напр. одна позиція їде на кілька різних
+    -- точок доставки) — (order_number, product_code) сам по собі був
+    -- завузьким ключем і importOrderLines() помилково відкидав такі рядки
+    -- як "дублікати" (виправлено окремим одноразовим відновленням, див.
+    -- recoverMisclassifiedDuplicateOrderLines). DROP+ADD щоразу на старті —
+    -- дешево й безпечно, бо не чіпає дані, лише метадані обмеження.
+    ALTER TABLE order_lines DROP CONSTRAINT IF EXISTS order_lines_order_number_product_code_key;
+    ALTER TABLE order_lines DROP CONSTRAINT IF EXISTS order_lines_order_number_product_code_qty_key;
+    ALTER TABLE order_lines ADD CONSTRAINT order_lines_order_number_product_code_qty_key UNIQUE (order_number, product_code, qty);
 
     CREATE TABLE IF NOT EXISTS clients (
       customer_code TEXT PRIMARY KEY,
@@ -350,6 +360,29 @@ async function initSchema() {
     ALTER TABLE production_tasks ADD COLUMN IF NOT EXISTS auto_created BOOLEAN NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS idx_tasks_station_date ON production_tasks(station, task_date);
     CREATE INDEX IF NOT EXISTS idx_tasks_order_number ON production_tasks(order_number);
+    -- Точний зв'язок із конкретним рядком замовлення (а не лише за парою
+    -- номер+код товару) — потрібен, бо один товар тепер може повторюватись
+    -- у тому самому замовленні кількома рядками з різною кількістю
+    -- (наприклад різні точки доставки), і autoAssignOrdersToStations() має
+    -- створювати задачу для КОЖНОГО такого рядка окремо, а не пропускати
+    -- другий і далі, вважаючи їх уже покритими задачею першого.
+    ALTER TABLE production_tasks ADD COLUMN IF NOT EXISTS order_line_id INTEGER REFERENCES order_lines(id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_order_line ON production_tasks(order_line_id);
+    -- Одноразовий (але безпечний повторити) backfill для задач, які вже
+    -- створив автоматичний розподіл ДО того, як з'явилась order_line_id:
+    -- підставляє її там, де пара (номер замовлення, код товару) на момент
+    -- створення задачі однозначно вказувала рівно на один рядок замовлення.
+    UPDATE production_tasks pt
+    SET order_line_id = ol.id
+    FROM order_lines ol
+    WHERE pt.order_line_id IS NULL
+      AND pt.order_number IS NOT NULL AND pt.order_number != ''
+      AND pt.product_code = ol.product_code
+      AND pt.order_number = ol.order_number
+      AND (
+        SELECT count(*) FROM order_lines ol2
+        WHERE ol2.order_number = pt.order_number AND ol2.product_code = pt.product_code
+      ) = 1;
 
     -- Журнал дублікатів при імпорті замовлень: SAP-файл часто містить рядки,
     -- які вже були в попередньому імпорті (нормально для щоденних зрізів),
@@ -1204,7 +1237,7 @@ async function importOrderLines(lines) {
          product_code, product_name_raw, roast_type, qty, sap_stock_hint,
          grind_flag, grind_type, delivery_method
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-       ON CONFLICT (order_number, product_code) DO NOTHING`,
+       ON CONFLICT (order_number, product_code, qty) DO NOTHING`,
       [
         line.source || 'SAP',
         line.order_number,
@@ -1245,6 +1278,97 @@ async function listImportDuplicates(limit = 200) {
     [limit]
   );
   return rows.map((r) => ({ ...r, qty: Number(r.qty) }));
+}
+
+// Одноразове (але природно ідемпотентне — не потребує окремого прапорця)
+// відновлення рядків замовлень, які importOrderLines() помилково вважав
+// дублікатами через завузький ключ унікальності (order_number,
+// product_code): насправді один товар МОЖЕ повторюватись у тому самому
+// замовленні кількома рядками з різною кількістю (напр. одна позиція їде
+// на кілька різних точок доставки різними партіями). Бере кожен запис із
+// import_duplicate_log і, якщо саме такого рядка (номер+товар+кількість) у
+// order_lines ще немає, додає його — службові поля (дата, клієнт, філіал)
+// беруться з будь-якого вже наявного рядка того самого замовлення, бо вони
+// завжди однакові в межах одного номера. Новий рядок отримує статус "нове"
+// (без побічних рухів складу) — далі це або підхопить
+// backfillHistoricalShipments (якщо замовлення історичне), або Тетяна сама
+// виставить статус вручну для поточних замовлень, які вона вже реально
+// відвантажила.
+async function recoverMisclassifiedDuplicateOrderLines() {
+  const { rows: dupes } = await pool.query('SELECT * FROM import_duplicate_log ORDER BY id ASC');
+  let recovered = 0;
+
+  for (const d of dupes) {
+    const { rows: siblingRows } = await pool.query(
+      `SELECT source, order_date, ship_date, customer_code, customer_name, branch_name
+       FROM order_lines WHERE order_number = $1 ORDER BY id ASC LIMIT 1`,
+      [d.order_number]
+    );
+    const sibling = siblingRows[0];
+    if (!sibling) continue;
+
+    const { rowCount } = await pool.query(
+      `INSERT INTO order_lines (
+         source, order_number, order_date, ship_date, customer_code, customer_name, branch_name,
+         product_code, product_name_raw, qty, status, status_note
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'нове',$11)
+       ON CONFLICT (order_number, product_code, qty) DO NOTHING`,
+      [
+        sibling.source, d.order_number, sibling.order_date, sibling.ship_date,
+        sibling.customer_code, sibling.customer_name, sibling.branch_name,
+        d.product_code, d.product_name_raw, d.qty,
+        'Відновлено автоматично: раніше помилково позначено як дублікат при імпорті'
+      ]
+    );
+    if (rowCount > 0) recovered += 1;
+  }
+
+  return recovered;
+}
+
+// Ручне додавання позиції до вже наявного замовлення (форс-мажор: Тетяна
+// побачила, що в реальному файлі є рядок, якого система не показує —
+// напр. зміна кількості чи нова позиція, яку імпорт з якоїсь причини не
+// підхопив). Дата/клієнт/філіал підтягуються з будь-якого наявного рядка
+// того самого замовлення, як і при автоматичному відновленні вище.
+async function addOrderLine(orderNumber, { product_code, product_name, qty }) {
+  if (!product_code) throw new Error('Потрібен код товару');
+  const numericQty = Number(qty);
+  if (!Number.isFinite(numericQty) || numericQty <= 0) throw new Error('Некоректна кількість');
+
+  const { rows: siblingRows } = await pool.query(
+    `SELECT source, order_date, ship_date, customer_code, customer_name, branch_name
+     FROM order_lines WHERE order_number = $1 ORDER BY id ASC LIMIT 1`,
+    [orderNumber]
+  );
+  const sibling = siblingRows[0];
+  if (!sibling) throw new Error('Замовлення не знайдено');
+
+  const { rows: productRows } = await pool.query('SELECT code, name FROM products WHERE code = $1', [product_code]);
+  const product = productRows[0];
+  if (!product) throw new Error('Товар з таким кодом не знайдено в довіднику Товари');
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO order_lines (
+         source, order_number, order_date, ship_date, customer_code, customer_name, branch_name,
+         product_code, product_name_raw, qty, status, status_note
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'нове',$11)
+       RETURNING *`,
+      [
+        sibling.source, orderNumber, sibling.order_date, sibling.ship_date,
+        sibling.customer_code, sibling.customer_name, sibling.branch_name,
+        product.code, product_name || product.name, numericQty,
+        'Додано вручну'
+      ]
+    );
+    return rows[0];
+  } catch (error) {
+    if (error.code === '23505') {
+      throw new Error('Саме такий рядок (товар + кількість) у цьому замовленні вже є');
+    }
+    throw error;
+  }
 }
 
 // Список замовлень, згрупований по номеру документа. Якщо в межах одного
@@ -2060,24 +2184,23 @@ async function createTask({ station, product_code, product_name, planned_qty, un
 // задачами, повторне сканування вже створену задачу не чіпає й не дублює.
 async function autoAssignOrdersToStations() {
   const { rows: candidates } = await pool.query(`
-    SELECT ol.order_number, ol.product_code, ol.product_name_raw, ol.qty, ol.ship_date,
+    SELECT ol.id AS order_line_id, ol.order_number, ol.product_code, ol.product_name_raw, ol.qty, ol.ship_date,
            p.station, p.name AS product_name
     FROM order_lines ol
     JOIN products p ON p.code = ol.product_code
     WHERE ol.status IN ('нове', 'в роботі')
       AND p.station != ''
       AND NOT EXISTS (
-        SELECT 1 FROM production_tasks pt
-        WHERE pt.order_number = ol.order_number AND pt.product_code = ol.product_code
+        SELECT 1 FROM production_tasks pt WHERE pt.order_line_id = ol.id
       )
   `);
 
   let created = 0;
   for (const c of candidates) {
     await pool.query(
-      `INSERT INTO production_tasks (station, product_code, product_name, planned_qty, unit, task_date, reason, order_number, auto_created)
-       VALUES ($1,$2,$3,$4,'',$5,'замовлення',$6,true)`,
-      [c.station, c.product_code, c.product_name || c.product_name_raw, c.qty, c.ship_date || new Date().toISOString().slice(0, 10), c.order_number]
+      `INSERT INTO production_tasks (station, product_code, product_name, planned_qty, unit, task_date, reason, order_number, order_line_id, auto_created)
+       VALUES ($1,$2,$3,$4,'',$5,'замовлення',$6,$7,true)`,
+      [c.station, c.product_code, c.product_name || c.product_name_raw, c.qty, c.ship_date || new Date().toISOString().slice(0, 10), c.order_number, c.order_line_id]
     );
     created += 1;
   }
@@ -2374,6 +2497,8 @@ export default {
   importOrderLines,
   countOrderLinesBySource,
   listImportDuplicates,
+  recoverMisclassifiedDuplicateOrderLines,
+  addOrderLine,
   listOrders,
   getOrderLines,
   upsertOrderLineOverride,
