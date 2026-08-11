@@ -62,6 +62,9 @@ async function initSchema() {
     -- лише довідково, автоматичного зв'язку з blend_components ще немає.
     ALTER TABLE products ADD COLUMN IF NOT EXISTS napivfabrykat_names TEXT NOT NULL DEFAULT '';
     ALTER TABLE products ADD COLUMN IF NOT EXISTS source_green_coffee_code TEXT REFERENCES products(code);
+    -- Код з іншої (SAP) програми — окремо від products.code, який для
+    -- зеленої кави це Lot ID з власного обліку, а не SAP-код.
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS sap_code TEXT NOT NULL DEFAULT '';
 
     CREATE TABLE IF NOT EXISTS stock_movements (
       id SERIAL PRIMARY KEY,
@@ -361,6 +364,28 @@ async function initSchema() {
       imported_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_import_duplicate_log_order ON import_duplicate_log(order_number);
+
+    -- Дозволяє вручну міняти код товару (renameProductCode): FK з ON UPDATE
+    -- CASCADE підхоплює зміну автоматично в усіх таблицях, що посилаються
+    -- на products(code). DROP+ADD щоразу на старті — дешево й безпечно,
+    -- бо не чіпає дані, лише метадані обмеження.
+    ALTER TABLE stock_movements DROP CONSTRAINT IF EXISTS stock_movements_product_code_fkey;
+    ALTER TABLE stock_movements ADD CONSTRAINT stock_movements_product_code_fkey FOREIGN KEY (product_code) REFERENCES products(code) ON UPDATE CASCADE;
+
+    ALTER TABLE product_specs DROP CONSTRAINT IF EXISTS product_specs_product_code_fkey;
+    ALTER TABLE product_specs ADD CONSTRAINT product_specs_product_code_fkey FOREIGN KEY (product_code) REFERENCES products(code) ON UPDATE CASCADE;
+
+    ALTER TABLE drip_set_components DROP CONSTRAINT IF EXISTS drip_set_components_set_product_code_fkey;
+    ALTER TABLE drip_set_components ADD CONSTRAINT drip_set_components_set_product_code_fkey FOREIGN KEY (set_product_code) REFERENCES products(code) ON UPDATE CASCADE;
+
+    ALTER TABLE drip_set_components DROP CONSTRAINT IF EXISTS drip_set_components_component_product_code_fkey;
+    ALTER TABLE drip_set_components ADD CONSTRAINT drip_set_components_component_product_code_fkey FOREIGN KEY (component_product_code) REFERENCES products(code) ON UPDATE CASCADE;
+
+    ALTER TABLE products DROP CONSTRAINT IF EXISTS products_source_green_coffee_code_fkey;
+    ALTER TABLE products ADD CONSTRAINT products_source_green_coffee_code_fkey FOREIGN KEY (source_green_coffee_code) REFERENCES products(code) ON UPDATE CASCADE;
+
+    ALTER TABLE roasting_batches DROP CONSTRAINT IF EXISTS roasting_batches_green_coffee_code_fkey;
+    ALTER TABLE roasting_batches ADD CONSTRAINT roasting_batches_green_coffee_code_fkey FOREIGN KEY (green_coffee_code) REFERENCES products(code) ON UPDATE CASCADE;
   `);
 }
 
@@ -412,6 +437,46 @@ async function updateProductFields(code, { status, station, min_stock, unit, is_
     [code, status ?? null, station ?? null, min_stock ?? null, unit ?? null, is_stock_item ?? null]
   );
   return rows[0] || null;
+}
+
+// Ручна зміна коду позиції (будь-якого товару — готова продукція, зелена
+// кава, напівфабрикат). FK з ON UPDATE CASCADE (див. initSchema) підхоплює
+// stock_movements/product_specs/drip_set_components/roasting_batches/
+// products.source_green_coffee_code автоматично. order_lines і
+// production_tasks не мають FK на products (щоб можна було зберігати
+// замовлення на товар, якого ще нема в довіднику на момент імпорту), тож
+// оновлюємо їх вручну в тій самій транзакції.
+async function renameProductCode(oldCode, newCode) {
+  const trimmedNew = String(newCode || '').trim();
+  if (!trimmedNew) throw new Error('Новий код не може бути порожнім');
+  if (trimmedNew === oldCode) return true;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rowCount } = await client.query('UPDATE products SET code = $1, updated_at = now() WHERE code = $2', [trimmedNew, oldCode]);
+    if (!rowCount) throw new Error('Товар не знайдено');
+    await client.query('UPDATE order_lines SET product_code = $1 WHERE product_code = $2', [trimmedNew, oldCode]);
+    await client.query('UPDATE production_tasks SET product_code = $1 WHERE product_code = $2', [trimmedNew, oldCode]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.code === '23505') {
+      throw new Error('Товар з таким кодом уже існує');
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+  return true;
+}
+
+async function updateProductSapCode(code, sapCode) {
+  const { rowCount } = await pool.query(
+    `UPDATE products SET sap_code = $2, updated_at = now() WHERE code = $1`,
+    [code, (sapCode || '').trim()]
+  );
+  return rowCount;
 }
 
 async function countMovementsByNote(note) {
@@ -481,7 +546,7 @@ async function getBalance(code) {
 // Список товарів з полічений залишком (сумма рухів). Порожній список рухів
 // -> залишок 0, товар усе одно показується.
 async function listProducts({ search = '', activeOnly = true } = {}) {
-  const conditions = [`p.category != 'зелена кава'`];
+  const conditions = [`p.category NOT IN ('зелена кава', 'напівфабрикат')`];
   const params = [];
 
   if (activeOnly) {
@@ -516,7 +581,7 @@ async function listProducts({ search = '', activeOnly = true } = {}) {
 // Операційний вигляд складу — лише товари, що фізично зберігаються (не
 // "тільки під замовлення"): залишок, скільки надійшло, скільки видано.
 async function listStock({ search = '' } = {}) {
-  const conditions = ['p.is_stock_item = true', `p.category != 'зелена кава'`];
+  const conditions = ['p.is_stock_item = true', `p.category NOT IN ('зелена кава', 'напівфабрикат')`];
   const params = [];
 
   if (search) {
@@ -766,16 +831,46 @@ async function listGreenCoffee({ search = '' } = {}) {
   }
 
   const { rows } = await pool.query(
-    `SELECT p.code, p.name, p.location, p.needs_photoseparation, p.napivfabrykat_names,
+    `SELECT p.code, p.name, p.location, p.needs_photoseparation, p.napivfabrykat_names, p.sap_code,
             COALESCE(SUM(m.signed_qty), 0) AS balance
      FROM products p
      LEFT JOIN stock_movements m ON m.product_code = p.code
      WHERE ${conditions.join(' AND ')}
-     GROUP BY p.code, p.name, p.location, p.needs_photoseparation, p.napivfabrykat_names
+     GROUP BY p.code, p.name, p.location, p.needs_photoseparation, p.napivfabrykat_names, p.sap_code
      ORDER BY lower(p.name) ASC`,
     params
   );
   return rows.map((r) => ({ ...r, balance: Number(r.balance) }));
+}
+
+// Окрема вкладка Напівфабрикати: смажена (і, якщо треба, відсепарована)
+// кава, що фізично стоїть у виробництві, а не на складі готової продукції —
+// винесена з листа Склад (listStock), бо по ній постійно йде рух при
+// виготовленні продукції.
+async function listNapivfabrykat({ search = '' } = {}) {
+  const conditions = [`p.category = 'напівфабрикат'`];
+  const params = [];
+
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    conditions.push(`(lower(p.code) LIKE $${params.length} OR lower(p.name) LIKE $${params.length})`);
+  }
+
+  const { rows } = await pool.query(
+    `SELECT p.code, p.name, p.source_green_coffee_code, gc.name AS source_green_coffee_name,
+            COALESCE(SUM(m.signed_qty), 0) AS balance,
+            COALESCE(SUM(CASE WHEN m.movement_type IN ('production_in', 'return') THEN m.qty ELSE 0 END), 0) AS received,
+            COALESCE(SUM(CASE WHEN m.movement_type IN ('shipment', 'writeoff', 'component_used') THEN m.qty ELSE 0 END), 0) AS issued,
+            MAX(m.movement_date) AS last_movement_date
+     FROM products p
+     LEFT JOIN products gc ON gc.code = p.source_green_coffee_code
+     LEFT JOIN stock_movements m ON m.product_code = p.code
+     WHERE ${conditions.join(' AND ')}
+     GROUP BY p.code, p.name, p.source_green_coffee_code, gc.name
+     ORDER BY lower(p.name) ASC`,
+    params
+  );
+  return rows.map((r) => ({ ...r, balance: Number(r.balance), received: Number(r.received), issued: Number(r.issued) }));
 }
 
 // Аналітика за період (сьогодні / тиждень / довільні дати): скільки якого
@@ -2259,6 +2354,9 @@ export default {
   listGreenCoffeeMovementsSummary,
   updateGreenCoffeeNeedsPhotoseparation,
   updateGreenCoffeeShortNames,
+  updateProductSapCode,
+  listNapivfabrykat,
+  renameProductCode,
   createRoastingBatch,
   recordPhotoseparation,
   listRoastingBatches,

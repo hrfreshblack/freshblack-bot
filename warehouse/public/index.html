@@ -211,6 +211,7 @@
     <button id="tabInventory" onclick="showTab('inventory')">Інвентаризації</button>
     <button id="tabStations" onclick="showTab('stations')">Станції</button>
     <button id="tabGreenCoffee" onclick="showTab('greenCoffee')">Зелена кава</button>
+    <button id="tabNapivfabrykat" onclick="showTab('napivfabrykat')">Напівфабрикати</button>
     <button id="tabMaterials" onclick="showTab('materials')">Розхідники</button>
     <button id="tabRecipes" onclick="showTab('recipes')">Рецептури блендів</button>
     <button id="tabOrders" onclick="showTab('orders')">Замовлення</button>
@@ -353,6 +354,7 @@
       <thead>
         <tr>
           <th>Код</th>
+          <th>Код SAP</th>
           <th>Назва</th>
           <th>Короткі назви (для блендів)</th>
           <th>Локація</th>
@@ -425,6 +427,31 @@
     </table>
     </div>
     <div class="empty" id="gcAnalyticsEmpty" style="display:none;">За цей період рухів по зеленій каві не було.</div>
+  </div>
+
+  <div id="viewNapivfabrykat" style="display:none;">
+    <p style="color: var(--muted); margin: 0 0 14px;">Смажена (і, де треба, відсепарована) кава, що фізично стоїть у виробництві, а не на складі готової продукції — окремо від Складу, бо по ній постійно йде рух при виготовленні продукції.</p>
+    <div class="viewToolbar">
+      <input type="search" id="napivfabrykatSearch" placeholder="Пошук за кодом чи назвою…">
+    </div>
+    <div class="tableWrap">
+    <table id="napivfabrykatTable">
+      <thead>
+        <tr>
+          <th>Код</th>
+          <th>Назва</th>
+          <th>З лоту зеленої кави</th>
+          <th>Залишок, кг</th>
+          <th>Надійшло, кг</th>
+          <th>Видано, кг</th>
+          <th>Останній рух</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="napivfabrykatBody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="napivfabrykatEmpty" style="display:none;">Напівфабрикатів ще немає.</div>
   </div>
 
   <div id="viewMaterials" style="display:none;">
@@ -938,9 +965,11 @@ async function loadProducts() {
   }
   empty.style.display = 'none';
 
+  const isAdmin = window._me && window._me.role === 'адмін';
+
   body.innerHTML = data.products.map((row) => `
     <tr>
-      <td>${row.code}</td>
+      <td>${editableCodeCell(row.code, isAdmin, loadProducts)}</td>
       <td>${row.name || row.short_name || ''}</td>
       <td>${row.station || '—'}</td>
       <td>${row.unit || ''}</td>
@@ -1109,6 +1138,7 @@ document.getElementById('btnSaveMovement').onclick = async () => {
   showToast('Збережено. Новий залишок: ' + fmt(data.balance));
   loadStock();
   if (document.getElementById('viewGreenCoffee').style.display !== 'none') loadGreenCoffee();
+  if (document.getElementById('viewNapivfabrykat').style.display !== 'none') loadNapivfabrykat();
 };
 
 document.getElementById('btnAddProduct').onclick = () => {
@@ -1170,6 +1200,7 @@ function showTab(tab) {
   document.getElementById('viewInventory').style.display = tab === 'inventory' ? '' : 'none';
   document.getElementById('viewStations').style.display = tab === 'stations' ? '' : 'none';
   document.getElementById('viewGreenCoffee').style.display = tab === 'greenCoffee' ? '' : 'none';
+  document.getElementById('viewNapivfabrykat').style.display = tab === 'napivfabrykat' ? '' : 'none';
   document.getElementById('viewMaterials').style.display = tab === 'materials' ? '' : 'none';
   document.getElementById('viewRecipes').style.display = tab === 'recipes' ? '' : 'none';
   document.getElementById('viewOrders').style.display = tab === 'orders' ? '' : 'none';
@@ -1179,6 +1210,7 @@ function showTab(tab) {
   document.getElementById('tabInventory').classList.toggle('active', tab === 'inventory');
   document.getElementById('tabStations').classList.toggle('active', tab === 'stations');
   document.getElementById('tabGreenCoffee').classList.toggle('active', tab === 'greenCoffee');
+  document.getElementById('tabNapivfabrykat').classList.toggle('active', tab === 'napivfabrykat');
   document.getElementById('tabMaterials').classList.toggle('active', tab === 'materials');
   document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
   document.getElementById('tabOrders').classList.toggle('active', tab === 'orders');
@@ -1188,6 +1220,7 @@ function showTab(tab) {
   if (tab === 'inventory') initInventory();
   if (tab === 'stations') initStations();
   if (tab === 'greenCoffee') initGreenCoffee();
+  if (tab === 'napivfabrykat') loadNapivfabrykat();
   if (tab === 'materials') loadMaterials();
   if (tab === 'recipes' && !recipesLoaded) loadRecipes();
   if (tab === 'orders') loadOrders();
@@ -1269,9 +1302,13 @@ async function loadGreenCoffee() {
     const shortNamesCell = isAdmin
       ? `<input type="text" value="${escAttr(g.napivfabrykat_names || '')}" placeholder="напр. Djimmah GR5 3 (Ed3)" style="font-size:12px; min-width:200px;" onchange="saveShortNames('${g.code}', this.value)">`
       : (g.napivfabrykat_names || '—');
+    const sapCodeCell = isAdmin
+      ? `<input type="text" value="${escAttr(g.sap_code || '')}" placeholder="код SAP" style="font-size:12px; width:90px;" onchange="saveSapCode('${g.code}', this.value)">`
+      : (g.sap_code || '—');
     return `
       <tr>
-        <td>${g.code}</td>
+        <td>${editableCodeCell(g.code, isAdmin, loadGreenCoffee)}</td>
+        <td>${sapCodeCell}</td>
         <td>${g.name}</td>
         <td>${shortNamesCell}</td>
         <td>${g.location || '—'}</td>
@@ -1294,6 +1331,17 @@ async function saveShortNames(code, value) {
   showToast('Збережено');
 }
 
+async function saveSapCode(code, value) {
+  const resp = await fetch('/api/green-coffee/' + encodeURIComponent(code) + '/sap-code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sap_code: value.trim() })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+}
+
 async function saveNeedsPhotoseparation(code, value) {
   const needs_photoseparation = value === '' ? null : value === 'true';
   const resp = await fetch('/api/green-coffee/' + encodeURIComponent(code) + '/needs-photoseparation', {
@@ -1305,6 +1353,42 @@ async function saveNeedsPhotoseparation(code, value) {
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
   showToast('Збережено');
 }
+
+async function loadNapivfabrykat() {
+  const search = document.getElementById('napivfabrykatSearch').value.trim();
+  const resp = await fetch('/api/napivfabrykat?search=' + encodeURIComponent(search));
+  const data = await resp.json();
+  const body = document.getElementById('napivfabrykatBody');
+  const empty = document.getElementById('napivfabrykatEmpty');
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  if (!data.napivfabrykat.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  const isAdmin = window._me && window._me.role === 'адмін';
+
+  body.innerHTML = data.napivfabrykat.map((n) => `
+    <tr>
+      <td>${editableCodeCell(n.code, isAdmin, loadNapivfabrykat)}</td>
+      <td>${n.name}</td>
+      <td>${n.source_green_coffee_name ? n.source_green_coffee_name + ' (' + n.source_green_coffee_code + ')' : (n.source_green_coffee_code || '—')}</td>
+      <td class="balance">${fmt(n.balance)}</td>
+      <td class="balance">${fmt(n.received)}</td>
+      <td class="balance">${fmt(n.issued)}</td>
+      <td>${n.last_movement_date ? new Date(n.last_movement_date).toLocaleDateString('uk-UA') : '—'}</td>
+      <td class="row-actions">${isAdmin ? `<button class="secondary" onclick="openMovement('${n.code}', '${escAttr(n.name)}')">+ Рух</button>` : ''}</td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('napivfabrykatSearch').addEventListener('input', () => {
+  clearTimeout(window._napivfabrykatSearchTimer);
+  window._napivfabrykatSearchTimer = setTimeout(loadNapivfabrykat, 250);
+});
 
 async function loadRoastingBatches() {
   const [pendingResp, doneResp] = await Promise.all([
@@ -1860,6 +1944,34 @@ function escAttr(s) {
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'")
     .replace(/"/g, '&quot;');
+}
+
+// Ручна зміна коду позиції — доступно лише адміну, працює однаково для
+// Товарів, Зеленої кави й Напівфабрикатів. reloadFn — глобальна функція
+// (без лапок в onclick), яку викликати після успішної зміни.
+function editableCodeCell(code, isAdmin, reloadFn) {
+  if (!isAdmin) return code;
+  const inputId = 'codeEdit_' + code;
+  return `<span style="display:flex; gap:4px; align-items:center;">
+    <input type="text" id="${inputId}" value="${escAttr(code)}" style="font-size:12px; width:100px;">
+    <button class="secondary" style="font-size:11px; padding:2px 5px;" onclick="saveProductCode('${escAttr(code)}', '${inputId}', ${reloadFn.name})">✓</button>
+  </span>`;
+}
+
+async function saveProductCode(oldCode, inputId, reloadFn) {
+  const input = document.getElementById(inputId);
+  const newCode = input.value.trim();
+  if (!newCode || newCode === oldCode) return;
+
+  const resp = await fetch('/api/products/' + encodeURIComponent(oldCode) + '/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_code: newCode })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити код'); return; }
+  showToast('Код змінено: ' + oldCode + ' → ' + newCode);
+  if (reloadFn) await reloadFn();
 }
 
 async function loadStationCards() {
@@ -2653,11 +2765,11 @@ document.getElementById('btnCloseDripComponents').onclick = () => {
   document.getElementById('dripComponentsOverlay').classList.remove('open');
 };
 
-const ALL_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
+const ALL_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabNapivfabrykat', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
 const ROLE_TABS = {
   'адмін': ALL_TABS,
-  'тімлід': ['tabStations', 'tabGreenCoffee'],
-  'станція': ['tabStations', 'tabGreenCoffee'],
+  'тімлід': ['tabStations', 'tabGreenCoffee', 'tabNapivfabrykat'],
+  'станція': ['tabStations', 'tabGreenCoffee', 'tabNapivfabrykat'],
   'бухгалтерія': ['tabStock', 'tabInventory', 'tabOrders'],
   'кладовщик': ['tabStock', 'tabInventory', 'tabOrders']
 };
