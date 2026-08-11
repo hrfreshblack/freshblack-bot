@@ -338,7 +338,29 @@ async function initSchema() {
     -- "Ethiopia") збігаються з десятками різних товарів, автоматично вгадати
     -- небезпечно.
     ALTER TABLE production_tasks ADD COLUMN IF NOT EXISTS recipe_id INTEGER REFERENCES blend_recipes(id);
+    -- Автоматичний розподіл замовлень на станції: order_number показує, з
+    -- якого замовлення виникла задача (і слугує ключем ідемпотентності —
+    -- на одну пару замовлення+товар створюється рівно одна задача, навіть
+    -- при повторному скануванні), auto_created — щоб в інтерфейсі було
+    -- видно, що задачу створила система, а не людина.
+    ALTER TABLE production_tasks ADD COLUMN IF NOT EXISTS order_number TEXT;
+    ALTER TABLE production_tasks ADD COLUMN IF NOT EXISTS auto_created BOOLEAN NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS idx_tasks_station_date ON production_tasks(station, task_date);
+    CREATE INDEX IF NOT EXISTS idx_tasks_order_number ON production_tasks(order_number);
+
+    -- Журнал дублікатів при імпорті замовлень: SAP-файл часто містить рядки,
+    -- які вже були в попередньому імпорті (нормально для щоденних зрізів),
+    -- але Тетяна хоче бачити САМЕ ЯКІ замовлення система вважає вже наявними
+    -- — окремо від простого лічильника в тості після імпорту.
+    CREATE TABLE IF NOT EXISTS import_duplicate_log (
+      id SERIAL PRIMARY KEY,
+      order_number TEXT NOT NULL,
+      product_code TEXT NOT NULL,
+      product_name_raw TEXT NOT NULL DEFAULT '',
+      qty NUMERIC NOT NULL DEFAULT 0,
+      imported_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_import_duplicate_log_order ON import_duplicate_log(order_number);
   `);
 }
 
@@ -1107,11 +1129,27 @@ async function importOrderLines(lines) {
       ]
     );
 
-    if (rowCount > 0) inserted += 1;
-    else skippedDuplicate += 1;
+    if (rowCount > 0) {
+      inserted += 1;
+    } else {
+      skippedDuplicate += 1;
+      await pool.query(
+        `INSERT INTO import_duplicate_log (order_number, product_code, product_name_raw, qty)
+         VALUES ($1,$2,$3,$4)`,
+        [line.order_number, line.product_code, line.product_name_raw || '', line.qty || 0]
+      );
+    }
   }
 
   return { inserted, skippedDuplicate, skippedInvalid, missingDate, newProducts, newClients };
+}
+
+async function listImportDuplicates(limit = 200) {
+  const { rows } = await pool.query(
+    `SELECT * FROM import_duplicate_log ORDER BY imported_at DESC LIMIT $1`,
+    [limit]
+  );
+  return rows.map((r) => ({ ...r, qty: Number(r.qty) }));
 }
 
 // Список замовлень, згрупований по номеру документа. Якщо в межах одного
@@ -1732,7 +1770,7 @@ async function upsertStationOperation({ station, operation_name, base_norm, targ
        unit = excluded.unit,
        updated_at = now()
      RETURNING *`,
-    [station, operation_name || '', base_norm ?? null, target_norm ?? null, unit || '']
+    [station, operation_name || '', base_norm === '' || base_norm === undefined ? null : base_norm, target_norm === '' || target_norm === undefined ? null : target_norm, unit || '']
   );
   return rows[0];
 }
@@ -1770,9 +1808,19 @@ async function upsertStationEmployee({ station, employee_name, personal_norm, pe
        schedule_note = excluded.schedule_note,
        updated_at = now()
      RETURNING *`,
-    [station, employee_name, personal_norm ?? null, personal_norm_unit || '', schedule_note || '']
+    [station, employee_name, personal_norm === '' || personal_norm === undefined ? null : personal_norm, personal_norm_unit || '', schedule_note || '']
   );
   return rows[0];
+}
+
+async function deleteStationOperation(id) {
+  const { rowCount } = await pool.query('DELETE FROM station_operations WHERE id = $1', [id]);
+  return rowCount;
+}
+
+async function deleteStationEmployee(id) {
+  const { rowCount } = await pool.query('DELETE FROM station_employees WHERE id = $1', [id]);
+  return rowCount;
 }
 
 async function seedStationEmployeesIfMissing(rows) {
@@ -1858,6 +1906,43 @@ async function createTask({ station, product_code, product_name, planned_qty, un
     ]
   );
   return rows[0];
+}
+
+// Автоматичний розподіл замовлень на станції: кожна позиція замовлення
+// (статус "нове"/"в роботі"), товар якої прив'язаний до конкретної станції
+// (products.station), отримує чернетку задачі на цю станцію — планова
+// кількість = кількість у замовленні, дата = дата відвантаження. Це НЕ
+// враховує наявний залишок на складі (реального планування з дефіциту
+// ще немає — ТЗ §13.1, потребує окремої роботи) — просто "це замовлення
+// потребує цей товар, отже потрібна задача станції на його виготовлення".
+// Ідемпотентно через (order_number, product_code): одна пара отримує
+// задачу рівно один раз, навіть при повторних запусках — далі Тетяна
+// вільно редагує/скасовує/змінює задачу вручну через звичайне керування
+// задачами, повторне сканування вже створену задачу не чіпає й не дублює.
+async function autoAssignOrdersToStations() {
+  const { rows: candidates } = await pool.query(`
+    SELECT ol.order_number, ol.product_code, ol.product_name_raw, ol.qty, ol.ship_date,
+           p.station, p.name AS product_name
+    FROM order_lines ol
+    JOIN products p ON p.code = ol.product_code
+    WHERE ol.status IN ('нове', 'в роботі')
+      AND p.station != ''
+      AND NOT EXISTS (
+        SELECT 1 FROM production_tasks pt
+        WHERE pt.order_number = ol.order_number AND pt.product_code = ol.product_code
+      )
+  `);
+
+  let created = 0;
+  for (const c of candidates) {
+    await pool.query(
+      `INSERT INTO production_tasks (station, product_code, product_name, planned_qty, unit, task_date, reason, order_number, auto_created)
+       VALUES ($1,$2,$3,$4,'',$5,'замовлення',$6,true)`,
+      [c.station, c.product_code, c.product_name || c.product_name_raw, c.qty, c.ship_date || new Date().toISOString().slice(0, 10), c.order_number]
+    );
+    created += 1;
+  }
+  return created;
 }
 
 async function listTasks({ station = '', dateFrom = '', dateTo = '', status = '' } = {}) {
@@ -2146,6 +2231,7 @@ export default {
   listBlendRecipes,
   importOrderLines,
   countOrderLinesBySource,
+  listImportDuplicates,
   listOrders,
   getOrderLines,
   upsertOrderLineOverride,
@@ -2174,6 +2260,7 @@ export default {
   createTask,
   listTasks,
   updateTaskStatus,
+  autoAssignOrdersToStations,
   insertStationsIfMissing,
   updateStation,
   listStationsWithStatus,
@@ -2181,9 +2268,11 @@ export default {
   upsertStationOperation,
   seedStationOperationsIfMissing,
   listStationOperations,
+  deleteStationOperation,
   upsertStationEmployee,
   seedStationEmployeesIfMissing,
   listStationEmployees,
+  deleteStationEmployee,
   createAccountIfMissing,
   createAccountIfMissingWithHash,
   findAccountByUsername,

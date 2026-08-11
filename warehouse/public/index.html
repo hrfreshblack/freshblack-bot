@@ -319,6 +319,7 @@
       <label style="color: var(--muted); font-size: 12px;">по</label>
       <input type="date" id="taskDateTo">
       <button class="secondary" id="btnAddTask">+ Задача</button>
+      <button class="secondary" id="btnAutoAssignTasks" title="Створити задачі для нових замовлень, яких ще немає на станціях">⟳ Розподілити замовлення</button>
     </div>
     <div class="tableWrap">
     <table id="tasksTable">
@@ -472,6 +473,7 @@
         <button class="secondary" id="btnOrderMenu">⋯</button>
         <div class="menuDropdown" id="orderMenuDropdown">
           <button id="btnImportOrders">⬆ Завантажити файл замовлень</button>
+          <button id="btnImportDuplicates">⧉ Дублікати при імпорті</button>
         </div>
       </div>
       <input type="file" id="orderFileInput" accept=".xlsx,.xls" style="display:none;">
@@ -823,6 +825,32 @@
     <div class="modal-actions">
       <button class="secondary" id="btnCancelOrderDelivery">Скасувати</button>
       <button id="btnSaveOrderDelivery">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: керування станцією (норми, співробітники) -->
+<div class="overlay" id="stationManageOverlay">
+  <div class="modal" style="max-width: 520px;">
+    <h2 id="stationManageTitle">Станція</h2>
+    <label style="font-size:12px; color: var(--muted); text-transform: uppercase; letter-spacing:0.03em;">Норми</label>
+    <div id="stationManageOps" style="margin: 6px 0 14px;"></div>
+    <label style="font-size:12px; color: var(--muted); text-transform: uppercase; letter-spacing:0.03em;">Співробітники</label>
+    <div id="stationManageEmps" style="margin: 6px 0 14px;"></div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCloseStationManage">Закрити</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: дублікати при імпорті -->
+<div class="overlay" id="importDuplicatesOverlay">
+  <div class="modal" style="max-width: 560px;">
+    <h2>Дублікати при імпорті</h2>
+    <p style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;">Рядки файлів, які вже були в системі (той самий номер замовлення + код товару) — система їх пропустила, щоб не задвоїти. Це нормально для щоденних SAP-зрізів, які частково повторюють учорашні. Останні 200 записів.</p>
+    <div id="importDuplicatesRows" style="max-height: 420px; overflow-y: auto;"></div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCloseImportDuplicates">Закрити</button>
     </div>
   </div>
 </div>
@@ -1691,9 +1719,32 @@ document.getElementById('orderFileInput').addEventListener('change', async (e) =
 
   if (!data.ok) { showToast(data.error || 'Не вдалося імпортувати файл'); return; }
 
-  showToast(`Рядків у файлі: ${data.totalRows}. Додано нових: ${data.inserted}. Вже було: ${data.skippedDuplicate}. Пропущено (без номера/коду): ${data.skippedInvalid}. Без дати відвантаження: ${data.missingDate}. Нових товарів: ${data.newProducts}. Нових клієнтів: ${data.newClients}.`, 8000);
+  showToast(`Рядків у файлі: ${data.totalRows}. Додано нових: ${data.inserted}. Вже було (див. "Дублікати при імпорті"): ${data.skippedDuplicate}. Пропущено (без номера/коду): ${data.skippedInvalid}. Без дати відвантаження: ${data.missingDate}. Нових товарів: ${data.newProducts}. Нових клієнтів: ${data.newClients}. Розподілено на станції: ${data.autoAssigned}.`, 10000);
   loadOrders();
 });
+
+document.getElementById('btnImportDuplicates').onclick = async () => {
+  const resp = await fetch('/api/orders/import-duplicates');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити'); return; }
+
+  const rows = document.getElementById('importDuplicatesRows');
+  if (!data.duplicates.length) {
+    rows.innerHTML = '<p style="color: var(--muted);">Дублікатів ще не було зафіксовано.</p>';
+  } else {
+    rows.innerHTML = data.duplicates.map((d) => `
+      <div style="padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; display:flex; justify-content: space-between; gap:10px;">
+        <span>№ ${d.order_number} — ${d.product_name_raw || d.product_code} <span style="color: var(--muted);">(${d.product_code})</span></span>
+        <span style="color: var(--muted); white-space:nowrap;">${fmt(d.qty)} · ${new Date(d.imported_at).toLocaleString('uk-UA')}</span>
+      </div>
+    `).join('');
+  }
+  document.getElementById('importDuplicatesOverlay').classList.add('open');
+};
+
+document.getElementById('btnCloseImportDuplicates').onclick = () => {
+  document.getElementById('importDuplicatesOverlay').classList.remove('open');
+};
 
 document.getElementById('orderSearch').addEventListener('input', () => {
   clearTimeout(window._orderSearchTimer);
@@ -1778,6 +1829,7 @@ async function loadStationCards() {
 
   const isAdmin = window._me && window._me.role === 'адмін';
   const container = document.getElementById('stationCards');
+  window._stationsCache = data.stations;
 
   container.innerHTML = data.stations.map((s) => {
     const mainOp = s.operations.find((o) => !o.operation_name);
@@ -1816,7 +1868,7 @@ async function loadStationCards() {
 
     return `
     <div class="stationCard">
-      <h4>${s.name}</h4>
+      <h4 ${isAdmin ? `class="clientLink" onclick="openStationManage('${escAttr(s.name)}')"` : ''}>${s.name}</h4>
       ${opsHtml}
       <div class="row"><span>Сьогодні: план / факт</span><span>${fmt(s.planned_today)} / ${fmt(s.completed_today)}</span></div>
       ${pct !== null ? `<div class="progressBar"><div style="width:${pct}%;"></div></div>` : ''}
@@ -1862,6 +1914,152 @@ async function saveStationEmployee(station) {
   showToast('Співробітника збережено');
   loadStationCards();
 }
+
+let currentStationManageName = null;
+
+function openStationManage(stationName) {
+  currentStationManageName = stationName;
+  document.getElementById('stationManageTitle').textContent = 'Станція — ' + stationName;
+  renderStationManage();
+  document.getElementById('stationManageOverlay').classList.add('open');
+}
+
+function renderStationManage() {
+  const station = (window._stationsCache || []).find((s) => s.name === currentStationManageName);
+  if (!station) return;
+
+  const opsHtml = station.operations.map((o) => `
+    <div style="display:flex; gap:4px; align-items:center; margin-bottom:6px;">
+      <span style="flex:1; font-size:12px;">${o.operation_name || 'Норма'}</span>
+      <input type="number" id="smOpBase_${o.id}" value="${o.base_norm ?? ''}" placeholder="норма" style="width:70px; font-size:11px;">
+      <input type="number" id="smOpTarget_${o.id}" value="${o.target_norm ?? ''}" placeholder="ціль" style="width:70px; font-size:11px;">
+      <input type="text" id="smOpUnit_${o.id}" value="${escAttr(o.unit || '')}" placeholder="од." style="width:50px; font-size:11px;">
+      <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveExistingStationOperation(${o.id}, '${escAttr(o.operation_name || '')}')">✓</button>
+      <a href="#" onclick="deleteStationOp(${o.id}); return false;" style="color: var(--bad); font-size:11px;">×</a>
+    </div>
+  `).join('') || '<p style="color: var(--muted); font-size: 12px;">Норм ще немає.</p>';
+
+  const empsHtml = station.employees.map((e) => `
+    <div style="display:flex; gap:4px; align-items:center; margin-bottom:6px;">
+      <span style="flex:1; font-size:12px;">${e.employee_name}</span>
+      <input type="number" id="smEmpNorm_${e.id}" value="${e.personal_norm ?? ''}" placeholder="норма" style="width:70px; font-size:11px;">
+      <input type="text" id="smEmpUnit_${e.id}" value="${escAttr(e.personal_norm_unit || '')}" placeholder="од." style="width:50px; font-size:11px;">
+      <input type="text" id="smEmpSchedule_${e.id}" value="${escAttr(e.schedule_note || '')}" placeholder="графік" style="width:70px; font-size:11px;">
+      <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveExistingStationEmployee(${e.id}, '${escAttr(e.employee_name)}')">✓</button>
+      <a href="#" onclick="deleteStationEmp(${e.id}); return false;" style="color: var(--bad); font-size:11px;">×</a>
+    </div>
+  `).join('') || '<p style="color: var(--muted); font-size: 12px;">Співробітників ще немає.</p>';
+
+  document.getElementById('stationManageOps').innerHTML = opsHtml + `
+    <details style="margin-top:8px;">
+      <summary style="cursor:pointer; font-size:12px; color: var(--muted);">+ Нова норма</summary>
+      <div style="display:flex; gap:4px; margin-top:6px;">
+        <input type="text" id="smNewOpName" placeholder="назва (порожньо — основна)" style="flex:1; font-size:11px;">
+        <input type="number" id="smNewOpBase" placeholder="норма" style="width:70px; font-size:11px;">
+        <input type="text" id="smNewOpUnit" placeholder="од." style="width:50px; font-size:11px;">
+        <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveNewStationOperation()">✓</button>
+      </div>
+    </details>
+  `;
+
+  document.getElementById('stationManageEmps').innerHTML = empsHtml + `
+    <details style="margin-top:8px;">
+      <summary style="cursor:pointer; font-size:12px; color: var(--muted);">+ Новий співробітник</summary>
+      <div style="display:flex; gap:4px; margin-top:6px;">
+        <input type="text" id="smNewEmpName" placeholder="ім'я" style="flex:1; font-size:11px;">
+        <input type="text" id="smNewEmpSchedule" placeholder="графік" style="width:70px; font-size:11px;">
+        <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveNewStationEmployee()">✓</button>
+      </div>
+    </details>
+  `;
+}
+
+async function saveExistingStationOperation(id, operationName) {
+  const base_norm = document.getElementById('smOpBase_' + id).value;
+  const target_norm = document.getElementById('smOpTarget_' + id).value;
+  const unit = document.getElementById('smOpUnit_' + id).value.trim();
+  const resp = await fetch('/api/stations/' + encodeURIComponent(currentStationManageName) + '/operations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ operation_name: operationName, base_norm, target_norm, unit })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Норму збережено');
+  await loadStationCards();
+  renderStationManage();
+}
+
+async function deleteStationOp(id) {
+  const resp = await fetch('/api/station-operations/' + id, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  showToast('Норму видалено');
+  await loadStationCards();
+  renderStationManage();
+}
+
+async function saveNewStationOperation() {
+  const operation_name = document.getElementById('smNewOpName').value.trim();
+  const base_norm = document.getElementById('smNewOpBase').value;
+  const unit = document.getElementById('smNewOpUnit').value.trim();
+  if (!base_norm) { showToast('Вкажи норму'); return; }
+  const resp = await fetch('/api/stations/' + encodeURIComponent(currentStationManageName) + '/operations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ operation_name, base_norm, unit })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Норму додано');
+  await loadStationCards();
+  renderStationManage();
+}
+
+async function saveExistingStationEmployee(id, employeeName) {
+  const personal_norm = document.getElementById('smEmpNorm_' + id).value;
+  const personal_norm_unit = document.getElementById('smEmpUnit_' + id).value.trim();
+  const schedule_note = document.getElementById('smEmpSchedule_' + id).value.trim();
+  const resp = await fetch('/api/stations/' + encodeURIComponent(currentStationManageName) + '/employees', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ employee_name: employeeName, personal_norm, personal_norm_unit, schedule_note })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Співробітника збережено');
+  await loadStationCards();
+  renderStationManage();
+}
+
+async function deleteStationEmp(id) {
+  const resp = await fetch('/api/station-employees/' + id, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  showToast('Співробітника видалено');
+  await loadStationCards();
+  renderStationManage();
+}
+
+async function saveNewStationEmployee() {
+  const employee_name = document.getElementById('smNewEmpName').value.trim();
+  const schedule_note = document.getElementById('smNewEmpSchedule').value.trim();
+  if (!employee_name) { showToast('Вкажи ім’я'); return; }
+  const resp = await fetch('/api/stations/' + encodeURIComponent(currentStationManageName) + '/employees', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ employee_name, schedule_note })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Співробітника додано');
+  await loadStationCards();
+  renderStationManage();
+}
+
+document.getElementById('btnCloseStationManage').onclick = () => {
+  document.getElementById('stationManageOverlay').classList.remove('open');
+};
 
 async function saveStationField(name, field, value) {
   const resp = await fetch('/api/stations/' + encodeURIComponent(name), {
@@ -1923,7 +2121,7 @@ async function loadTasks() {
     <tr>
       <td>${new Date(t.task_date).toLocaleDateString('uk-UA')}</td>
       <td>${t.station}</td>
-      <td>${t.product_name || t.product_code || '—'}${t.comment ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${t.comment}</div>` : ''}${(t.drip_components && t.drip_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад набору: ${t.drip_components.map((c) => `${c.component_name} ×${fmt(c.total_qty)}`).join(', ')}</div>` : ''}${(t.blend_components && t.blend_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад бленду (${t.blend_name}): ${t.blend_components.map((c) => `${c.name}${c.green_coffee_code ? '' : ' ⚠не знайдено в зел. каві'} ×${fmt(c.total_qty)}кг`).join(', ')}</div>` : ''}</td>
+      <td>${t.product_name || t.product_code || '—'}${t.auto_created ? '<span class="tag neutral" style="margin-left:6px; font-size:10px;" title="Створено автоматично з замовлення">авто</span>' : ''}${t.comment ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${t.comment}</div>` : ''}${(t.drip_components && t.drip_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад набору: ${t.drip_components.map((c) => `${c.component_name} ×${fmt(c.total_qty)}`).join(', ')}</div>` : ''}${(t.blend_components && t.blend_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад бленду (${t.blend_name}): ${t.blend_components.map((c) => `${c.name}${c.green_coffee_code ? '' : ' ⚠не знайдено в зел. каві'} ×${fmt(c.total_qty)}кг`).join(', ')}</div>` : ''}${t.order_number ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">Замовлення № ${t.order_number}</div>` : ''}</td>
       <td class="balance">${fmt(t.planned_qty)}${t.actual_qty !== null ? ' (факт ' + fmt(t.actual_qty) + ')' : ''}</td>
       <td>${t.unit || ''}</td>
       <td>${t.reason}</td>
@@ -1935,6 +2133,14 @@ async function loadTasks() {
 
 document.getElementById('taskDateFrom').addEventListener('change', loadTasks);
 document.getElementById('taskDateTo').addEventListener('change', loadTasks);
+
+document.getElementById('btnAutoAssignTasks').onclick = async () => {
+  const resp = await fetch('/api/tasks/auto-assign', { method: 'POST' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка розподілу'); return; }
+  showToast(data.created > 0 ? `Створено нових задач: ${data.created}` : 'Нових замовлень для розподілу немає — усе вже розподілено.');
+  await loadTasks();
+};
 
 document.getElementById('btnAddTask').onclick = async () => {
   document.getElementById('tStation').value = currentStationFilter;
@@ -2445,6 +2651,7 @@ async function initApp() {
 
   if (window._me.role === 'станція') {
     document.getElementById('btnAddTask').style.display = 'none';
+    document.getElementById('btnAutoAssignTasks').style.display = 'none';
   }
   if (window._me.role === 'станція' && window._me.home_station) {
     currentStationFilter = window._me.home_station;
