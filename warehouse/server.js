@@ -744,6 +744,21 @@ app.post('/api/order-lines/:lineId/delivery', requireRole('кладовщик'),
   }
 });
 
+app.post('/api/order-lines/:lineId/substitute', requireRole('кладовщик'), async (req, res) => {
+  try {
+    const { product_code, qty, note } = req.body || {};
+    if (!product_code) {
+      res.status(400).json({ ok: false, error: 'Потрібен код товару' });
+      return;
+    }
+    await db.substituteOrderLineProduct(Number(req.params.lineId), product_code, qty, note);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/order-lines/:lineId/substitute ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося замінити товар' });
+  }
+});
+
 app.post('/api/orders/:orderNumber/delivery', requireRole('кладовщик'), async (req, res) => {
   try {
     const { delivery_method, ttn } = req.body || {};
