@@ -256,6 +256,43 @@ app.post('/api/green-coffee/:code/short-names', requireRole(), async (req, res) 
   }
 });
 
+app.post('/api/green-coffee/:code/sap-code', requireRole(), async (req, res) => {
+  try {
+    const { sap_code } = req.body || {};
+    const rowCount = await db.updateProductSapCode(req.params.code, sap_code);
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Лот не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/green-coffee/:code/sap-code ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.get('/api/napivfabrykat', requireRole('тімлід', 'станція'), async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const napivfabrykat = await db.listNapivfabrykat({ search });
+    res.json({ ok: true, napivfabrykat });
+  } catch (error) {
+    console.error('GET /api/napivfabrykat ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати напівфабрикати' });
+  }
+});
+
+app.post('/api/products/:code/rename', requireRole(), async (req, res) => {
+  try {
+    const { new_code } = req.body || {};
+    await db.renameProductCode(req.params.code, new_code);
+    res.json({ ok: true, code: String(new_code || '').trim() });
+  } catch (error) {
+    console.error('POST /api/products/:code/rename ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити код' });
+  }
+});
+
 app.get('/api/roasting-batches', requireRole('тімлід', 'станція'), async (req, res) => {
   try {
     const status = String(req.query.status || '').trim();
