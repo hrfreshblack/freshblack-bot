@@ -693,6 +693,17 @@ app.get('/api/orders/:orderNumber', requireRole('бухгалтерія', 'кл�
   }
 });
 
+app.post('/api/orders/:orderNumber/lines', requireRole('кладовщик'), async (req, res) => {
+  try {
+    const { product_code, product_name, qty } = req.body || {};
+    const line = await db.addOrderLine(req.params.orderNumber, { product_code, product_name, qty });
+    res.json({ ok: true, line });
+  } catch (error) {
+    console.error('POST /api/orders/:orderNumber/lines ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося додати позицію' });
+  }
+});
+
 app.post('/api/order-lines/:lineId/overrides', requireRole('кладовщик'), async (req, res) => {
   try {
     const { role, material_id, note } = req.body || {};
@@ -1018,6 +1029,18 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
         const result = await db.importOrderLines(historyLines);
         console.log(`Imported historical orders: ${JSON.stringify(result)}`);
       }
+    }
+
+    // Виправлення бага: (order_number, product_code) сам по собі був
+    // завузьким ключем унікальності для позицій замовлення — той самий
+    // товар МОЖЕ повторюватись у тому самому замовленні кількома рядками з
+    // різною кількістю (напр. одна позиція їде на кілька різних точок
+    // доставки), а importOrderLines() досі помилково відкидав такі рядки
+    // як дублікати. Природно ідемпотентно (ON CONFLICT на новому,
+    // ширшому ключі), безпечно на кожному старті.
+    const recoveredLinesCount = await db.recoverMisclassifiedDuplicateOrderLines();
+    if (recoveredLinesCount > 0) {
+      console.log(`Recovered ${recoveredLinesCount} order lines wrongly dropped as duplicates`);
     }
 
     // Одноразова міграція + виправлення багу: попередня версія backfill-у

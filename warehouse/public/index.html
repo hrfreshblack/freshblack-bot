@@ -1707,6 +1707,16 @@ async function renderOrderDetail(orderNumber) {
           ` : ''}
         </div>
       `).join('')}
+      ${canManageOrders ? `
+        <details style="margin-top:8px;">
+          <summary style="cursor:pointer; font-size:12px; color: var(--muted);">+ Додати позицію до замовлення</summary>
+          <div style="display:flex; gap:4px; margin-top:6px; flex-wrap: wrap; align-items:center;">
+            <input type="text" id="addLineProduct_${orderNumber}" list="orderProductsList" placeholder="товар: код або назва" style="font-size:12px; flex:1; min-width:220px;">
+            <input type="number" id="addLineQty_${orderNumber}" placeholder="к-сть" style="font-size:12px; width:80px;">
+            <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="addOrderLine('${orderNumber}')">✓ Додати</button>
+          </div>
+        </details>
+      ` : ''}
     </div>
   `;
 
@@ -1814,6 +1824,26 @@ async function saveProductSubstitution(lineId, orderNumber) {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося замінити товар'); return; }
   showToast('Товар у позиції замінено');
+  await renderOrderDetail(orderNumber);
+}
+
+async function addOrderLine(orderNumber) {
+  const productInput = document.getElementById('addLineProduct_' + orderNumber).value.trim();
+  const [maybeCode] = productInput.split(' — ');
+  const product_code = (maybeCode || '').trim();
+  const qty = document.getElementById('addLineQty_' + orderNumber).value;
+
+  if (!product_code) { showToast('Вкажи товар'); return; }
+  if (!qty || Number(qty) <= 0) { showToast('Вкажи кількість'); return; }
+
+  const resp = await fetch('/api/orders/' + encodeURIComponent(orderNumber) + '/lines', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ product_code, qty })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося додати позицію'); return; }
+  showToast('Позицію додано');
   await renderOrderDetail(orderNumber);
 }
 
