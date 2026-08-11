@@ -1341,6 +1341,50 @@ async function updateOrderLineDelivery(lineId, deliveryMethod, ttn) {
   return rowCount;
 }
 
+// Форс-мажорна заміна товару в конкретній позиції (напр. закінчився один
+// обсмаж і відвантажують інший замість нього). Дозволена лише поки позицію
+// ще не відвантажено — інакше залишиться рух складу, прив'язаний до
+// старого коду товару; щоб замінити вже відвантажену позицію, спершу
+// поверни їй статус (це поверне товар на склад рухом "повернення"), тоді
+// заміни товар, тоді відвантаж заново.
+async function substituteOrderLineProduct(lineId, newProductCode, newQty, note) {
+  const { rows: lineRows } = await pool.query('SELECT * FROM order_lines WHERE id = $1', [lineId]);
+  const line = lineRows[0];
+  if (!line) throw new Error('Позицію не знайдено');
+  if (line.status === 'відвантажено') {
+    throw new Error('Позиція вже відвантажена — спершу зміни статус назад, тоді заміни товар');
+  }
+
+  const { rows: productRows } = await pool.query('SELECT code, name FROM products WHERE code = $1', [newProductCode]);
+  const product = productRows[0];
+  if (!product) {
+    throw new Error('Товар з таким кодом не знайдено в довіднику Товари');
+  }
+
+  const qty = newQty !== undefined && newQty !== null && String(newQty).trim() !== '' ? Number(newQty) : Number(line.qty);
+  if (!Number.isFinite(qty) || qty <= 0) {
+    throw new Error('Некоректна кількість');
+  }
+
+  const statusNote = note
+    ? `Заміна товару (${line.product_code} → ${product.code}): ${note}`
+    : `Заміна товару: ${line.product_code} → ${product.code}`;
+
+  try {
+    await pool.query(
+      `UPDATE order_lines SET product_code = $1, product_name_raw = $2, qty = $3, status_note = $4 WHERE id = $5`,
+      [product.code, product.name, qty, statusNote, lineId]
+    );
+  } catch (error) {
+    if (error.code === '23505') {
+      throw new Error('Такий товар вже є в цьому замовленні окремим рядком');
+    }
+    throw error;
+  }
+
+  return true;
+}
+
 // Те саме, але одразу для ВСІХ позицій замовлення — більшість замовлень
 // їдуть одним способом доставки, тож зручніше міняти це в зведеному
 // рядку замовлення, а не заходити в кожну позицію окремо. Для нетипового
@@ -2239,6 +2283,7 @@ export default {
   updateOrderStatus,
   updateOrderLineStatus,
   updateOrderLineDelivery,
+  substituteOrderLineProduct,
   updateOrderDelivery,
   DELIVERY_METHODS,
   DELIVERY_METHODS_REQUIRING_TTN,

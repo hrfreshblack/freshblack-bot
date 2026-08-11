@@ -1556,8 +1556,15 @@ async function renderOrderDetail(orderNumber) {
     window._materialsCache = mData.ok ? mData.materials : [];
   }
 
+  if (canManageOrders && !window._productsCache) {
+    const pResp = await fetch('/api/products');
+    const pData = await pResp.json();
+    window._productsCache = pData.ok ? pData.products : [];
+  }
+
   cell.innerHTML = `
     <div style="padding: 8px 14px; background: var(--panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+      ${canManageOrders ? `<datalist id="orderProductsList">${(window._productsCache || []).map((p) => `<option value="${p.code} — ${escAttr(p.name || '')}">`).join('')}</datalist>` : ''}
       ${data.lines.map((l) => `
         <div style="padding: 8px 0; border-bottom: 1px solid var(--border); white-space: normal;">
           <div>${l.product_name_raw || l.product_code} <span style="color: var(--muted);">(${l.product_code})</span></div>
@@ -1599,6 +1606,19 @@ async function renderOrderDetail(orderNumber) {
                 <input type="text" id="ovNote_${l.id}" placeholder="причина" style="font-size:11px; width:100px;">
                 <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveOverride(${l.id}, '${orderNumber}')">✓</button>
               </div>
+            </details>
+            <details style="margin-top:4px;">
+              <summary style="cursor:pointer; font-size:11px; color: var(--muted);">Форс-мажор: замінити товар у цій позиції</summary>
+              ${l.status === 'відвантажено' ? `
+                <div style="font-size:11px; color: var(--muted); margin-top:4px;">Позиція вже відвантажена — спершу зміни статус назад (це поверне товар на склад), тоді буде можна замінити.</div>
+              ` : `
+                <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap; align-items:center;">
+                  <input type="text" id="subProduct_${l.id}" list="orderProductsList" placeholder="новий товар: код або назва" style="font-size:11px; flex:1; min-width:220px;" value="${escAttr(l.product_code + ' — ' + (l.product_name_raw || ''))}">
+                  <input type="number" id="subQty_${l.id}" placeholder="к-сть" value="${l.qty}" style="font-size:11px; width:70px;">
+                  <input type="text" id="subNote_${l.id}" placeholder="причина заміни" style="font-size:11px; width:140px;">
+                  <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveProductSubstitution(${l.id}, '${orderNumber}')">✓ Замінити</button>
+                </div>
+              `}
             </details>
           ` : ''}
         </div>
@@ -1690,6 +1710,26 @@ async function deleteOverride(overrideId, orderNumber) {
   const resp = await fetch('/api/order-line-overrides/' + overrideId, { method: 'DELETE' });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  await renderOrderDetail(orderNumber);
+}
+
+async function saveProductSubstitution(lineId, orderNumber) {
+  const productInput = document.getElementById('subProduct_' + lineId).value.trim();
+  const [maybeCode] = productInput.split(' — ');
+  const product_code = (maybeCode || '').trim();
+  const qty = document.getElementById('subQty_' + lineId).value;
+  const note = document.getElementById('subNote_' + lineId).value.trim();
+
+  if (!product_code) { showToast('Вкажи новий товар'); return; }
+
+  const resp = await fetch('/api/order-lines/' + lineId + '/substitute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ product_code, qty, note })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося замінити товар'); return; }
+  showToast('Товар у позиції замінено');
   await renderOrderDetail(orderNumber);
 }
 
