@@ -357,6 +357,7 @@
           <th>Код SAP</th>
           <th>Назва</th>
           <th>Короткі назви (для блендів)</th>
+          <th>Грейди</th>
           <th>Локація</th>
           <th>Залишок, кг</th>
           <th>Потрібна фотосепарація</th>
@@ -815,6 +816,10 @@
       <label>Лот зеленої кави</label>
       <input type="text" id="rbGreenCoffee" list="greenCoffeeList" placeholder="код або назва">
       <datalist id="greenCoffeeList"></datalist>
+    </div>
+    <div class="field" id="rbGradeField" style="display:none;">
+      <label>Грейд</label>
+      <select id="rbGrade"></select>
     </div>
     <div class="field">
       <label>Взято зеленої кави, кг</label>
@@ -1351,12 +1356,34 @@ async function loadGreenCoffee() {
     const sapCodeCell = isAdmin
       ? `<input type="text" value="${escAttr(g.sap_code || '')}" placeholder="код SAP" style="font-size:12px; width:90px;" onchange="saveSapCode('${g.code}', this.value)">`
       : (g.sap_code || '—');
+    const grades = g.grades || [];
+    const gradesCell = `
+      <div>
+        ${grades.map((gr) => `
+          <span class="tag neutral" style="margin: 0 2px 2px 0; display:inline-block;">
+            ${escAttr(gr.grade_label)}${gr.sap_code ? ' (' + escAttr(gr.sap_code) + ')' : ''}
+            ${isAdmin ? `<a href="#" onclick="deleteGreenCoffeeGrade(${gr.id}); return false;" style="color: inherit; margin-left:4px;">×</a>` : ''}
+          </span>
+        `).join('')}
+        ${isAdmin ? `
+          <details style="margin-top:2px;">
+            <summary style="cursor:pointer; font-size:11px; color: var(--muted);">+ Грейд</summary>
+            <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap;">
+              <input type="text" id="newGradeLabel_${g.code}" placeholder="напр. 2" style="font-size:11px; width:60px;">
+              <input type="text" id="newGradeSap_${g.code}" placeholder="код SAP" style="font-size:11px; width:90px;">
+              <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveGreenCoffeeGrade('${g.code}')">✓</button>
+            </div>
+          </details>
+        ` : ''}
+      </div>
+    `;
     return `
       <tr>
         <td>${editableCodeCell(g.code, isAdmin, loadGreenCoffee)}</td>
         <td>${sapCodeCell}</td>
         <td>${g.name}</td>
         <td>${shortNamesCell}</td>
+        <td>${gradesCell}</td>
         <td>${g.location || '—'}</td>
         <td class="balance">${fmt(g.balance)}</td>
         <td>${flagCell}</td>
@@ -1364,6 +1391,29 @@ async function loadGreenCoffee() {
       </tr>
     `;
   }).join('');
+}
+
+async function saveGreenCoffeeGrade(code) {
+  const grade_label = document.getElementById('newGradeLabel_' + code).value.trim();
+  const sap_code = document.getElementById('newGradeSap_' + code).value.trim();
+  if (!grade_label) { showToast('Вкажи грейд'); return; }
+
+  const resp = await fetch('/api/green-coffee/' + encodeURIComponent(code) + '/grades', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ grade_label, sap_code })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Грейд додано');
+  loadGreenCoffee();
+}
+
+async function deleteGreenCoffeeGrade(id) {
+  const resp = await fetch('/api/green-coffee-grades/' + id, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  loadGreenCoffee();
 }
 
 async function saveShortNames(code, value) {
@@ -1454,7 +1504,7 @@ async function loadRoastingBatches() {
     pendingBody.innerHTML = pendingData.batches.map((b) => `
       <tr>
         <td>${new Date(b.batch_date).toLocaleDateString('uk-UA')}</td>
-        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span></td>
+        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span>${b.grade ? ` <span class="tag neutral">грейд ${escAttr(b.grade)}</span>` : ''}</td>
         <td class="balance">${fmt(b.qty_green_kg)}</td>
         <td class="balance">${fmt(b.qty_roasted_kg)}</td>
         <td class="row-actions"><button class="secondary" onclick="openPhotosep(${b.id}, '${escAttr(b.green_coffee_name)}')">Ввести ваги</button></td>
@@ -1472,7 +1522,7 @@ async function loadRoastingBatches() {
     doneBody.innerHTML = doneData.batches.map((b) => `
       <tr>
         <td>${new Date(b.batch_date).toLocaleDateString('uk-UA')}</td>
-        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span></td>
+        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span>${b.grade ? ` <span class="tag neutral">грейд ${escAttr(b.grade)}</span>` : ''}</td>
         <td class="balance">${fmt(b.qty_green_kg)}</td>
         <td class="balance">${fmt(b.qty_roasted_kg)}</td>
         <td class="balance">${fmt(b.weight_before_kg)}</td>
@@ -1492,9 +1542,25 @@ document.getElementById('btnAddRoastingBatch').onclick = () => {
   document.getElementById('rbQtyRoasted').value = '';
   document.getElementById('rbDate').value = isoDate(new Date());
   document.getElementById('rbNote').value = '';
+  document.getElementById('rbGradeField').style.display = 'none';
+  document.getElementById('rbGrade').innerHTML = '';
   document.getElementById('greenCoffeeList').innerHTML = (window._greenCoffeeCache || []).map((g) => `<option value="${g.code} — ${escAttr(g.name)}">`).join('');
   document.getElementById('roastingBatchOverlay').classList.add('open');
 };
+
+document.getElementById('rbGreenCoffee').addEventListener('input', () => {
+  const input = document.getElementById('rbGreenCoffee').value.trim();
+  const [maybeCode] = input.split(' — ');
+  const matched = (window._greenCoffeeCache || []).find((g) => g.code === maybeCode);
+  const grades = matched ? (matched.grades || []) : [];
+  const gradeField = document.getElementById('rbGradeField');
+  if (grades.length > 0) {
+    document.getElementById('rbGrade').innerHTML = grades.map((g) => `<option value="${escAttr(g.grade_label)}">${g.grade_label}${g.sap_code ? ' (' + g.sap_code + ')' : ''}</option>`).join('');
+    gradeField.style.display = '';
+  } else {
+    gradeField.style.display = 'none';
+  }
+});
 
 document.getElementById('btnCancelRoastingBatch').onclick = () => {
   document.getElementById('roastingBatchOverlay').classList.remove('open');
@@ -1509,13 +1575,16 @@ document.getElementById('btnSaveRoastingBatch').onclick = async () => {
   const qty_roasted_kg = document.getElementById('rbQtyRoasted').value;
   const batch_date = document.getElementById('rbDate').value;
   const note = document.getElementById('rbNote').value.trim();
+  const gradeVisible = document.getElementById('rbGradeField').style.display !== 'none';
+  const grade = gradeVisible ? document.getElementById('rbGrade').value : undefined;
 
   if (!green_coffee_code || !qty_green_kg || !qty_roasted_kg) { showToast('Заповни лот, вагу взятого і вагу посмаженого'); return; }
+  if (gradeVisible && !grade) { showToast('Обери грейд'); return; }
 
   const resp = await fetch('/api/roasting-batches', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note })
+    body: JSON.stringify({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, grade })
   });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти партію'); return; }
