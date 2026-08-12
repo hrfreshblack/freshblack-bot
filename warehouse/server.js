@@ -175,8 +175,8 @@ app.post('/api/products', requireRole(), async (req, res) => {
 
 app.post('/api/products/:code', requireRole(), async (req, res) => {
   try {
-    const { status, station, min_stock, unit } = req.body || {};
-    const product = await db.updateProductFields(req.params.code, { status, station, min_stock, unit });
+    const { status, station, min_stock, unit, is_stock_item } = req.body || {};
+    const product = await db.updateProductFields(req.params.code, { status, station, min_stock, unit, is_stock_item });
     if (!product) {
       res.status(404).json({ ok: false, error: 'Товар не знайдено' });
       return;
@@ -1041,6 +1041,14 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
     const recoveredLinesCount = await db.recoverMisclassifiedDuplicateOrderLines();
     if (recoveredLinesCount > 0) {
       console.log(`Recovered ${recoveredLinesCount} order lines wrongly dropped as duplicates`);
+    }
+
+    // Прибирає з активного списку станцій задачі, чиє замовлення насправді
+    // вже відвантажене (природно ідемпотентно — торкається лише задач, що
+    // ще не завершено/скасовано).
+    const autoCompletedCount = await db.autoCompleteShippedOrderTasks();
+    if (autoCompletedCount > 0) {
+      console.log(`Auto-completed ${autoCompletedCount} station tasks whose order already shipped`);
     }
 
     // Одноразова міграція + виправлення багу: попередня версія backfill-у

@@ -441,6 +441,7 @@
           <th>Код</th>
           <th>Назва</th>
           <th>З лоту зеленої кави</th>
+          <th>Скорочена назва (для інвентаризації)</th>
           <th>Залишок, кг</th>
           <th>Надійшло, кг</th>
           <th>Видано, кг</th>
@@ -948,6 +949,18 @@ async function saveProductStatus(code, value) {
   if (!data.ok) showToast(data.error || 'Не вдалося зберегти статус');
 }
 
+async function saveProductStockItem(code, value) {
+  const resp = await fetch('/api/products/' + encodeURIComponent(code), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_stock_item: value === 'true' })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+  loadProducts();
+}
+
 async function loadProducts() {
   const search = document.getElementById('search').value.trim();
   const resp = await fetch('/api/products?search=' + encodeURIComponent(search));
@@ -973,7 +986,12 @@ async function loadProducts() {
       <td>${row.name || row.short_name || ''}</td>
       <td>${row.station || '—'}</td>
       <td>${row.unit || ''}</td>
-      <td>${row.is_stock_item ? 'так' : 'під замовлення'}</td>
+      <td>${isAdmin ? `
+        <select onchange="saveProductStockItem('${row.code}', this.value)" style="font-size:12px;">
+          <option value="true" ${row.is_stock_item ? 'selected' : ''}>на складі</option>
+          <option value="false" ${!row.is_stock_item ? 'selected' : ''}>під замовлення</option>
+        </select>
+      ` : (row.is_stock_item ? 'так' : 'під замовлення')}</td>
       <td>
         <select onchange="saveProductStatus('${row.code}', this.value)">
           ${PRODUCT_STATUSES.map((s) => `<option value="${s}" ${s === row.status ? 'selected' : ''}>${s}</option>`).join('')}
@@ -1376,6 +1394,9 @@ async function loadNapivfabrykat() {
       <td>${editableCodeCell(n.code, isAdmin, loadNapivfabrykat)}</td>
       <td>${n.name}</td>
       <td>${n.source_green_coffee_name ? n.source_green_coffee_name + ' (' + n.source_green_coffee_code + ')' : (n.source_green_coffee_code || '—')}</td>
+      <td>${isAdmin && n.source_green_coffee_code
+        ? `<input type="text" value="${escAttr(n.source_short_names || '')}" placeholder="напр. Djimmah GR5 3 (Ed3)" style="font-size:12px; min-width:180px;" onchange="saveShortNames('${n.source_green_coffee_code}', this.value)">`
+        : (n.source_short_names || '—')}</td>
       <td class="balance">${fmt(n.balance)}</td>
       <td class="balance">${fmt(n.received)}</td>
       <td class="balance">${fmt(n.issued)}</td>
