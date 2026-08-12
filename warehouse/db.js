@@ -839,10 +839,32 @@ async function insertGreenCoffeeIfMissing(rows) {
 // партія обсмажки — щоб було куди вносити задньочислові коригування
 // (напр. порахований залишок напівфабрикату на 02.08, ще до того, як через
 // цю систему пройшла хоч одна партія обсмажки).
+//
+// Якщо для лоту в green_coffee_grades задано грейди (одна зеленка, кілька
+// профілів обсмажки під різну продукцію — напр. Colombia Cb2/CS5, Djimma
+// GR5 Ed3/Ed5) — заводиться окрема позиція напівфабрикату на КОЖЕН грейд
+// (той самий код/назва, що й finalizeRoastingBatch заводить при першій
+// партії обсмажки цього грейду), а не одна спільна "-NF" на весь лот.
 async function ensureNapivfabrykatProducts() {
   const { rows } = await pool.query(`SELECT code, name FROM products WHERE category = 'зелена кава'`);
   let created = 0;
   for (const g of rows) {
+    const { rows: gradeRows } = await pool.query(
+      'SELECT grade_label FROM green_coffee_grades WHERE green_coffee_code = $1 ORDER BY grade_label ASC',
+      [g.code]
+    );
+    if (gradeRows.length > 0) {
+      for (const { grade_label } of gradeRows) {
+        const { rowCount } = await pool.query(
+          `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, updated_at)
+           VALUES ($1,$2,'кг',true,'напівфабрикат',$3, now())
+           ON CONFLICT (code) DO NOTHING`,
+          [`${g.code}-NF-${grade_label}`, `Напівфабрикат (грейд ${grade_label}): ${g.name}`, g.code]
+        );
+        created += rowCount;
+      }
+      continue;
+    }
     const { rowCount } = await pool.query(
       `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, updated_at)
        VALUES ($1,$2,'кг',true,'напівфабрикат',$3, now())
@@ -852,6 +874,33 @@ async function ensureNapivfabrykatProducts() {
     created += rowCount;
   }
   return created;
+}
+
+// Коли для лоту щойно з'явились грейди (див. insertGreenCoffeeGradesIfMissing),
+// стара спільна позиція "-NF" (заведена ще до розділення на грейди) стає
+// зайвою — ensureNapivfabrykatProducts() з цього моменту веде облік лише
+// по позиціях "-NF-<грейд>". Прибираємо стару, але ЛИШЕ якщо по ній ще
+// немає жодного руху (FK на stock_movements/roasting_batches і так не дасть
+// видалити, якщо є) — інакше лишаємо як є, щоб не загубити фактичний
+// залишок/історію, і це вимагає ручного перенесення людиною.
+async function retireUngradedNapivfabrykatWhereGraded() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT green_coffee_code FROM green_coffee_grades`
+  );
+  let retired = 0;
+  for (const { green_coffee_code } of rows) {
+    try {
+      const { rowCount } = await pool.query(
+        `DELETE FROM products WHERE code = $1 AND category = 'напівфабрикат'`,
+        [`${green_coffee_code}-NF`]
+      );
+      retired += rowCount;
+    } catch (error) {
+      if (error.code !== '23503') throw error;
+      // є рух по старій позиції — лишаємо, потребує ручного перенесення
+    }
+  }
+  return retired;
 }
 
 function normalizeGreenCoffeeName(s) {
@@ -991,6 +1040,24 @@ async function listGreenCoffeeGrades(greenCoffeeCode) {
     [greenCoffeeCode]
   );
   return rows;
+}
+
+// Одноразовий ідемпотентний імпорт грейдів із seed-green-coffee-grades.js
+// (ON CONFLICT на тому самому UNIQUE(green_coffee_code, grade_label), що й у
+// addGreenCoffeeGrade) — безпечно викликати на кожному старті сервера,
+// ручні правки/додані вручну грейди не чіпає.
+async function insertGreenCoffeeGradesIfMissing(rows) {
+  let inserted = 0;
+  for (const row of rows) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO green_coffee_grades (green_coffee_code, grade_label, sap_code)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (green_coffee_code, grade_label) DO NOTHING`,
+      [row.green_coffee_code, row.grade_label, row.sap_code || '']
+    );
+    inserted += rowCount;
+  }
+  return inserted;
 }
 
 async function addGreenCoffeeGrade(greenCoffeeCode, gradeLabel, sapCode) {
@@ -2620,6 +2687,7 @@ export default {
   insertProductsIfMissing,
   insertGreenCoffeeIfMissing,
   ensureNapivfabrykatProducts,
+  retireUngradedNapivfabrykatWhereGraded,
   listGreenCoffee,
   listGreenCoffeeMovementsSummary,
   updateGreenCoffeeNeedsPhotoseparation,
@@ -2627,6 +2695,7 @@ export default {
   listGreenCoffeeGrades,
   addGreenCoffeeGrade,
   deleteGreenCoffeeGrade,
+  insertGreenCoffeeGradesIfMissing,
   updateProductSapCode,
   listNapivfabrykat,
   renameProductCode,

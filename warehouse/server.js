@@ -15,6 +15,7 @@ import seedAccounts from './seed-accounts.js';
 import seedInventoryAug2 from './seed-inventory-aug2.js';
 import seedKapranClients from './seed-kapran-clients.js';
 import seedGreenCoffee from './seed-green-coffee.js';
+import seedGreenCoffeeGrades from './seed-green-coffee-grades.js';
 import { STATION_NAME_ALIASES, stationNotes, stationOperations, stationEmployees } from './seed-stations.js';
 import { parseOrderFile } from './parse-order-file.js';
 
@@ -1053,13 +1054,28 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
       console.log(`Imported green coffee lots: ${greenCoffeeInserted}`);
     }
 
+    // Грейди для лотів, де одна зеленка фактично смажиться в кілька
+    // профілів під різну продукцію (напр. Colombia Cb2/CS5, Djimma GR5
+    // Ed3/Ed5, Peru P2/P4, Santos Bd2/Bs3) — щоб напівфабрикат по них велись
+    // окремими позиціями, а не однією спільною.
+    const greenCoffeeGradesInserted = await db.insertGreenCoffeeGradesIfMissing(seedGreenCoffeeGrades);
+    if (greenCoffeeGradesInserted > 0) {
+      console.log(`Seeded green coffee grades: ${greenCoffeeGradesInserted}`);
+    }
+
     // Напівфабрикат-товар заводиться одразу для КОЖНОГО лоту зеленої кави
     // (а не лише коли трапиться перша партія обсмажки), щоб було куди
     // одразу вносити задньочислові коригування (напр. порахований залишок
-    // напівфабрикату на 02.08).
+    // напівфабрикату на 02.08). Для лотів із грейдами — окрема позиція на
+    // кожен грейд замість однієї спільної.
     const napivfabrykatCreated = await db.ensureNapivfabrykatProducts();
     if (napivfabrykatCreated > 0) {
       console.log(`Created napivfabrykat products: ${napivfabrykatCreated}`);
+    }
+
+    const napivfabrykatRetired = await db.retireUngradedNapivfabrykatWhereGraded();
+    if (napivfabrykatRetired > 0) {
+      console.log(`Retired ${napivfabrykatRetired} old ungraded napivfabrykat products (superseded by per-grade positions)`);
     }
 
     // Одноразовий масовий імпорт історичних замовлень (81 вкладка файлу,
