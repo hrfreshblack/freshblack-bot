@@ -859,6 +859,72 @@ async function ensureNapivfabrykatProducts() {
   return created;
 }
 
+// Чотири лоти зеленої кави, де та сама зеленка фактично смажиться в кілька
+// профілів під різну продукцію — з файлу лот-листа Тетяни (napivfabrykat_names
+// має по два короткі позначення в дужках через кому для кожного з них).
+const MULTI_GRADE_GREEN_COFFEE = [
+  { code: 'PG-0049', shortNames: ['Cb2', 'CS5'] },
+  { code: 'PG-0010', shortNames: ['Ed3', 'Ed5'] },
+  { code: 'PG-0058', shortNames: ['P2', 'P4'] },
+  { code: 'PG-0002', shortNames: ['Bd2', 'Bs3'] }
+];
+
+// Ці 4 лоти мають вестись двома окремими позиціями напівфабрикату (кожна зі
+// своєю короткою назвою), а не однією спільною — ensureNapivfabrykatProducts()
+// сама цього не робить (заводить лише одну стартову позицію на лот). Якщо
+// для лоту існує лише одна позиція (перша партія ще не розділена або
+// backfillNapivfabrykatShortNames встиг підставити туди весь список через
+// кому одним рядком) — перейменовує її під перший грейд і додає позицію під
+// другий. Ідемпотентно: якщо обидві позиції з правильними короткими назвами
+// вже є — нічого не робить.
+async function splitMultiGradeNapivfabrykatPositions() {
+  let created = 0;
+  for (const { code: greenCoffeeCode, shortNames } of MULTI_GRADE_GREEN_COFFEE) {
+    const { rows: gcRows } = await pool.query(
+      `SELECT code, name FROM products WHERE code = $1 AND category = 'зелена кава'`,
+      [greenCoffeeCode]
+    );
+    const greenCoffee = gcRows[0];
+    if (!greenCoffee) continue;
+
+    const { rows: positions } = await pool.query(
+      `SELECT code, grade_label, needs_photoseparation FROM products
+       WHERE category = 'напівфабрикат' AND source_green_coffee_code = $1 ORDER BY code ASC`,
+      [greenCoffeeCode]
+    );
+    if (shortNames.every((label) => positions.some((p) => p.grade_label === label))) continue;
+
+    const base = positions[0];
+    if (base && base.grade_label !== shortNames[0]) {
+      await pool.query(
+        `UPDATE products SET grade_label = $2, name = $3, updated_at = now() WHERE code = $1`,
+        [base.code, shortNames[0], `Напівфабрикат (${shortNames[0]}): ${greenCoffee.name}`]
+      );
+    }
+
+    for (let i = 1; i < shortNames.length; i++) {
+      const label = shortNames[i];
+      if (positions.some((p) => p.grade_label === label)) continue;
+      const slug = label.toUpperCase().replace(/[^A-ZА-ЯІЇЄ0-9]+/gi, '');
+      let newCode = `${greenCoffeeCode}-NF-${slug}`;
+      let attempt = 1;
+      while (true) {
+        const { rows: clash } = await pool.query('SELECT 1 FROM products WHERE code = $1', [newCode]);
+        if (clash.length === 0) break;
+        attempt += 1;
+        newCode = `${greenCoffeeCode}-NF-${slug}-${attempt}`;
+      }
+      await pool.query(
+        `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, grade_label, needs_photoseparation, updated_at)
+         VALUES ($1,$2,'кг',true,'напівфабрикат',$3,$4,$5, now())`,
+        [newCode, `Напівфабрикат (${label}): ${greenCoffee.name}`, greenCoffeeCode, label, base ? base.needs_photoseparation : null]
+      );
+      created += 1;
+    }
+  }
+  return created;
+}
+
 // Позиції напівфабрикату, заведені ще ДО того, як зʼявилось поле
 // grade_label ("Скорочена назва для інвентаризації"), лишились із порожньою
 // короткою назвою — хоча вона вже є в лот-листі зеленої кави
@@ -2702,6 +2768,7 @@ export default {
   insertProductsIfMissing,
   insertGreenCoffeeIfMissing,
   ensureNapivfabrykatProducts,
+  splitMultiGradeNapivfabrykatPositions,
   backfillNapivfabrykatShortNames,
   listGreenCoffee,
   insertGreenCoffeeSapCodesIfMissing,
