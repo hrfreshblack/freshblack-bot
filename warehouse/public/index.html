@@ -441,8 +441,11 @@
         <tr>
           <th>Код</th>
           <th>Назва</th>
+          <th>Код SAP (зеленої кави)</th>
           <th>З лоту зеленої кави</th>
-          <th>Скорочена назва (для інвентаризації)</th>
+          <th>Скорочена назва</th>
+          <th>Код SAP (напівфабрикату)</th>
+          <th>Потрібна фотосепарація</th>
           <th>Залишок, кг</th>
           <th>Надійшло, кг</th>
           <th>Видано, кг</th>
@@ -1438,6 +1441,17 @@ async function saveSapCode(code, value) {
   showToast('Збережено');
 }
 
+async function saveNapivfabrykatSapCode(code, value) {
+  const resp = await fetch('/api/napivfabrykat/' + encodeURIComponent(code) + '/sap-code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sap_code: value.trim() })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+}
+
 async function saveNeedsPhotoseparation(code, value) {
   const needs_photoseparation = value === '' ? null : value === 'true';
   const resp = await fetch('/api/green-coffee/' + encodeURIComponent(code) + '/needs-photoseparation', {
@@ -1467,21 +1481,33 @@ async function loadNapivfabrykat() {
 
   const isAdmin = window._me && window._me.role === 'адмін';
 
-  body.innerHTML = data.napivfabrykat.map((n) => `
+  body.innerHTML = data.napivfabrykat.map((n) => {
+    const shortNameCell = n.grade_label
+      ? escAttr(n.grade_label)
+      : (isAdmin && n.source_green_coffee_code
+        ? `<input type="text" value="${escAttr(n.source_short_names || '')}" placeholder="напр. Djimmah GR5 3 (Ed3)" style="font-size:12px; min-width:180px;" onchange="saveShortNames('${n.source_green_coffee_code}', this.value)">`
+        : (n.source_short_names || '—'));
+    const napivfabrykatSapCell = isAdmin
+      ? `<input type="text" value="${escAttr(n.sap_code || '')}" placeholder="код SAP" style="font-size:12px; width:90px;" onchange="saveNapivfabrykatSapCode('${n.code}', this.value)">`
+      : (n.sap_code || '—');
+    const needsPhotoLabel = n.source_needs_photoseparation === true ? 'так' : (n.source_needs_photoseparation === false ? 'ні' : 'не вирішено');
+    return `
     <tr>
       <td>${editableCodeCell(n.code, isAdmin, loadNapivfabrykat)}</td>
       <td>${n.name}</td>
+      <td>${n.source_sap_code || '—'}</td>
       <td>${n.source_green_coffee_name ? n.source_green_coffee_name + ' (' + n.source_green_coffee_code + ')' : (n.source_green_coffee_code || '—')}</td>
-      <td>${isAdmin && n.source_green_coffee_code
-        ? `<input type="text" value="${escAttr(n.source_short_names || '')}" placeholder="напр. Djimmah GR5 3 (Ed3)" style="font-size:12px; min-width:180px;" onchange="saveShortNames('${n.source_green_coffee_code}', this.value)">`
-        : (n.source_short_names || '—')}</td>
+      <td>${shortNameCell}</td>
+      <td>${napivfabrykatSapCell}</td>
+      <td>${needsPhotoLabel}</td>
       <td class="balance">${fmt(n.balance)}</td>
       <td class="balance">${fmt(n.received)}</td>
       <td class="balance">${fmt(n.issued)}</td>
       <td>${n.last_movement_date ? new Date(n.last_movement_date).toLocaleDateString('uk-UA') : '—'}</td>
       <td class="row-actions">${isAdmin ? `<button class="secondary" onclick="openMovement('${n.code}', '${escAttr(n.name)}')">+ Рух</button>` : ''}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 }
 
 document.getElementById('napivfabrykatSearch').addEventListener('input', () => {

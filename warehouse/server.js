@@ -16,6 +16,7 @@ import seedInventoryAug2 from './seed-inventory-aug2.js';
 import seedKapranClients from './seed-kapran-clients.js';
 import seedGreenCoffee from './seed-green-coffee.js';
 import seedGreenCoffeeGrades from './seed-green-coffee-grades.js';
+import seedGreenCoffeeSap from './seed-green-coffee-sap.js';
 import { STATION_NAME_ALIASES, stationNotes, stationOperations, stationEmployees } from './seed-stations.js';
 import { parseOrderFile } from './parse-order-file.js';
 
@@ -308,6 +309,21 @@ app.get('/api/napivfabrykat', requireRole('тімлід', 'станція'), asy
   } catch (error) {
     console.error('GET /api/napivfabrykat ERROR:', error?.message || error);
     res.status(500).json({ ok: false, error: 'Не вдалося отримати напівфабрикати' });
+  }
+});
+
+app.post('/api/napivfabrykat/:code/sap-code', requireRole(), async (req, res) => {
+  try {
+    const { sap_code } = req.body || {};
+    const rowCount = await db.updateProductSapCode(req.params.code, sap_code);
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Напівфабрикат не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/napivfabrykat/:code/sap-code ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
   }
 });
 
@@ -1052,6 +1068,11 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
     const greenCoffeeInserted = await db.insertGreenCoffeeIfMissing(seedGreenCoffee);
     if (greenCoffeeInserted > 0) {
       console.log(`Imported green coffee lots: ${greenCoffeeInserted}`);
+    }
+
+    const greenCoffeeSapInserted = await db.insertGreenCoffeeSapCodesIfMissing(seedGreenCoffeeSap);
+    if (greenCoffeeSapInserted > 0) {
+      console.log(`Imported green coffee SAP codes: ${greenCoffeeSapInserted}`);
     }
 
     // Грейди для лотів, де одна зеленка фактично смажиться в кілька
