@@ -6,8 +6,11 @@ import multer from 'multer';
 import db from './db.js';
 import seedCatalog from './seed-catalog.js';
 import seedCatalogAdditions from './seed-catalog-additions.js';
+import seedFinishedProductsSap from './seed-finished-products-sap.js';
 import seedBlendRecipes from './seed-blend-recipes.js';
 import seedMaterials from './seed-materials.js';
+import seedMaterialsSap from './seed-materials-sap.js';
+import seedStickers from './seed-stickers.js';
 import seedAccounts from './seed-accounts.js';
 import seedInventoryAug2 from './seed-inventory-aug2.js';
 import seedKapranClients from './seed-kapran-clients.js';
@@ -493,7 +496,9 @@ app.post('/api/tasks/:id/status', requireRole('тімлід', 'станція'),
 app.get('/api/materials', requireRole('кладовщик'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
-    const materials = await db.listMaterials({ search });
+    const materialType = String(req.query.materialType || '').trim();
+    const excludeMaterialType = String(req.query.excludeMaterialType || '').trim();
+    const materials = await db.listMaterials({ search, materialType, excludeMaterialType });
     res.json({ ok: true, materials });
   } catch (error) {
     console.error('GET /api/materials ERROR:', error?.message || error);
@@ -518,8 +523,8 @@ app.post('/api/materials', requireRole(), async (req, res) => {
 
 app.post('/api/materials/:id', requireRole(), async (req, res) => {
   try {
-    const { station, min_stock, unit, reorder_period_days, material_type } = req.body || {};
-    const material = await db.updateMaterialFields(Number(req.params.id), { station, min_stock, unit, reorder_period_days, material_type });
+    const { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status } = req.body || {};
+    const material = await db.updateMaterialFields(Number(req.params.id), { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status });
     if (!material) {
       res.status(404).json({ ok: false, error: 'Матеріал не знайдено' });
       return;
@@ -960,6 +965,11 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
       console.log(`Added ${addedCount} new products found in order history`);
     }
 
+    const addedFinishedCount = await db.insertProductsIfMissing(seedFinishedProductsSap);
+    if (addedFinishedCount > 0) {
+      console.log(`Added ${addedFinishedCount} finished products from SAP catalog file`);
+    }
+
     const addedRecipes = await db.insertBlendRecipesIfMissing(seedBlendRecipes);
     if (addedRecipes > 0) {
       console.log(`Added ${addedRecipes} blend recipes`);
@@ -969,6 +979,16 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
     if (existingMaterials === 0) {
       await db.bulkCreateMaterialsWithBaseline(seedMaterials);
       console.log(`Seeded initial materials catalog: ${seedMaterials.length} materials`);
+    }
+
+    const addedMaterialsCount = await db.insertMaterialsIfMissing(seedMaterialsSap);
+    if (addedMaterialsCount > 0) {
+      console.log(`Added ${addedMaterialsCount} materials from SAP catalog file`);
+    }
+
+    const addedStickersCount = await db.insertMaterialsIfMissing(seedStickers);
+    if (addedStickersCount > 0) {
+      console.log(`Added ${addedStickersCount} stickers`);
     }
 
     // Об'єднує різні варіанти написання станцій ("ручна" -> "Ручна") в одну
