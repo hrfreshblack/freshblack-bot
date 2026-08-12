@@ -474,6 +474,7 @@
           <tr>
             <th>Тип</th>
             <th>Назва</th>
+            <th>Код SAP</th>
             <th>Розмір</th>
             <th>Станція</th>
             <th>Залишок</th>
@@ -2779,10 +2780,17 @@ async function loadMaterials() {
   }
   empty.style.display = 'none';
 
-  body.innerHTML = data.materials.map((m) => `
+  const isAdmin = window._me && window._me.role === 'адмін';
+
+  body.innerHTML = data.materials.map((m) => {
+    const sapCodeCell = isAdmin
+      ? `<input type="text" value="${escAttr(m.sap_code || '')}" placeholder="код SAP" style="font-size:12px; width:110px;" onchange="saveMaterialSapCode(${m.id}, this.value)">`
+      : (m.sap_code || '—');
+    return `
     <tr>
       <td>${m.material_type || '—'}</td>
       <td>${m.name}</td>
+      <td>${sapCodeCell}</td>
       <td>${m.size_label || '—'}</td>
       <td>${m.station || '—'}</td>
       <td class="balance">${fmt(m.balance)} ${materialStatusTag(m)}</td>
@@ -2790,7 +2798,19 @@ async function loadMaterials() {
       <td>${m.reorder_period_days ?? '—'}</td>
       <td class="row-actions"><button class="secondary" onclick="openMaterialMovement(${m.id}, '${escAttr(m.name)}')">+ Рух</button></td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
+}
+
+async function saveMaterialSapCode(id, value) {
+  const resp = await fetch('/api/materials/' + id, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sap_code: value.trim() })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
 }
 
 document.getElementById('materialSearch').addEventListener('input', () => {

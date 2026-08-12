@@ -599,8 +599,8 @@ app.post('/api/materials', requireRole(), async (req, res) => {
 
 app.post('/api/materials/:id', requireRole(), async (req, res) => {
   try {
-    const { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status } = req.body || {};
-    const material = await db.updateMaterialFields(Number(req.params.id), { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status });
+    const { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status, sap_code } = req.body || {};
+    const material = await db.updateMaterialFields(Number(req.params.id), { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status, sap_code });
     if (!material) {
       res.status(404).json({ ok: false, error: 'Матеріал не знайдено' });
       return;

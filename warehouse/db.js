@@ -2018,7 +2018,7 @@ async function createMaterial(m) {
   return rows[0];
 }
 
-async function updateMaterialFields(id, { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status } = {}) {
+async function updateMaterialFields(id, { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status, sap_code } = {}) {
   const { rows } = await pool.query(
     `UPDATE materials SET
        station = COALESCE($2, station),
@@ -2028,10 +2028,11 @@ async function updateMaterialFields(id, { station, min_stock, unit, reorder_peri
        material_type = COALESCE($6, material_type),
        availability_status = COALESCE($7, availability_status),
        process_status = COALESCE($8, process_status),
+       sap_code = COALESCE($9, sap_code),
        updated_at = now()
      WHERE id = $1
      RETURNING *`,
-    [id, station ?? null, min_stock ?? null, unit ?? null, reorder_period_days ?? null, material_type ?? null, availability_status ?? null, process_status ?? null]
+    [id, station ?? null, min_stock ?? null, unit ?? null, reorder_period_days ?? null, material_type ?? null, availability_status ?? null, process_status ?? null, sap_code ?? null]
   );
   return rows[0] || null;
 }
