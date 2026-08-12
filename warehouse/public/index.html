@@ -500,6 +500,7 @@
           <tr>
             <th>Назва</th>
             <th>Кількість</th>
+            <th>Мінімальний залишок</th>
             <th>Наявність</th>
             <th>Статус замовлення</th>
           </tr>
@@ -2718,6 +2719,7 @@ async function loadStickers() {
         <input type="number" id="stickerQty_${m.id}" value="${fmt(m.balance)}" style="font-size:12px; width:80px;">
         <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveStickerQty(${m.id})">✓</button>
       </span></td>
+      <td><input type="number" min="0" step="any" value="${fmt(m.min_stock)}" style="font-size:12px; width:80px;" onchange="saveStickerMinStock(${m.id}, this.value)"></td>
       <td>
         <select onchange="saveStickerStatus(${m.id}, 'availability_status', this.value)" style="font-size:12px;">
           <option value="" ${!m.availability_status ? 'selected' : ''}>—</option>
@@ -2745,6 +2747,18 @@ async function saveStickerQty(id) {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
   showToast('Кількість збережено');
+}
+
+async function saveStickerMinStock(id, value) {
+  if (value === '' || Number(value) < 0) { showToast('Вкажи коректний мінімальний залишок'); return; }
+  const resp = await fetch('/api/materials/' + id, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ min_stock: value })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
 }
 
 async function saveStickerStatus(id, field, value) {
