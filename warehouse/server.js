@@ -274,6 +274,31 @@ app.post('/api/green-coffee/:code/sap-code', requireRole(), async (req, res) => 
   }
 });
 
+app.post('/api/green-coffee/:code/grades', requireRole(), async (req, res) => {
+  try {
+    const { grade_label, sap_code } = req.body || {};
+    const grade = await db.addGreenCoffeeGrade(req.params.code, grade_label, sap_code);
+    res.json({ ok: true, grade });
+  } catch (error) {
+    console.error('POST /api/green-coffee/:code/grades ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти грейд' });
+  }
+});
+
+app.delete('/api/green-coffee-grades/:id', requireRole(), async (req, res) => {
+  try {
+    const rowCount = await db.deleteGreenCoffeeGrade(Number(req.params.id));
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Грейд не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE /api/green-coffee-grades/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити' });
+  }
+});
+
 app.get('/api/napivfabrykat', requireRole('тімлід', 'станція'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
@@ -309,13 +334,13 @@ app.get('/api/roasting-batches', requireRole('тімлід', 'станція'), 
 
 app.post('/api/roasting-batches', requireRole('тімлід', 'станція'), async (req, res) => {
   try {
-    const { green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note } = req.body || {};
+    const { green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, grade } = req.body || {};
     if (!green_coffee_code || !qty_green_kg || !qty_roasted_kg) {
       res.status(400).json({ ok: false, error: "Потрібні лот зеленої кави, вага взятого і вага смаженого" });
       return;
     }
     const batch = await db.createRoastingBatch({
-      green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note,
+      green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, grade,
       created_by: req.account.username
     });
     res.json({ ok: true, batch });

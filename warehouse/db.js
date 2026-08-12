@@ -103,6 +103,25 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_roasting_batches_green ON roasting_batches(green_coffee_code);
+    -- Один лот зеленої кави може посмажитись у різний грейд (напр. Peru
+    -- грейд 2 і грейд 4 — той самий сирий залишок, але роздільний
+    -- напівфабрикат). grade — довільна позначка (звірена з grade_label у
+    -- green_coffee_grades), NULL = лот без грейдів, звичайний єдиний
+    -- напівфабрикат "-NF" як і раніше.
+    ALTER TABLE roasting_batches ADD COLUMN IF NOT EXISTS grade TEXT;
+
+    -- Довідник можливих грейдів по кожному лоту зеленої кави (заповнюється
+    -- вручну в Зеленій каві). Якщо для лоту тут немає жодного рядка — партія
+    -- обсмажки записується без вибору грейду, як і раніше.
+    CREATE TABLE IF NOT EXISTS green_coffee_grades (
+      id SERIAL PRIMARY KEY,
+      green_coffee_code TEXT NOT NULL REFERENCES products(code) ON UPDATE CASCADE,
+      grade_label TEXT NOT NULL,
+      sap_code TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (green_coffee_code, grade_label)
+    );
+    CREATE INDEX IF NOT EXISTS idx_green_coffee_grades_code ON green_coffee_grades(green_coffee_code);
 
     CREATE TABLE IF NOT EXISTS blend_recipes (
       id SERIAL PRIMARY KEY,
@@ -874,7 +893,12 @@ async function listGreenCoffee({ search = '' } = {}) {
 
   const { rows } = await pool.query(
     `SELECT p.code, p.name, p.location, p.needs_photoseparation, p.napivfabrykat_names, p.sap_code,
-            COALESCE(SUM(m.signed_qty), 0) AS balance
+            COALESCE(SUM(m.signed_qty), 0) AS balance,
+            COALESCE(
+              (SELECT json_agg(json_build_object('id', g.id, 'grade_label', g.grade_label, 'sap_code', g.sap_code) ORDER BY g.grade_label)
+               FROM green_coffee_grades g WHERE g.green_coffee_code = p.code),
+              '[]'
+            ) AS grades
      FROM products p
      LEFT JOIN stock_movements m ON m.product_code = p.code
      WHERE ${conditions.join(' AND ')}
@@ -957,6 +981,41 @@ async function updateGreenCoffeeShortNames(code, napivfabrykatNames) {
   return rowCount;
 }
 
+// Довідник грейдів по лоту зеленої кави: якщо для лоту тут задано хоч один
+// грейд, запис партії обсмажки вимагає обрати один із них (див.
+// createRoastingBatch) — тоді напівфабрикат заводиться окремою позицією
+// на кожен грейд, а не однією спільною "-NF" на весь лот.
+async function listGreenCoffeeGrades(greenCoffeeCode) {
+  const { rows } = await pool.query(
+    'SELECT * FROM green_coffee_grades WHERE green_coffee_code = $1 ORDER BY grade_label ASC',
+    [greenCoffeeCode]
+  );
+  return rows;
+}
+
+async function addGreenCoffeeGrade(greenCoffeeCode, gradeLabel, sapCode) {
+  const trimmed = String(gradeLabel || '').trim();
+  if (!trimmed) throw new Error('Грейд не може бути порожнім');
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO green_coffee_grades (green_coffee_code, grade_label, sap_code)
+       VALUES ($1,$2,$3) RETURNING *`,
+      [greenCoffeeCode, trimmed, (sapCode || '').trim()]
+    );
+    return rows[0];
+  } catch (error) {
+    if (error.code === '23505') {
+      throw new Error('Такий грейд для цього лоту вже є');
+    }
+    throw error;
+  }
+}
+
+async function deleteGreenCoffeeGrade(id) {
+  const { rowCount } = await pool.query('DELETE FROM green_coffee_grades WHERE id = $1', [id]);
+  return rowCount;
+}
+
 // Автоматично заводить похідний товар (напівфабрикат або квакер конкретного
 // лоту зеленої кави) при першій потребі — щоб не змушувати вручну створювати
 // його в Товарах перед першою партією обсмажки цього лоту.
@@ -977,7 +1036,7 @@ async function getOrCreateDerivedProduct(sourceCode, sourceName, codeSuffix, cat
 // завершується, смажена кава йде в напівфабрикат без різниці (квакер = 0).
 // Інакше (потрібна або ще не вирішено) — партія висить до запису ваг
 // до/після на Фотосепараторі.
-async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, created_by }) {
+async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, created_by, grade }) {
   const { rows: gcRows } = await pool.query(
     `SELECT code, name, needs_photoseparation FROM products WHERE code = $1 AND category = 'зелена кава'`,
     [green_coffee_code]
@@ -985,6 +1044,19 @@ async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roaste
   const greenCoffee = gcRows[0];
   if (!greenCoffee) {
     throw new Error('Лот зеленої кави не знайдено');
+  }
+
+  const { rows: gradeRows } = await pool.query(
+    'SELECT grade_label FROM green_coffee_grades WHERE green_coffee_code = $1',
+    [green_coffee_code]
+  );
+  if (gradeRows.length > 0) {
+    if (!grade) {
+      throw new Error('Для цього лоту задано грейди — обери один');
+    }
+    if (!gradeRows.some((g) => g.grade_label === grade)) {
+      throw new Error('Невідомий грейд для цього лоту');
+    }
   }
 
   await addMovement({
@@ -996,10 +1068,10 @@ async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roaste
   });
 
   const { rows } = await pool.query(
-    `INSERT INTO roasting_batches (green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, needs_photoseparation_snapshot, note, created_by)
-     VALUES ($1,$2,$3, COALESCE($4, CURRENT_DATE), $5, $6, $7)
+    `INSERT INTO roasting_batches (green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, needs_photoseparation_snapshot, note, created_by, grade)
+     VALUES ($1,$2,$3, COALESCE($4, CURRENT_DATE), $5, $6, $7, $8)
      RETURNING *`,
-    [green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date || null, greenCoffee.needs_photoseparation, note || '', created_by || '']
+    [green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date || null, greenCoffee.needs_photoseparation, note || '', created_by || '', grade || null]
   );
   const batch = rows[0];
 
@@ -1013,7 +1085,9 @@ async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roaste
 async function finalizeRoastingBatch(batch, greenCoffeeName, { weight_before_kg, weight_after_kg }) {
   const quakerKg = Math.round((Number(weight_before_kg) - Number(weight_after_kg)) * 1000) / 1000;
 
-  const napivfabrykatCode = await getOrCreateDerivedProduct(batch.green_coffee_code, greenCoffeeName, '-NF', 'напівфабрикат', 'Напівфабрикат');
+  const napivfabrykatSuffix = batch.grade ? `-NF-${batch.grade}` : '-NF';
+  const napivfabrykatPrefix = batch.grade ? `Напівфабрикат (грейд ${batch.grade})` : 'Напівфабрикат';
+  const napivfabrykatCode = await getOrCreateDerivedProduct(batch.green_coffee_code, greenCoffeeName, napivfabrykatSuffix, 'напівфабрикат', napivfabrykatPrefix);
   await addMovement({
     product_code: napivfabrykatCode,
     movement_type: 'production_in',
@@ -2550,6 +2624,9 @@ export default {
   listGreenCoffeeMovementsSummary,
   updateGreenCoffeeNeedsPhotoseparation,
   updateGreenCoffeeShortNames,
+  listGreenCoffeeGrades,
+  addGreenCoffeeGrade,
+  deleteGreenCoffeeGrade,
   updateProductSapCode,
   listNapivfabrykat,
   renameProductCode,
