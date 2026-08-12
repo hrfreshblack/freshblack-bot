@@ -1119,6 +1119,15 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
       console.log(`Created napivfabrykat products: ${napivfabrykatCreated}`);
     }
 
+    // Colombia, Djimma GR5, Peru, Santos — одна зеленка, але два різних
+    // напівфабрикати під різну продукцію. Розділяє на дві окремі позиції,
+    // якщо ще не розділено (перезаписує "склеєну" коротку назву, якщо вона
+    // там залишилась з-до того, як зʼявився цей крок).
+    const napivfabrykatSplit = await db.splitMultiGradeNapivfabrykatPositions();
+    if (napivfabrykatSplit > 0) {
+      console.log(`Split multi-grade napivfabrykat positions: ${napivfabrykatSplit}`);
+    }
+
     // Позиції напівфабрикату, заведені ще до появи короткої назви як
     // окремого поля — підтягує її з лот-листа зеленої кави там, де вона ще
     // порожня.
