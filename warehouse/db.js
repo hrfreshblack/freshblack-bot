@@ -65,6 +65,11 @@ async function initSchema() {
     -- Код з іншої (SAP) програми — окремо від products.code, який для
     -- зеленої кави це Lot ID з власного обліку, а не SAP-код.
     ALTER TABLE products ADD COLUMN IF NOT EXISTS sap_code TEXT NOT NULL DEFAULT '';
+    -- Коротка назва конкретної позиції напівфабрикату "для інвентаризації"
+    -- (напр. "Cb2") — редагується прямо на вкладці Напівфабрикати, кожна
+    -- позиція має свою власну, незалежно від інших позицій того самого лоту
+    -- зеленої кави. NULL для позицій без короткої назви.
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS grade_label TEXT;
 
     CREATE TABLE IF NOT EXISTS stock_movements (
       id SERIAL PRIMARY KEY,
@@ -103,25 +108,16 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_roasting_batches_green ON roasting_batches(green_coffee_code);
-    -- Один лот зеленої кави може посмажитись у різний грейд (напр. Peru
-    -- грейд 2 і грейд 4 — той самий сирий залишок, але роздільний
-    -- напівфабрикат). grade — довільна позначка (звірена з grade_label у
-    -- green_coffee_grades), NULL = лот без грейдів, звичайний єдиний
-    -- напівфабрикат "-NF" як і раніше.
+    -- Застаріле поле (був період, коли грейд задавався окремим текстом,
+    -- звіреним з окремою таблицею green_coffee_grades) — лишається на старих
+    -- рядках, нові партії його не пишуть. Тепер партія цілиться напряму в
+    -- конкретну позицію напівфабрикату (napivfabrykat_code нижче): один лот
+    -- зеленої кави може мати кілька позицій напівфабрикату (напр. Peru →
+    -- окремо P2 і P4 — той самий сирий залишок, але роздільний напівфабрикат
+    -- під різну продукцію), і партія обсмажки просто каже, в яку саме йде
+    -- результат.
     ALTER TABLE roasting_batches ADD COLUMN IF NOT EXISTS grade TEXT;
-
-    -- Довідник можливих грейдів по кожному лоту зеленої кави (заповнюється
-    -- вручну в Зеленій каві). Якщо для лоту тут немає жодного рядка — партія
-    -- обсмажки записується без вибору грейду, як і раніше.
-    CREATE TABLE IF NOT EXISTS green_coffee_grades (
-      id SERIAL PRIMARY KEY,
-      green_coffee_code TEXT NOT NULL REFERENCES products(code) ON UPDATE CASCADE,
-      grade_label TEXT NOT NULL,
-      sap_code TEXT NOT NULL DEFAULT '',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE (green_coffee_code, grade_label)
-    );
-    CREATE INDEX IF NOT EXISTS idx_green_coffee_grades_code ON green_coffee_grades(green_coffee_code);
+    ALTER TABLE roasting_batches ADD COLUMN IF NOT EXISTS napivfabrykat_code TEXT REFERENCES products(code);
 
     CREATE TABLE IF NOT EXISTS blend_recipes (
       id SERIAL PRIMARY KEY,
@@ -834,20 +830,29 @@ async function insertGreenCoffeeIfMissing(rows) {
   return inserted;
 }
 
-// Одноразово (ідемпотентно через ON CONFLICT): заводить напівфабрикат-товар
-// для КОЖНОГО лоту зеленої кави одразу, а не лише коли трапиться перша
-// партія обсмажки — щоб було куди вносити задньочислові коригування
-// (напр. порахований залишок напівфабрикату на 02.08, ще до того, як через
-// цю систему пройшла хоч одна партія обсмажки).
+// Заводить одну стартову позицію напівфабрикату для кожного лоту зеленої
+// кави, який ще жодної не має (а не лише коли трапиться перша партія
+// обсмажки) — щоб було куди одразу вносити задньочислові коригування. Якщо
+// в лоту вже є хоч одна позиція напівфабрикату (байдуже — автозаведена чи
+// додана вручну через "+ Додати позицію" на вкладці Напівфабрикати) —
+// пропускаємо: скільки позицій має бути й з якими короткими назвами — це
+// тепер вирішується вручну саме на цій вкладці, а не тут.
 async function ensureNapivfabrykatProducts() {
-  const { rows } = await pool.query(`SELECT code, name FROM products WHERE category = 'зелена кава'`);
+  const { rows } = await pool.query(
+    `SELECT code, name, napivfabrykat_names, needs_photoseparation FROM products WHERE category = 'зелена кава'`
+  );
   let created = 0;
   for (const g of rows) {
+    const { rows: existing } = await pool.query(
+      `SELECT 1 FROM products WHERE category = 'напівфабрикат' AND source_green_coffee_code = $1 LIMIT 1`,
+      [g.code]
+    );
+    if (existing.length > 0) continue;
     const { rowCount } = await pool.query(
-      `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, updated_at)
-       VALUES ($1,$2,'кг',true,'напівфабрикат',$3, now())
+      `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, grade_label, needs_photoseparation, updated_at)
+       VALUES ($1,$2,'кг',true,'напівфабрикат',$3,$4,$5, now())
        ON CONFLICT (code) DO NOTHING`,
-      [`${g.code}-NF`, `Напівфабрикат: ${g.name}`, g.code]
+      [`${g.code}-NF`, `Напівфабрикат: ${g.name}`, g.code, g.napivfabrykat_names || null, g.needs_photoseparation]
     );
     created += rowCount;
   }
@@ -892,17 +897,12 @@ async function listGreenCoffee({ search = '' } = {}) {
   }
 
   const { rows } = await pool.query(
-    `SELECT p.code, p.name, p.location, p.needs_photoseparation, p.napivfabrykat_names, p.sap_code,
-            COALESCE(SUM(m.signed_qty), 0) AS balance,
-            COALESCE(
-              (SELECT json_agg(json_build_object('id', g.id, 'grade_label', g.grade_label, 'sap_code', g.sap_code) ORDER BY g.grade_label)
-               FROM green_coffee_grades g WHERE g.green_coffee_code = p.code),
-              '[]'
-            ) AS grades
+    `SELECT p.code, p.name, p.location, p.napivfabrykat_names, p.sap_code,
+            COALESCE(SUM(m.signed_qty), 0) AS balance
      FROM products p
      LEFT JOIN stock_movements m ON m.product_code = p.code
      WHERE ${conditions.join(' AND ')}
-     GROUP BY p.code, p.name, p.location, p.needs_photoseparation, p.napivfabrykat_names, p.sap_code
+     GROUP BY p.code, p.name, p.location, p.napivfabrykat_names, p.sap_code
      ORDER BY lower(p.name) ASC`,
     params
   );
@@ -923,8 +923,8 @@ async function listNapivfabrykat({ search = '' } = {}) {
   }
 
   const { rows } = await pool.query(
-    `SELECT p.code, p.name, p.source_green_coffee_code, gc.name AS source_green_coffee_name,
-            gc.napivfabrykat_names AS source_short_names,
+    `SELECT p.code, p.name, p.sap_code, p.grade_label, p.needs_photoseparation,
+            p.source_green_coffee_code, gc.name AS source_green_coffee_name, gc.sap_code AS source_sap_code,
             COALESCE(SUM(m.signed_qty), 0) AS balance,
             COALESCE(SUM(CASE WHEN m.movement_type IN ('production_in', 'return') THEN m.qty ELSE 0 END), 0) AS received,
             COALESCE(SUM(CASE WHEN m.movement_type IN ('shipment', 'writeoff', 'component_used') THEN m.qty ELSE 0 END), 0) AS issued,
@@ -933,7 +933,7 @@ async function listNapivfabrykat({ search = '' } = {}) {
      LEFT JOIN products gc ON gc.code = p.source_green_coffee_code
      LEFT JOIN stock_movements m ON m.product_code = p.code
      WHERE ${conditions.join(' AND ')}
-     GROUP BY p.code, p.name, p.source_green_coffee_code, gc.name, gc.napivfabrykat_names
+     GROUP BY p.code, p.name, p.sap_code, p.grade_label, p.needs_photoseparation, p.source_green_coffee_code, gc.name, gc.sap_code
      ORDER BY lower(p.name) ASC`,
     params
   );
@@ -962,6 +962,22 @@ async function listGreenCoffeeMovementsSummary({ dateFrom, dateTo }) {
   return rows.map((r) => ({ ...r, issued: Number(r.issued), received: Number(r.received), net_change: Number(r.net_change) }));
 }
 
+// Одноразовий імпорт SAP-кодів зеленої кави з файлу Тетяни — лише туди, де
+// sap_code ще порожній, щоб не затерти те, що вже вписано вручну через
+// /api/green-coffee/:code/sap-code.
+async function insertGreenCoffeeSapCodesIfMissing(rows) {
+  let updated = 0;
+  for (const row of rows) {
+    const { rowCount } = await pool.query(
+      `UPDATE products SET sap_code = $2, updated_at = now()
+       WHERE code = $1 AND category = 'зелена кава' AND sap_code = ''`,
+      [row.code, row.sap_code || '']
+    );
+    updated += rowCount;
+  }
+  return updated;
+}
+
 async function updateGreenCoffeeNeedsPhotoseparation(code, needsPhotoseparation) {
   const { rowCount } = await pool.query(
     `UPDATE products SET needs_photoseparation = $2, updated_at = now() WHERE code = $1 AND category = 'зелена кава'`,
@@ -981,51 +997,98 @@ async function updateGreenCoffeeShortNames(code, napivfabrykatNames) {
   return rowCount;
 }
 
-// Довідник грейдів по лоту зеленої кави: якщо для лоту тут задано хоч один
-// грейд, запис партії обсмажки вимагає обрати один із них (див.
-// createRoastingBatch) — тоді напівфабрикат заводиться окремою позицією
-// на кожен грейд, а не однією спільною "-NF" на весь лот.
-async function listGreenCoffeeGrades(greenCoffeeCode) {
+// Позиції напівфабрикату для конкретного лоту зеленої кави — і для показу
+// на вкладці Напівфабрикати, і як список вибору "в яку позицію йде ця
+// партія" при записі партії обсмажки (див. createRoastingBatch), коли лот
+// має більше однієї позиції.
+async function listNapivfabrykatPositions(greenCoffeeCode) {
   const { rows } = await pool.query(
-    'SELECT * FROM green_coffee_grades WHERE green_coffee_code = $1 ORDER BY grade_label ASC',
+    `SELECT code, name, grade_label, sap_code, needs_photoseparation
+     FROM products WHERE category = 'напівфабрикат' AND source_green_coffee_code = $1
+     ORDER BY grade_label ASC NULLS FIRST, code ASC`,
     [greenCoffeeCode]
   );
   return rows;
 }
 
-async function addGreenCoffeeGrade(greenCoffeeCode, gradeLabel, sapCode) {
-  const trimmed = String(gradeLabel || '').trim();
-  if (!trimmed) throw new Error('Грейд не може бути порожнім');
-  try {
-    const { rows } = await pool.query(
-      `INSERT INTO green_coffee_grades (green_coffee_code, grade_label, sap_code)
-       VALUES ($1,$2,$3) RETURNING *`,
-      [greenCoffeeCode, trimmed, (sapCode || '').trim()]
-    );
-    return rows[0];
-  } catch (error) {
-    if (error.code === '23505') {
-      throw new Error('Такий грейд для цього лоту вже є');
-    }
-    throw error;
+// Нова позиція напівфабрикату, заведена вручну (вкладка Напівфабрикати —
+// "+ Додати позицію"), а не автоматично від партії обсмажки. Код генерується
+// з короткої назви (slug), з числовим суфіксом при колізії.
+async function createNapivfabrykatProduct({ source_green_coffee_code, short_name, needs_photoseparation, sap_code }) {
+  const { rows: gcRows } = await pool.query(
+    `SELECT code, name FROM products WHERE code = $1 AND category = 'зелена кава'`,
+    [source_green_coffee_code]
+  );
+  const greenCoffee = gcRows[0];
+  if (!greenCoffee) throw new Error('Лот зеленої кави не знайдено');
+
+  const trimmedShortName = String(short_name || '').trim();
+  const slug = trimmedShortName
+    ? trimmedShortName.toUpperCase().replace(/[^A-ZА-ЯІЇЄ0-9]+/gi, '').slice(0, 20)
+    : '';
+
+  let code = `${greenCoffee.code}-NF${slug ? '-' + slug : ''}`;
+  let attempt = 1;
+  while (true) {
+    const { rows: clash } = await pool.query('SELECT 1 FROM products WHERE code = $1', [code]);
+    if (clash.length === 0) break;
+    attempt += 1;
+    code = `${greenCoffee.code}-NF${slug ? '-' + slug : ''}-${attempt}`;
   }
+
+  const name = trimmedShortName ? `Напівфабрикат (${trimmedShortName}): ${greenCoffee.name}` : `Напівфабрикат: ${greenCoffee.name}`;
+
+  const { rows } = await pool.query(
+    `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, grade_label, needs_photoseparation, sap_code, updated_at)
+     VALUES ($1,$2,'кг',true,'напівфабрикат',$3,$4,$5,$6, now())
+     RETURNING *`,
+    [code, name, greenCoffee.code, trimmedShortName || null, needs_photoseparation, (sap_code || '').trim()]
+  );
+  return rows[0];
 }
 
-async function deleteGreenCoffeeGrade(id) {
-  const { rowCount } = await pool.query('DELETE FROM green_coffee_grades WHERE id = $1', [id]);
+async function updateNapivfabrykatSource(code, sourceGreenCoffeeCode) {
+  const { rows: gcRows } = await pool.query(
+    `SELECT code, name FROM products WHERE code = $1 AND category = 'зелена кава'`,
+    [sourceGreenCoffeeCode]
+  );
+  const greenCoffee = gcRows[0];
+  if (!greenCoffee) throw new Error('Лот зеленої кави не знайдено');
+
+  const { rows } = await pool.query(
+    `UPDATE products SET source_green_coffee_code = $2, updated_at = now()
+     WHERE code = $1 AND category = 'напівфабрикат' RETURNING *`,
+    [code, greenCoffee.code]
+  );
+  return rows[0];
+}
+
+async function updateNapivfabrykatShortName(code, shortName) {
+  const { rowCount } = await pool.query(
+    `UPDATE products SET grade_label = $2, updated_at = now() WHERE code = $1 AND category = 'напівфабрикат'`,
+    [code, String(shortName || '').trim() || null]
+  );
+  return rowCount;
+}
+
+async function updateNapivfabrykatNeedsPhotoseparation(code, needsPhotoseparation) {
+  const { rowCount } = await pool.query(
+    `UPDATE products SET needs_photoseparation = $2, updated_at = now() WHERE code = $1 AND category = 'напівфабрикат'`,
+    [code, needsPhotoseparation]
+  );
   return rowCount;
 }
 
 // Автоматично заводить похідний товар (напівфабрикат або квакер конкретного
 // лоту зеленої кави) при першій потребі — щоб не змушувати вручну створювати
 // його в Товарах перед першою партією обсмажки цього лоту.
-async function getOrCreateDerivedProduct(sourceCode, sourceName, codeSuffix, category, namePrefix) {
+async function getOrCreateDerivedProduct(sourceCode, sourceName, codeSuffix, category, namePrefix, gradeLabel = null) {
   const code = `${sourceCode}${codeSuffix}`;
   await pool.query(
-    `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, updated_at)
-     VALUES ($1,$2,'кг',true,$3,$4, now())
+    `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, grade_label, updated_at)
+     VALUES ($1,$2,'кг',true,$3,$4,$5, now())
      ON CONFLICT (code) DO NOTHING`,
-    [code, `${namePrefix}: ${sourceName}`, category, sourceCode]
+    [code, `${namePrefix}: ${sourceName}`, category, sourceCode, gradeLabel]
   );
   return code;
 }
@@ -1036,9 +1099,9 @@ async function getOrCreateDerivedProduct(sourceCode, sourceName, codeSuffix, cat
 // завершується, смажена кава йде в напівфабрикат без різниці (квакер = 0).
 // Інакше (потрібна або ще не вирішено) — партія висить до запису ваг
 // до/після на Фотосепараторі.
-async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, created_by, grade }) {
+async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, created_by, napivfabrykat_code }) {
   const { rows: gcRows } = await pool.query(
-    `SELECT code, name, needs_photoseparation FROM products WHERE code = $1 AND category = 'зелена кава'`,
+    `SELECT code, name FROM products WHERE code = $1 AND category = 'зелена кава'`,
     [green_coffee_code]
   );
   const greenCoffee = gcRows[0];
@@ -1046,16 +1109,20 @@ async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roaste
     throw new Error('Лот зеленої кави не знайдено');
   }
 
-  const { rows: gradeRows } = await pool.query(
-    'SELECT grade_label FROM green_coffee_grades WHERE green_coffee_code = $1',
-    [green_coffee_code]
-  );
-  if (gradeRows.length > 0) {
-    if (!grade) {
-      throw new Error('Для цього лоту задано грейди — обери один');
+  const positions = await listNapivfabrykatPositions(green_coffee_code);
+  let target;
+  if (positions.length === 0) {
+    const code = await getOrCreateDerivedProduct(green_coffee_code, greenCoffee.name, '-NF', 'напівфабрикат', 'Напівфабрикат');
+    target = { code, needs_photoseparation: null };
+  } else if (positions.length === 1) {
+    target = positions[0];
+  } else {
+    if (!napivfabrykat_code) {
+      throw new Error('Для цього лоту кілька позицій напівфабрикату — обери одну');
     }
-    if (!gradeRows.some((g) => g.grade_label === grade)) {
-      throw new Error('Невідомий грейд для цього лоту');
+    target = positions.find((p) => p.code === napivfabrykat_code);
+    if (!target) {
+      throw new Error('Невідома позиція напівфабрикату для цього лоту');
     }
   }
 
@@ -1068,14 +1135,14 @@ async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roaste
   });
 
   const { rows } = await pool.query(
-    `INSERT INTO roasting_batches (green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, needs_photoseparation_snapshot, note, created_by, grade)
+    `INSERT INTO roasting_batches (green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, needs_photoseparation_snapshot, note, created_by, napivfabrykat_code)
      VALUES ($1,$2,$3, COALESCE($4, CURRENT_DATE), $5, $6, $7, $8)
      RETURNING *`,
-    [green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date || null, greenCoffee.needs_photoseparation, note || '', created_by || '', grade || null]
+    [green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date || null, target.needs_photoseparation, note || '', created_by || '', target.code]
   );
   const batch = rows[0];
 
-  if (greenCoffee.needs_photoseparation === false) {
+  if (target.needs_photoseparation === false) {
     return finalizeRoastingBatch(batch, greenCoffee.name, { weight_before_kg: qty_roasted_kg, weight_after_kg: qty_roasted_kg });
   }
 
@@ -1085,11 +1152,8 @@ async function createRoastingBatch({ green_coffee_code, qty_green_kg, qty_roaste
 async function finalizeRoastingBatch(batch, greenCoffeeName, { weight_before_kg, weight_after_kg }) {
   const quakerKg = Math.round((Number(weight_before_kg) - Number(weight_after_kg)) * 1000) / 1000;
 
-  const napivfabrykatSuffix = batch.grade ? `-NF-${batch.grade}` : '-NF';
-  const napivfabrykatPrefix = batch.grade ? `Напівфабрикат (грейд ${batch.grade})` : 'Напівфабрикат';
-  const napivfabrykatCode = await getOrCreateDerivedProduct(batch.green_coffee_code, greenCoffeeName, napivfabrykatSuffix, 'напівфабрикат', napivfabrykatPrefix);
   await addMovement({
-    product_code: napivfabrykatCode,
+    product_code: batch.napivfabrykat_code,
     movement_type: 'production_in',
     qty: weight_after_kg,
     movement_date: batch.batch_date,
@@ -1954,7 +2018,7 @@ async function createMaterial(m) {
   return rows[0];
 }
 
-async function updateMaterialFields(id, { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status } = {}) {
+async function updateMaterialFields(id, { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status, sap_code } = {}) {
   const { rows } = await pool.query(
     `UPDATE materials SET
        station = COALESCE($2, station),
@@ -1964,10 +2028,11 @@ async function updateMaterialFields(id, { station, min_stock, unit, reorder_peri
        material_type = COALESCE($6, material_type),
        availability_status = COALESCE($7, availability_status),
        process_status = COALESCE($8, process_status),
+       sap_code = COALESCE($9, sap_code),
        updated_at = now()
      WHERE id = $1
      RETURNING *`,
-    [id, station ?? null, min_stock ?? null, unit ?? null, reorder_period_days ?? null, material_type ?? null, availability_status ?? null, process_status ?? null]
+    [id, station ?? null, min_stock ?? null, unit ?? null, reorder_period_days ?? null, material_type ?? null, availability_status ?? null, process_status ?? null, sap_code ?? null]
   );
   return rows[0] || null;
 }
@@ -2621,14 +2686,17 @@ export default {
   insertGreenCoffeeIfMissing,
   ensureNapivfabrykatProducts,
   listGreenCoffee,
+  insertGreenCoffeeSapCodesIfMissing,
   listGreenCoffeeMovementsSummary,
   updateGreenCoffeeNeedsPhotoseparation,
   updateGreenCoffeeShortNames,
-  listGreenCoffeeGrades,
-  addGreenCoffeeGrade,
-  deleteGreenCoffeeGrade,
   updateProductSapCode,
   listNapivfabrykat,
+  listNapivfabrykatPositions,
+  createNapivfabrykatProduct,
+  updateNapivfabrykatSource,
+  updateNapivfabrykatShortName,
+  updateNapivfabrykatNeedsPhotoseparation,
   renameProductCode,
   createRoastingBatch,
   recordPhotoseparation,

@@ -357,10 +357,8 @@
           <th>Код SAP</th>
           <th>Назва</th>
           <th>Короткі назви (для блендів)</th>
-          <th>Грейди</th>
           <th>Локація</th>
           <th>Залишок, кг</th>
-          <th>Потрібна фотосепарація</th>
           <th></th>
         </tr>
       </thead>
@@ -434,15 +432,17 @@
     <p style="color: var(--muted); margin: 0 0 14px;">Смажена (і, де треба, відсепарована) кава, що фізично стоїть у виробництві, а не на складі готової продукції — окремо від Складу, бо по ній постійно йде рух при виготовленні продукції.</p>
     <div class="viewToolbar">
       <input type="search" id="napivfabrykatSearch" placeholder="Пошук за кодом чи назвою…">
+      <button class="secondary" id="btnAddNapivfabrykat">+ Додати позицію</button>
     </div>
     <div class="tableWrap">
     <table id="napivfabrykatTable">
       <thead>
         <tr>
           <th>Код</th>
+          <th>Код SAP</th>
           <th>Назва</th>
-          <th>З лоту зеленої кави</th>
           <th>Скорочена назва (для інвентаризації)</th>
+          <th>Фотосепарація</th>
           <th>Залишок, кг</th>
           <th>Надійшло, кг</th>
           <th>Видано, кг</th>
@@ -474,6 +474,7 @@
           <tr>
             <th>Тип</th>
             <th>Назва</th>
+            <th>Код SAP</th>
             <th>Розмір</th>
             <th>Станція</th>
             <th>Залишок</th>
@@ -808,6 +809,37 @@
   </div>
 </div>
 
+<!-- Модалка: нова позиція напівфабрикату -->
+<div class="overlay" id="addNapivfabrykatOverlay">
+  <div class="modal">
+    <h2>Нова позиція напівфабрикату</h2>
+    <div class="field">
+      <label>Лот зеленої кави</label>
+      <select id="nfSourceCode"></select>
+    </div>
+    <div class="field">
+      <label>Скорочена назва (для інвентаризації)</label>
+      <input type="text" id="nfShortName" placeholder="напр. Cb2">
+    </div>
+    <div class="field">
+      <label>Код SAP (напівфабрикату)</label>
+      <input type="text" id="nfSapCode" placeholder="необов'язково">
+    </div>
+    <div class="field">
+      <label>Потрібна фотосепарація</label>
+      <select id="nfNeedsPhotoseparation">
+        <option value="">не вирішено</option>
+        <option value="true">так</option>
+        <option value="false">ні</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelAddNapivfabrykat">Скасувати</button>
+      <button id="btnSaveAddNapivfabrykat">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <!-- Модалка: нова партія обсмажки -->
 <div class="overlay" id="roastingBatchOverlay">
   <div class="modal">
@@ -818,7 +850,7 @@
       <datalist id="greenCoffeeList"></datalist>
     </div>
     <div class="field" id="rbGradeField" style="display:none;">
-      <label>Грейд</label>
+      <label>Позиція напівфабрикату</label>
       <select id="rbGrade"></select>
     </div>
     <div class="field">
@@ -1342,78 +1374,24 @@ async function loadGreenCoffee() {
   const isAdmin = window._me && window._me.role === 'адмін';
 
   body.innerHTML = data.greenCoffee.map((g) => {
-    const flagLabel = g.needs_photoseparation === true ? 'так' : (g.needs_photoseparation === false ? 'ні' : 'не вирішено');
-    const flagCell = isAdmin
-      ? `<select onchange="saveNeedsPhotoseparation('${g.code}', this.value)" style="font-size:12px;">
-          <option value="" ${g.needs_photoseparation === null ? 'selected' : ''}>не вирішено</option>
-          <option value="true" ${g.needs_photoseparation === true ? 'selected' : ''}>так</option>
-          <option value="false" ${g.needs_photoseparation === false ? 'selected' : ''}>ні</option>
-        </select>`
-      : flagLabel;
     const shortNamesCell = isAdmin
       ? `<input type="text" value="${escAttr(g.napivfabrykat_names || '')}" placeholder="напр. Djimmah GR5 3 (Ed3)" style="font-size:12px; min-width:200px;" onchange="saveShortNames('${g.code}', this.value)">`
       : (g.napivfabrykat_names || '—');
     const sapCodeCell = isAdmin
       ? `<input type="text" value="${escAttr(g.sap_code || '')}" placeholder="код SAP" style="font-size:12px; width:90px;" onchange="saveSapCode('${g.code}', this.value)">`
       : (g.sap_code || '—');
-    const grades = g.grades || [];
-    const gradesCell = `
-      <div>
-        ${grades.map((gr) => `
-          <span class="tag neutral" style="margin: 0 2px 2px 0; display:inline-block;">
-            ${escAttr(gr.grade_label)}${gr.sap_code ? ' (' + escAttr(gr.sap_code) + ')' : ''}
-            ${isAdmin ? `<a href="#" onclick="deleteGreenCoffeeGrade(${gr.id}); return false;" style="color: inherit; margin-left:4px;">×</a>` : ''}
-          </span>
-        `).join('')}
-        ${isAdmin ? `
-          <details style="margin-top:2px;">
-            <summary style="cursor:pointer; font-size:11px; color: var(--muted);">+ Грейд</summary>
-            <div style="display:flex; gap:4px; margin-top:4px; flex-wrap: wrap;">
-              <input type="text" id="newGradeLabel_${g.code}" placeholder="напр. 2" style="font-size:11px; width:60px;">
-              <input type="text" id="newGradeSap_${g.code}" placeholder="код SAP" style="font-size:11px; width:90px;">
-              <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveGreenCoffeeGrade('${g.code}')">✓</button>
-            </div>
-          </details>
-        ` : ''}
-      </div>
-    `;
     return `
       <tr>
         <td>${editableCodeCell(g.code, isAdmin, loadGreenCoffee)}</td>
         <td>${sapCodeCell}</td>
         <td>${g.name}</td>
         <td>${shortNamesCell}</td>
-        <td>${gradesCell}</td>
         <td>${g.location || '—'}</td>
         <td class="balance">${fmt(g.balance)}</td>
-        <td>${flagCell}</td>
         <td class="row-actions">${isAdmin ? `<button class="secondary" onclick="openMovement('${g.code}', '${escAttr(g.name)}')">+ Рух</button>` : ''}</td>
       </tr>
     `;
   }).join('');
-}
-
-async function saveGreenCoffeeGrade(code) {
-  const grade_label = document.getElementById('newGradeLabel_' + code).value.trim();
-  const sap_code = document.getElementById('newGradeSap_' + code).value.trim();
-  if (!grade_label) { showToast('Вкажи грейд'); return; }
-
-  const resp = await fetch('/api/green-coffee/' + encodeURIComponent(code) + '/grades', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ grade_label, sap_code })
-  });
-  const data = await resp.json();
-  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
-  showToast('Грейд додано');
-  loadGreenCoffee();
-}
-
-async function deleteGreenCoffeeGrade(id) {
-  const resp = await fetch('/api/green-coffee-grades/' + id, { method: 'DELETE' });
-  const data = await resp.json();
-  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
-  loadGreenCoffee();
 }
 
 async function saveShortNames(code, value) {
@@ -1438,9 +1416,20 @@ async function saveSapCode(code, value) {
   showToast('Збережено');
 }
 
-async function saveNeedsPhotoseparation(code, value) {
+async function saveNapivfabrykatSapCode(code, value) {
+  const resp = await fetch('/api/napivfabrykat/' + encodeURIComponent(code) + '/sap-code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sap_code: value.trim() })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+}
+
+async function saveNapivfabrykatNeedsPhotoseparation(code, value) {
   const needs_photoseparation = value === '' ? null : value === 'true';
-  const resp = await fetch('/api/green-coffee/' + encodeURIComponent(code) + '/needs-photoseparation', {
+  const resp = await fetch('/api/napivfabrykat/' + encodeURIComponent(code) + '/needs-photoseparation', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ needs_photoseparation })
@@ -1450,13 +1439,52 @@ async function saveNeedsPhotoseparation(code, value) {
   showToast('Збережено');
 }
 
+async function saveNapivfabrykatShortName(code, value) {
+  const resp = await fetch('/api/napivfabrykat/' + encodeURIComponent(code) + '/short-name', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ short_name: value.trim() })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+}
+
+async function saveNapivfabrykatSource(code, sourceCode) {
+  const resp = await fetch('/api/napivfabrykat/' + encodeURIComponent(code) + '/source', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_green_coffee_code: sourceCode })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); loadNapivfabrykat(); return; }
+  showToast('Збережено');
+  loadNapivfabrykat();
+}
+
+function greenCoffeeOptionLabel(g) {
+  return `${g.name} (${g.sap_code || g.code})`;
+}
+
+function greenCoffeeSourceSelect(selectedCode, onchangeJs) {
+  const options = (window._greenCoffeeCache || [])
+    .map((g) => `<option value="${escAttr(g.code)}" ${g.code === selectedCode ? 'selected' : ''}>${escAttr(greenCoffeeOptionLabel(g))}</option>`)
+    .join('');
+  return `<select style="font-size:12px; min-width:200px;" onchange="${onchangeJs}">${options}</select>`;
+}
+
 async function loadNapivfabrykat() {
   const search = document.getElementById('napivfabrykatSearch').value.trim();
-  const resp = await fetch('/api/napivfabrykat?search=' + encodeURIComponent(search));
-  const data = await resp.json();
+  const [nfResp, gcResp] = await Promise.all([
+    fetch('/api/napivfabrykat?search=' + encodeURIComponent(search)),
+    fetch('/api/green-coffee')
+  ]);
+  const data = await nfResp.json();
+  const gcData = await gcResp.json();
   const body = document.getElementById('napivfabrykatBody');
   const empty = document.getElementById('napivfabrykatEmpty');
   if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  if (gcData.ok) window._greenCoffeeCache = gcData.greenCoffee;
 
   if (!data.napivfabrykat.length) {
     body.innerHTML = '';
@@ -1467,27 +1495,79 @@ async function loadNapivfabrykat() {
 
   const isAdmin = window._me && window._me.role === 'адмін';
 
-  body.innerHTML = data.napivfabrykat.map((n) => `
+  body.innerHTML = data.napivfabrykat.map((n) => {
+    const sapCodeCell = isAdmin
+      ? `<input type="text" value="${escAttr(n.sap_code || '')}" placeholder="код SAP" style="font-size:12px; width:90px;" onchange="saveNapivfabrykatSapCode('${n.code}', this.value)">`
+      : (n.sap_code || '—');
+    const nameCell = isAdmin
+      ? greenCoffeeSourceSelect(n.source_green_coffee_code, `saveNapivfabrykatSource('${n.code}', this.value)`)
+      : (n.source_green_coffee_name ? `${n.source_green_coffee_name} (${n.source_green_coffee_code})` : (n.source_green_coffee_code || '—'));
+    const shortNameCell = isAdmin
+      ? `<input type="text" value="${escAttr(n.grade_label || '')}" placeholder="напр. Cb2" style="font-size:12px; width:120px;" onchange="saveNapivfabrykatShortName('${n.code}', this.value)">`
+      : (n.grade_label || '—');
+    const needsPhotoCell = isAdmin
+      ? `<select onchange="saveNapivfabrykatNeedsPhotoseparation('${n.code}', this.value)" style="font-size:12px;">
+          <option value="" ${n.needs_photoseparation === null ? 'selected' : ''}>не вирішено</option>
+          <option value="true" ${n.needs_photoseparation === true ? 'selected' : ''}>так</option>
+          <option value="false" ${n.needs_photoseparation === false ? 'selected' : ''}>ні</option>
+        </select>`
+      : (n.needs_photoseparation === true ? 'так' : (n.needs_photoseparation === false ? 'ні' : 'не вирішено'));
+    return `
     <tr>
       <td>${editableCodeCell(n.code, isAdmin, loadNapivfabrykat)}</td>
-      <td>${n.name}</td>
-      <td>${n.source_green_coffee_name ? n.source_green_coffee_name + ' (' + n.source_green_coffee_code + ')' : (n.source_green_coffee_code || '—')}</td>
-      <td>${isAdmin && n.source_green_coffee_code
-        ? `<input type="text" value="${escAttr(n.source_short_names || '')}" placeholder="напр. Djimmah GR5 3 (Ed3)" style="font-size:12px; min-width:180px;" onchange="saveShortNames('${n.source_green_coffee_code}', this.value)">`
-        : (n.source_short_names || '—')}</td>
+      <td>${sapCodeCell}</td>
+      <td>${nameCell}</td>
+      <td>${shortNameCell}</td>
+      <td>${needsPhotoCell}</td>
       <td class="balance">${fmt(n.balance)}</td>
       <td class="balance">${fmt(n.received)}</td>
       <td class="balance">${fmt(n.issued)}</td>
       <td>${n.last_movement_date ? new Date(n.last_movement_date).toLocaleDateString('uk-UA') : '—'}</td>
       <td class="row-actions">${isAdmin ? `<button class="secondary" onclick="openMovement('${n.code}', '${escAttr(n.name)}')">+ Рух</button>` : ''}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 }
 
 document.getElementById('napivfabrykatSearch').addEventListener('input', () => {
   clearTimeout(window._napivfabrykatSearchTimer);
   window._napivfabrykatSearchTimer = setTimeout(loadNapivfabrykat, 250);
 });
+
+document.getElementById('btnAddNapivfabrykat').onclick = () => {
+  document.getElementById('nfSourceCode').innerHTML = (window._greenCoffeeCache || [])
+    .map((g) => `<option value="${escAttr(g.code)}">${escAttr(greenCoffeeOptionLabel(g))}</option>`)
+    .join('');
+  document.getElementById('nfShortName').value = '';
+  document.getElementById('nfSapCode').value = '';
+  document.getElementById('nfNeedsPhotoseparation').value = '';
+  document.getElementById('addNapivfabrykatOverlay').classList.add('open');
+};
+
+document.getElementById('btnCancelAddNapivfabrykat').onclick = () => {
+  document.getElementById('addNapivfabrykatOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveAddNapivfabrykat').onclick = async () => {
+  const source_green_coffee_code = document.getElementById('nfSourceCode').value;
+  const short_name = document.getElementById('nfShortName').value.trim();
+  const sap_code = document.getElementById('nfSapCode').value.trim();
+  const npValue = document.getElementById('nfNeedsPhotoseparation').value;
+  const needs_photoseparation = npValue === '' ? null : npValue === 'true';
+
+  if (!source_green_coffee_code) { showToast('Обери лот зеленої кави'); return; }
+
+  const resp = await fetch('/api/napivfabrykat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_green_coffee_code, short_name, sap_code, needs_photoseparation })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося додати позицію'); return; }
+  document.getElementById('addNapivfabrykatOverlay').classList.remove('open');
+  showToast('Позицію додано');
+  loadNapivfabrykat();
+};
 
 async function loadRoastingBatches() {
   const [pendingResp, doneResp] = await Promise.all([
@@ -1504,7 +1584,7 @@ async function loadRoastingBatches() {
     pendingBody.innerHTML = pendingData.batches.map((b) => `
       <tr>
         <td>${new Date(b.batch_date).toLocaleDateString('uk-UA')}</td>
-        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span>${b.grade ? ` <span class="tag neutral">грейд ${escAttr(b.grade)}</span>` : ''}</td>
+        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span>${b.napivfabrykat_code ? ` <span class="tag neutral">${escAttr(b.napivfabrykat_code)}</span>` : (b.grade ? ` <span class="tag neutral">грейд ${escAttr(b.grade)}</span>` : '')}</td>
         <td class="balance">${fmt(b.qty_green_kg)}</td>
         <td class="balance">${fmt(b.qty_roasted_kg)}</td>
         <td class="row-actions"><button class="secondary" onclick="openPhotosep(${b.id}, '${escAttr(b.green_coffee_name)}')">Ввести ваги</button></td>
@@ -1522,7 +1602,7 @@ async function loadRoastingBatches() {
     doneBody.innerHTML = doneData.batches.map((b) => `
       <tr>
         <td>${new Date(b.batch_date).toLocaleDateString('uk-UA')}</td>
-        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span>${b.grade ? ` <span class="tag neutral">грейд ${escAttr(b.grade)}</span>` : ''}</td>
+        <td>${b.green_coffee_name} <span style="color: var(--muted);">(${b.green_coffee_code})</span>${b.napivfabrykat_code ? ` <span class="tag neutral">${escAttr(b.napivfabrykat_code)}</span>` : (b.grade ? ` <span class="tag neutral">грейд ${escAttr(b.grade)}</span>` : '')}</td>
         <td class="balance">${fmt(b.qty_green_kg)}</td>
         <td class="balance">${fmt(b.qty_roasted_kg)}</td>
         <td class="balance">${fmt(b.weight_before_kg)}</td>
@@ -1536,7 +1616,7 @@ async function loadRoastingBatches() {
   }
 }
 
-document.getElementById('btnAddRoastingBatch').onclick = () => {
+document.getElementById('btnAddRoastingBatch').onclick = async () => {
   document.getElementById('rbGreenCoffee').value = '';
   document.getElementById('rbQtyGreen').value = '';
   document.getElementById('rbQtyRoasted').value = '';
@@ -1545,6 +1625,9 @@ document.getElementById('btnAddRoastingBatch').onclick = () => {
   document.getElementById('rbGradeField').style.display = 'none';
   document.getElementById('rbGrade').innerHTML = '';
   document.getElementById('greenCoffeeList').innerHTML = (window._greenCoffeeCache || []).map((g) => `<option value="${g.code} — ${escAttr(g.name)}">`).join('');
+  const resp = await fetch('/api/napivfabrykat');
+  const data = await resp.json();
+  if (data.ok) window._napivfabrykatCache = data.napivfabrykat;
   document.getElementById('roastingBatchOverlay').classList.add('open');
 };
 
@@ -1552,10 +1635,10 @@ document.getElementById('rbGreenCoffee').addEventListener('input', () => {
   const input = document.getElementById('rbGreenCoffee').value.trim();
   const [maybeCode] = input.split(' — ');
   const matched = (window._greenCoffeeCache || []).find((g) => g.code === maybeCode);
-  const grades = matched ? (matched.grades || []) : [];
+  const positions = matched ? (window._napivfabrykatCache || []).filter((n) => n.source_green_coffee_code === matched.code) : [];
   const gradeField = document.getElementById('rbGradeField');
-  if (grades.length > 0) {
-    document.getElementById('rbGrade').innerHTML = grades.map((g) => `<option value="${escAttr(g.grade_label)}">${g.grade_label}${g.sap_code ? ' (' + g.sap_code + ')' : ''}</option>`).join('');
+  if (positions.length > 1) {
+    document.getElementById('rbGrade').innerHTML = positions.map((n) => `<option value="${escAttr(n.code)}">${escAttr(n.grade_label || n.code)}${n.sap_code ? ' (' + escAttr(n.sap_code) + ')' : ''}</option>`).join('');
     gradeField.style.display = '';
   } else {
     gradeField.style.display = 'none';
@@ -1576,15 +1659,15 @@ document.getElementById('btnSaveRoastingBatch').onclick = async () => {
   const batch_date = document.getElementById('rbDate').value;
   const note = document.getElementById('rbNote').value.trim();
   const gradeVisible = document.getElementById('rbGradeField').style.display !== 'none';
-  const grade = gradeVisible ? document.getElementById('rbGrade').value : undefined;
+  const napivfabrykat_code = gradeVisible ? document.getElementById('rbGrade').value : undefined;
 
   if (!green_coffee_code || !qty_green_kg || !qty_roasted_kg) { showToast('Заповни лот, вагу взятого і вагу посмаженого'); return; }
-  if (gradeVisible && !grade) { showToast('Обери грейд'); return; }
+  if (gradeVisible && !napivfabrykat_code) { showToast('Обери позицію напівфабрикату'); return; }
 
   const resp = await fetch('/api/roasting-batches', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, grade })
+    body: JSON.stringify({ green_coffee_code, qty_green_kg, qty_roasted_kg, batch_date, note, napivfabrykat_code })
   });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти партію'); return; }
@@ -2697,10 +2780,17 @@ async function loadMaterials() {
   }
   empty.style.display = 'none';
 
-  body.innerHTML = data.materials.map((m) => `
+  const isAdmin = window._me && window._me.role === 'адмін';
+
+  body.innerHTML = data.materials.map((m) => {
+    const sapCodeCell = isAdmin
+      ? `<input type="text" value="${escAttr(m.sap_code || '')}" placeholder="код SAP" style="font-size:12px; width:110px;" onchange="saveMaterialSapCode(${m.id}, this.value)">`
+      : (m.sap_code || '—');
+    return `
     <tr>
       <td>${m.material_type || '—'}</td>
       <td>${m.name}</td>
+      <td>${sapCodeCell}</td>
       <td>${m.size_label || '—'}</td>
       <td>${m.station || '—'}</td>
       <td class="balance">${fmt(m.balance)} ${materialStatusTag(m)}</td>
@@ -2708,7 +2798,19 @@ async function loadMaterials() {
       <td>${m.reorder_period_days ?? '—'}</td>
       <td class="row-actions"><button class="secondary" onclick="openMaterialMovement(${m.id}, '${escAttr(m.name)}')">+ Рух</button></td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
+}
+
+async function saveMaterialSapCode(id, value) {
+  const resp = await fetch('/api/materials/' + id, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sap_code: value.trim() })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
 }
 
 document.getElementById('materialSearch').addEventListener('input', () => {
