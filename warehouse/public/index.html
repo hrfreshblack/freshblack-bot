@@ -456,29 +456,57 @@
   </div>
 
   <div id="viewMaterials" style="display:none;">
-    <div class="viewToolbar">
-      <input type="search" id="materialSearch" placeholder="Пошук за назвою чи типом…">
-      <button class="secondary" id="btnAddMaterial">+ Матеріал</button>
+    <div class="chips" style="margin-bottom: 14px;">
+      <button id="subTabMaterials" class="active" onclick="showMaterialsSubTab('materials')">Матеріали</button>
+      <button id="subTabStickers" onclick="showMaterialsSubTab('stickers')">Наліпки</button>
     </div>
-    <p style="color: var(--muted); margin: 0 0 14px;">Пакувальні матеріали (плівка, пачки, коробки, наліпки) — окремий облік від готової продукції. "Період замовлення" — за скільки днів приходить від постачальника, для розрахунку коли й скільки замовляти.</p>
-    <div class="tableWrap">
-    <table id="materialsTable">
-      <thead>
-        <tr>
-          <th>Тип</th>
-          <th>Назва</th>
-          <th>Розмір</th>
-          <th>Станція</th>
-          <th>Залишок</th>
-          <th>Мін. запас</th>
-          <th>Період замовл., дн</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="materialsBody"></tbody>
-    </table>
+
+    <div id="subViewMaterials">
+      <div class="viewToolbar">
+        <input type="search" id="materialSearch" placeholder="Пошук за назвою чи типом…">
+        <button class="secondary" id="btnAddMaterial">+ Матеріал</button>
+      </div>
+      <p style="color: var(--muted); margin: 0 0 14px;">Пакувальні матеріали (плівка, пачки, коробки) — окремий облік від готової продукції. "Період замовлення" — за скільки днів приходить від постачальника, для розрахунку коли й скільки замовляти.</p>
+      <div class="tableWrap">
+      <table id="materialsTable">
+        <thead>
+          <tr>
+            <th>Тип</th>
+            <th>Назва</th>
+            <th>Розмір</th>
+            <th>Станція</th>
+            <th>Залишок</th>
+            <th>Мін. запас</th>
+            <th>Період замовл., дн</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="materialsBody"></tbody>
+      </table>
+      </div>
+      <div class="empty" id="materialsEmpty" style="display:none;">Розхідників ще немає.</div>
     </div>
-    <div class="empty" id="materialsEmpty" style="display:none;">Розхідників ще немає.</div>
+
+    <div id="subViewStickers" style="display:none;">
+      <div class="viewToolbar">
+        <input type="search" id="stickerSearch" placeholder="Пошук за назвою…">
+      </div>
+      <p style="color: var(--muted); margin: 0 0 14px;">Наліпки — кількість редагується прямо тут (без окремих рухів приймання/списання), плюс два незалежні статуси: фізична наявність і етап друку/замовлення.</p>
+      <div class="tableWrap">
+      <table id="stickersTable">
+        <thead>
+          <tr>
+            <th>Назва</th>
+            <th>Кількість</th>
+            <th>Наявність</th>
+            <th>Статус замовлення</th>
+          </tr>
+        </thead>
+        <tbody id="stickersBody"></tbody>
+      </table>
+      </div>
+      <div class="empty" id="stickersEmpty" style="display:none;">Наліпок ще немає.</div>
+    </div>
   </div>
 
   <div id="viewRecipes" style="display:none;">
@@ -2504,9 +2532,88 @@ function materialStatusTag(row) {
   return '<span class="tag ok">ОК</span>';
 }
 
+function showMaterialsSubTab(sub) {
+  document.getElementById('subViewMaterials').style.display = sub === 'materials' ? '' : 'none';
+  document.getElementById('subViewStickers').style.display = sub === 'stickers' ? '' : 'none';
+  document.getElementById('subTabMaterials').classList.toggle('active', sub === 'materials');
+  document.getElementById('subTabStickers').classList.toggle('active', sub === 'stickers');
+  if (sub === 'stickers') loadStickers();
+}
+
+const STICKER_AVAILABILITY_STATUSES = ['в наявності', 'закінчується', 'немає'];
+const STICKER_PROCESS_STATUSES = ['замовлено', 'в друці', 'отримано'];
+
+async function loadStickers() {
+  const search = document.getElementById('stickerSearch').value.trim();
+  const resp = await fetch('/api/materials?materialType=' + encodeURIComponent('наліпка') + '&search=' + encodeURIComponent(search));
+  const data = await resp.json();
+  const body = document.getElementById('stickersBody');
+  const empty = document.getElementById('stickersEmpty');
+
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  if (!data.materials.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  body.innerHTML = data.materials.map((m) => `
+    <tr>
+      <td>${m.name}</td>
+      <td><span style="display:flex; gap:4px; align-items:center;">
+        <input type="number" id="stickerQty_${m.id}" value="${fmt(m.balance)}" style="font-size:12px; width:80px;">
+        <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveStickerQty(${m.id})">✓</button>
+      </span></td>
+      <td>
+        <select onchange="saveStickerStatus(${m.id}, 'availability_status', this.value)" style="font-size:12px;">
+          <option value="" ${!m.availability_status ? 'selected' : ''}>—</option>
+          ${STICKER_AVAILABILITY_STATUSES.map((s) => `<option value="${s}" ${m.availability_status === s ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <select onchange="saveStickerStatus(${m.id}, 'process_status', this.value)" style="font-size:12px;">
+          <option value="" ${!m.process_status ? 'selected' : ''}>—</option>
+          ${STICKER_PROCESS_STATUSES.map((s) => `<option value="${s}" ${m.process_status === s ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function saveStickerQty(id) {
+  const qty = document.getElementById('stickerQty_' + id).value;
+  if (qty === '' || Number(qty) < 0) { showToast('Вкажи коректну кількість'); return; }
+  const resp = await fetch('/api/material-movements', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ material_id: id, movement_type: 'inventory_adjustment', qty, note: 'Оновлено з підвкладки Наліпки' })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Кількість збережено');
+}
+
+async function saveStickerStatus(id, field, value) {
+  const resp = await fetch('/api/materials/' + id, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ [field]: value })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+}
+
+document.getElementById('stickerSearch').addEventListener('input', () => {
+  clearTimeout(window._stickerSearchTimer);
+  window._stickerSearchTimer = setTimeout(loadStickers, 250);
+});
+
 async function loadMaterials() {
   const search = document.getElementById('materialSearch').value.trim();
-  const resp = await fetch('/api/materials?search=' + encodeURIComponent(search));
+  const resp = await fetch('/api/materials?excludeMaterialType=' + encodeURIComponent('наліпка') + '&search=' + encodeURIComponent(search));
   const data = await resp.json();
   const body = document.getElementById('materialsBody');
   const empty = document.getElementById('materialsEmpty');

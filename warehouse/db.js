@@ -195,6 +195,15 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (name, size_label)
     );
+    -- Код з SAP-вивантаження "Розхідні матеріали" — інформаційне поле, не
+    -- ключ (ключ лишається (name, size_label)).
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS sap_code TEXT NOT NULL DEFAULT '';
+    -- Наліпки: окрема підвкладка Розхідників (material_type = 'наліпка') з
+    -- прямим редагуванням кількості (через "інвентаризація"-рух, а не
+    -- прийом/списання окремо) і двома незалежними статусами — фізична
+    -- наявність і етап процесу замовлення/друку.
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS availability_status TEXT NOT NULL DEFAULT '';
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS process_status TEXT NOT NULL DEFAULT '';
 
     CREATE TABLE IF NOT EXISTS material_movements (
       id SERIAL PRIMARY KEY,
@@ -1801,6 +1810,24 @@ async function bulkCreateMaterialsWithBaseline(materials) {
   }
 }
 
+// Безпечно на кожному старті: додає лише відсутні (за парою name+size_label)
+// матеріали з SAP-вивантаження, ніколи не чіпає вже наявні (ні вручну
+// заведені, ні вже імпортовані раніше). sap_code — інформаційне поле, не
+// впливає на унікальність.
+async function insertMaterialsIfMissing(rows) {
+  let inserted = 0;
+  for (const r of rows) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO materials (name, material_type, size_label, unit, sap_code)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (name, size_label) DO NOTHING`,
+      [r.name, r.material_type || '', r.size_label || '', r.unit || 'шт', r.sap_code || '']
+    );
+    inserted += rowCount;
+  }
+  return inserted;
+}
+
 async function getMaterialBalance(materialId) {
   const { rows } = await pool.query(
     'SELECT COALESCE(SUM(signed_qty), 0) AS balance FROM material_movements WHERE material_id = $1',
@@ -1809,9 +1836,17 @@ async function getMaterialBalance(materialId) {
   return Number(rows[0].balance);
 }
 
-async function listMaterials({ search = '' } = {}) {
+async function listMaterials({ search = '', materialType = '', excludeMaterialType = '' } = {}) {
   const conditions = ['m.active = true'];
   const params = [];
+  if (materialType) {
+    params.push(materialType);
+    conditions.push(`m.material_type = $${params.length}`);
+  }
+  if (excludeMaterialType) {
+    params.push(excludeMaterialType);
+    conditions.push(`m.material_type != $${params.length}`);
+  }
   if (search) {
     params.push(`%${search.toLowerCase()}%`);
     conditions.push(`(lower(m.name) LIKE $${params.length} OR lower(m.material_type) LIKE $${params.length} OR lower(m.size_label) LIKE $${params.length})`);
@@ -1845,7 +1880,7 @@ async function createMaterial(m) {
   return rows[0];
 }
 
-async function updateMaterialFields(id, { station, min_stock, unit, reorder_period_days, material_type } = {}) {
+async function updateMaterialFields(id, { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status } = {}) {
   const { rows } = await pool.query(
     `UPDATE materials SET
        station = COALESCE($2, station),
@@ -1853,10 +1888,12 @@ async function updateMaterialFields(id, { station, min_stock, unit, reorder_peri
        unit = COALESCE($4, unit),
        reorder_period_days = COALESCE($5, reorder_period_days),
        material_type = COALESCE($6, material_type),
+       availability_status = COALESCE($7, availability_status),
+       process_status = COALESCE($8, process_status),
        updated_at = now()
      WHERE id = $1
      RETURNING *`,
-    [id, station ?? null, min_stock ?? null, unit ?? null, reorder_period_days ?? null, material_type ?? null]
+    [id, station ?? null, min_stock ?? null, unit ?? null, reorder_period_days ?? null, material_type ?? null, availability_status ?? null, process_status ?? null]
   );
   return rows[0] || null;
 }
@@ -2590,6 +2627,7 @@ export default {
   cleanupExpiredSessions,
   countMaterials,
   bulkCreateMaterialsWithBaseline,
+  insertMaterialsIfMissing,
   getMaterialBalance,
   listMaterials,
   createMaterial,
