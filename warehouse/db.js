@@ -891,6 +891,7 @@ async function listNapivfabrykat({ search = '' } = {}) {
 
   const { rows } = await pool.query(
     `SELECT p.code, p.name, p.source_green_coffee_code, gc.name AS source_green_coffee_name,
+            gc.napivfabrykat_names AS source_short_names,
             COALESCE(SUM(m.signed_qty), 0) AS balance,
             COALESCE(SUM(CASE WHEN m.movement_type IN ('production_in', 'return') THEN m.qty ELSE 0 END), 0) AS received,
             COALESCE(SUM(CASE WHEN m.movement_type IN ('shipment', 'writeoff', 'component_used') THEN m.qty ELSE 0 END), 0) AS issued,
@@ -899,7 +900,7 @@ async function listNapivfabrykat({ search = '' } = {}) {
      LEFT JOIN products gc ON gc.code = p.source_green_coffee_code
      LEFT JOIN stock_movements m ON m.product_code = p.code
      WHERE ${conditions.join(' AND ')}
-     GROUP BY p.code, p.name, p.source_green_coffee_code, gc.name
+     GROUP BY p.code, p.name, p.source_green_coffee_code, gc.name, gc.napivfabrykat_names
      ORDER BY lower(p.name) ASC`,
     params
   );
@@ -1533,6 +1534,7 @@ async function updateOrderLineStatus(lineId, status, note) {
       movement_date: line.ship_date || null,
       note: `Замовлення №${line.order_number}`
     });
+    await completeTasksForOrderLine(lineId);
   } else if (status !== 'відвантажено' && line.status === 'відвантажено') {
     await addMovement({
       product_code: line.product_code,
@@ -2377,6 +2379,40 @@ async function updateTaskStatus(id, { status, actual_qty, comment }) {
   return task;
 }
 
+// Коли позиція замовлення переходить у "відвантажено" — задача станції, яку
+// автоматично (чи вручну) прив'язали саме до цього рядка, більше не
+// актуальна на станції: продукцію вже реально відвантажили. Завершує її з
+// actual_qty = planned_qty (типовий випадок — відвантажили рівно стільки,
+// скільки й планували); якщо задача на набір дріпів чи бленд, це так само
+// коректно списує компоненти через updateTaskStatus. Уже завершені чи
+// скасовані задачі не чіпає.
+async function completeTasksForOrderLine(orderLineId) {
+  const { rows } = await pool.query(
+    `SELECT id, planned_qty FROM production_tasks WHERE order_line_id = $1 AND status NOT IN ('завершено', 'скасовано')`,
+    [orderLineId]
+  );
+  for (const t of rows) {
+    await updateTaskStatus(t.id, { status: 'завершено', actual_qty: t.planned_qty });
+  }
+  return rows.length;
+}
+
+// Одноразове (природно ідемпотентне) прибирання вже наявних задач станцій,
+// чиє замовлення насправді вже відвантажене — щоб одразу після деплою
+// зникли із активного списку станції задачі, які реально вже виконані.
+async function autoCompleteShippedOrderTasks() {
+  const { rows } = await pool.query(`
+    SELECT pt.id, pt.planned_qty
+    FROM production_tasks pt
+    JOIN order_lines ol ON ol.id = pt.order_line_id
+    WHERE ol.status = 'відвантажено' AND pt.status NOT IN ('завершено', 'скасовано')
+  `);
+  for (const t of rows) {
+    await updateTaskStatus(t.id, { status: 'завершено', actual_qty: t.planned_qty });
+  }
+  return rows.length;
+}
+
 // Ніколи не перезаписує пароль уже наявного акаунта — безпечно викликати на
 // кожен старт з тим самим списком, не скидає пароль, який хтось змінив.
 async function createAccountIfMissing({ username, password, role, home_station, display_name }) {
@@ -2529,6 +2565,7 @@ export default {
   listTasks,
   updateTaskStatus,
   autoAssignOrdersToStations,
+  autoCompleteShippedOrderTasks,
   insertStationsIfMissing,
   updateStation,
   listStationsWithStatus,
