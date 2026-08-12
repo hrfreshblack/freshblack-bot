@@ -877,49 +877,57 @@ const MULTI_GRADE_GREEN_COFFEE = [
 // кому одним рядком) — перейменовує її під перший грейд і додає позицію під
 // другий. Ідемпотентно: якщо обидві позиції з правильними короткими назвами
 // вже є — нічого не робить.
+// Кожен лот обробляється окремо в своєму try/catch — щоб проблема з одним
+// лотом (несподіваний стан даних, гонка з паралельним рестартом) не валила
+// увесь стартовий скрипт сервера (він і так завершує процес на будь-якій
+// невійманій помилці — див. server.js), інакше сервер узагалі не піднявся б.
 async function splitMultiGradeNapivfabrykatPositions() {
   let created = 0;
   for (const { code: greenCoffeeCode, shortNames } of MULTI_GRADE_GREEN_COFFEE) {
-    const { rows: gcRows } = await pool.query(
-      `SELECT code, name FROM products WHERE code = $1 AND category = 'зелена кава'`,
-      [greenCoffeeCode]
-    );
-    const greenCoffee = gcRows[0];
-    if (!greenCoffee) continue;
-
-    const { rows: positions } = await pool.query(
-      `SELECT code, grade_label, needs_photoseparation FROM products
-       WHERE category = 'напівфабрикат' AND source_green_coffee_code = $1 ORDER BY code ASC`,
-      [greenCoffeeCode]
-    );
-    if (shortNames.every((label) => positions.some((p) => p.grade_label === label))) continue;
-
-    const base = positions[0];
-    if (base && base.grade_label !== shortNames[0]) {
-      await pool.query(
-        `UPDATE products SET grade_label = $2, name = $3, updated_at = now() WHERE code = $1`,
-        [base.code, shortNames[0], `Напівфабрикат (${shortNames[0]}): ${greenCoffee.name}`]
+    try {
+      const { rows: gcRows } = await pool.query(
+        `SELECT code, name FROM products WHERE code = $1 AND category = 'зелена кава'`,
+        [greenCoffeeCode]
       );
-    }
+      const greenCoffee = gcRows[0];
+      if (!greenCoffee) continue;
 
-    for (let i = 1; i < shortNames.length; i++) {
-      const label = shortNames[i];
-      if (positions.some((p) => p.grade_label === label)) continue;
-      const slug = label.toUpperCase().replace(/[^A-ZА-ЯІЇЄ0-9]+/gi, '');
-      let newCode = `${greenCoffeeCode}-NF-${slug}`;
-      let attempt = 1;
-      while (true) {
-        const { rows: clash } = await pool.query('SELECT 1 FROM products WHERE code = $1', [newCode]);
-        if (clash.length === 0) break;
-        attempt += 1;
-        newCode = `${greenCoffeeCode}-NF-${slug}-${attempt}`;
+      const { rows: positions } = await pool.query(
+        `SELECT code, grade_label, needs_photoseparation FROM products
+         WHERE category = 'напівфабрикат' AND source_green_coffee_code = $1 ORDER BY code ASC`,
+        [greenCoffeeCode]
+      );
+      if (shortNames.every((label) => positions.some((p) => p.grade_label === label))) continue;
+
+      const base = positions[0];
+      if (base && base.grade_label !== shortNames[0]) {
+        await pool.query(
+          `UPDATE products SET grade_label = $2, name = $3, updated_at = now() WHERE code = $1`,
+          [base.code, shortNames[0], `Напівфабрикат (${shortNames[0]}): ${greenCoffee.name}`]
+        );
       }
-      await pool.query(
-        `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, grade_label, needs_photoseparation, updated_at)
-         VALUES ($1,$2,'кг',true,'напівфабрикат',$3,$4,$5, now())`,
-        [newCode, `Напівфабрикат (${label}): ${greenCoffee.name}`, greenCoffeeCode, label, base ? base.needs_photoseparation : null]
-      );
-      created += 1;
+
+      for (let i = 1; i < shortNames.length; i++) {
+        const label = shortNames[i];
+        if (positions.some((p) => p.grade_label === label)) continue;
+        const slug = label.toUpperCase().replace(/[^A-ZА-ЯІЇЄ0-9]+/gi, '');
+        let newCode = `${greenCoffeeCode}-NF-${slug}`;
+        let attempt = 1;
+        while (true) {
+          const { rows: clash } = await pool.query('SELECT 1 FROM products WHERE code = $1', [newCode]);
+          if (clash.length === 0) break;
+          attempt += 1;
+          newCode = `${greenCoffeeCode}-NF-${slug}-${attempt}`;
+        }
+        await pool.query(
+          `INSERT INTO products (code, name, unit, is_stock_item, category, source_green_coffee_code, grade_label, needs_photoseparation, updated_at)
+           VALUES ($1,$2,'кг',true,'напівфабрикат',$3,$4,$5, now())`,
+          [newCode, `Напівфабрикат (${label}): ${greenCoffee.name}`, greenCoffeeCode, label, base ? base.needs_photoseparation : null]
+        );
+        created += 1;
+      }
+    } catch (error) {
+      console.error(`splitMultiGradeNapivfabrykatPositions ERROR for ${greenCoffeeCode}:`, error?.message || error);
     }
   }
   return created;
