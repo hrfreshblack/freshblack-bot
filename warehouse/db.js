@@ -859,6 +859,23 @@ async function ensureNapivfabrykatProducts() {
   return created;
 }
 
+// Позиції напівфабрикату, заведені ще ДО того, як зʼявилось поле
+// grade_label ("Скорочена назва для інвентаризації"), лишились із порожньою
+// короткою назвою — хоча вона вже є в лот-листі зеленої кави
+// (napivfabrykat_names). Підтягує її туди, де коротка назва ще не заповнена
+// (щоб не затерти те, що вже вписано вручну на вкладці Напівфабрикати).
+async function backfillNapivfabrykatShortNames() {
+  const { rowCount } = await pool.query(
+    `UPDATE products p SET grade_label = gc.napivfabrykat_names, updated_at = now()
+     FROM products gc
+     WHERE p.category = 'напівфабрикат' AND p.source_green_coffee_code = gc.code
+       AND gc.category = 'зелена кава'
+       AND (p.grade_label IS NULL OR p.grade_label = '')
+       AND gc.napivfabrykat_names IS NOT NULL AND gc.napivfabrykat_names != ''`
+  );
+  return rowCount;
+}
+
 function normalizeGreenCoffeeName(s) {
   return String(s || '').trim().toLowerCase();
 }
@@ -2685,6 +2702,7 @@ export default {
   insertProductsIfMissing,
   insertGreenCoffeeIfMissing,
   ensureNapivfabrykatProducts,
+  backfillNapivfabrykatShortNames,
   listGreenCoffee,
   insertGreenCoffeeSapCodesIfMissing,
   listGreenCoffeeMovementsSummary,

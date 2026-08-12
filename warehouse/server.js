@@ -1119,6 +1119,14 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
       console.log(`Created napivfabrykat products: ${napivfabrykatCreated}`);
     }
 
+    // Позиції напівфабрикату, заведені ще до появи короткої назви як
+    // окремого поля — підтягує її з лот-листа зеленої кави там, де вона ще
+    // порожня.
+    const napivfabrykatShortNamesBackfilled = await db.backfillNapivfabrykatShortNames();
+    if (napivfabrykatShortNamesBackfilled > 0) {
+      console.log(`Backfilled napivfabrykat short names: ${napivfabrykatShortNamesBackfilled}`);
+    }
+
     // Одноразовий масовий імпорт історичних замовлень (81 вкладка файлу,
     // серпень 2026) — позначені source='SAP-history', щоб відрізнити від
     // щоденних імпортів через веб-інтерфейс і щоб не повторювати цей крок
