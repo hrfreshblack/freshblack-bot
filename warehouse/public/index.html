@@ -492,8 +492,9 @@
     <div id="subViewStickers" style="display:none;">
       <div class="viewToolbar">
         <input type="search" id="stickerSearch" placeholder="Пошук за назвою…">
+        <button class="secondary" id="btnAddSticker">+ Наліпка</button>
       </div>
-      <p style="color: var(--muted); margin: 0 0 14px;">Наліпки — кількість редагується прямо тут (без окремих рухів приймання/списання), плюс два незалежні статуси: фізична наявність і етап друку/замовлення.</p>
+      <p style="color: var(--muted); margin: 0 0 14px;">Наліпки — кількість можна поправити прямо тут (швидке коригування) або внести повноцінний рух (+Рух, з вибором типу — приймання/списання/тощо), плюс два незалежні статуси: фізична наявність і етап друку/замовлення.</p>
       <div class="tableWrap">
       <table id="stickersTable">
         <thead>
@@ -503,6 +504,7 @@
             <th>Мінімальний залишок</th>
             <th>Наявність</th>
             <th>Статус замовлення</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="stickersBody"></tbody>
@@ -672,7 +674,6 @@
       <input type="text" id="tProduct" list="taskProductsList" placeholder="код або назва">
       <datalist id="taskProductsList"></datalist>
     </div>
-    <div id="tDripComponentsPreview" style="display:none; color: var(--warn); font-size: 12px; margin: -8px 0 12px;"></div>
     <div class="field">
       <label>Рецептура бленду (необов'язково — якщо задача на бленд і треба показати/списати склад по зеленій каві)</label>
       <input type="text" id="tRecipe" list="taskRecipesList" placeholder="напр. Black Blend — Nutty Boy">
@@ -799,16 +800,6 @@
   </div>
 </div>
 
-<div class="overlay" id="dripComponentsOverlay">
-  <div class="modal" style="max-width: 480px;">
-    <h2 id="dripComponentsTitle">Склад набору</h2>
-    <p style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;">Які окремі смаки дріпів (кожен — свій код SAP, виробляється на Дріп станку) і в якій кількості йдуть в один цей набір. Використовується для показу складу на задачі Дріп станка/Збірки дріпів і для списання компонентів при завершенні задачі.</p>
-    <div id="dripComponentsRows"></div>
-    <div class="modal-actions">
-      <button class="secondary" id="btnCloseDripComponents">Закрити</button>
-    </div>
-  </div>
-</div>
 
 <!-- Модалка: нова позиція напівфабрикату -->
 <div class="overlay" id="addNapivfabrykatOverlay">
@@ -1050,7 +1041,9 @@ async function loadProducts() {
     <tr>
       <td>${editableCodeCell(row.code, isAdmin, loadProducts)}</td>
       <td>${row.name || row.short_name || ''}</td>
-      <td>${row.station || '—'}</td>
+      <td>${isAdmin
+        ? `<input type="text" value="${escAttr(row.station || '')}" list="stationsList" placeholder="Центршов / Ручна / ..." style="font-size:12px; min-width:120px;" onchange="saveProductStation('${row.code}', this.value)">`
+        : (row.station || '—')}</td>
       <td>${row.unit || ''}</td>
       <td>${isAdmin ? `
         <select onchange="saveProductStockItem('${row.code}', this.value)" style="font-size:12px;">
@@ -1065,10 +1058,20 @@ async function loadProducts() {
       </td>
       <td class="row-actions" style="display:flex; gap:6px;">
         <button class="secondary" onclick="openSpec('${row.code}', '${escAttr(row.name || row.code)}')">Специфікація</button>
-        <button class="secondary" onclick="openDripComponents('${row.code}', '${escAttr(row.name || row.code)}')">Склад набору</button>
       </td>
     </tr>
   `).join('');
+}
+
+async function saveProductStation(code, value) {
+  const resp = await fetch('/api/products/' + encodeURIComponent(code), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ station: value.trim() })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
 }
 
 function stockStatusTag(row) {
@@ -2505,7 +2508,7 @@ async function loadTasks() {
     <tr>
       <td>${new Date(t.task_date).toLocaleDateString('uk-UA')}</td>
       <td>${t.station}</td>
-      <td>${t.product_name || t.product_code || '—'}${t.auto_created ? '<span class="tag neutral" style="margin-left:6px; font-size:10px;" title="Створено автоматично з замовлення">авто</span>' : ''}${t.comment ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${t.comment}</div>` : ''}${(t.drip_components && t.drip_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад набору: ${t.drip_components.map((c) => `${c.component_name} ×${fmt(c.total_qty)}`).join(', ')}</div>` : ''}${(t.blend_components && t.blend_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад бленду (${t.blend_name}): ${t.blend_components.map((c) => `${c.name}${c.green_coffee_code ? '' : ' ⚠не знайдено в зел. каві'} ×${fmt(c.total_qty)}кг`).join(', ')}</div>` : ''}${t.order_number ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">Замовлення № ${t.order_number}</div>` : ''}</td>
+      <td>${t.product_name || t.product_code || '—'}${t.auto_created ? '<span class="tag neutral" style="margin-left:6px; font-size:10px;" title="Створено автоматично з замовлення">авто</span>' : ''}${t.comment ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">${t.comment}</div>` : ''}${(t.blend_components && t.blend_components.length) ? `<div style="color: var(--warn); font-size: 11px; margin-top: 4px;">Склад бленду (${t.blend_name}): ${t.blend_components.map((c) => `${c.name}${c.green_coffee_code ? '' : ' ⚠не знайдено в зел. каві'} ×${fmt(c.total_qty)}кг`).join(', ')}</div>` : ''}${t.order_number ? `<div style="color: var(--muted); font-size: 11px; margin-top: 2px;">Замовлення № ${t.order_number}</div>` : ''}</td>
       <td class="balance">${fmt(t.planned_qty)}${t.actual_qty !== null ? ' (факт ' + fmt(t.actual_qty) + ')' : ''}</td>
       <td>${t.unit || ''}</td>
       <td>${t.reason}</td>
@@ -2535,7 +2538,6 @@ document.getElementById('btnAddTask').onclick = async () => {
   document.getElementById('tDate').value = document.getElementById('taskDateFrom').value || isoDate(new Date());
   document.getElementById('tReason').value = 'ручне';
   document.getElementById('tComment').value = '';
-  document.getElementById('tDripComponentsPreview').style.display = 'none';
   document.getElementById('tBlendComponentsPreview').style.display = 'none';
 
   const products = window._productsCache || (await (await fetch('/api/products')).json()).products || [];
@@ -2551,23 +2553,6 @@ document.getElementById('btnAddTask').onclick = async () => {
 
   document.getElementById('taskOverlay').classList.add('open');
 };
-
-async function updateTaskDripPreview() {
-  const productInput = document.getElementById('tProduct').value.trim();
-  const [maybeCode] = productInput.split(' — ');
-  const matched = (window._productsCache || []).find((p) => p.code === maybeCode);
-  const preview = document.getElementById('tDripComponentsPreview');
-  if (!matched) { preview.style.display = 'none'; preview.innerHTML = ''; return; }
-
-  const resp = await fetch('/api/products/' + encodeURIComponent(matched.code) + '/drip-components');
-  const data = await resp.json();
-  const components = data.ok ? data.components : [];
-  if (!components.length) { preview.style.display = 'none'; preview.innerHTML = ''; return; }
-
-  const plannedQty = Number(document.getElementById('tPlannedQty').value) || 1;
-  preview.innerHTML = 'Склад набору (на ' + fmt(plannedQty) + '): ' + components.map((c) => `${c.component_name} ×${fmt(c.qty_per_set * plannedQty)}`).join(', ');
-  preview.style.display = 'block';
-}
 
 function getSelectedRecipe() {
   const input = document.getElementById('tRecipe').value.trim();
@@ -2587,8 +2572,7 @@ function updateTaskBlendPreview() {
   preview.style.display = 'block';
 }
 
-document.getElementById('tProduct').addEventListener('input', updateTaskDripPreview);
-document.getElementById('tPlannedQty').addEventListener('input', () => { updateTaskDripPreview(); updateTaskBlendPreview(); });
+document.getElementById('tPlannedQty').addEventListener('input', updateTaskBlendPreview);
 document.getElementById('tRecipe').addEventListener('input', updateTaskBlendPreview);
 
 document.getElementById('btnCancelTask').onclick = () => {
@@ -2678,6 +2662,7 @@ document.getElementById('btnSaveTaskStatus').onclick = async () => {
 
 // ---- Розхідники ----
 let currentMaterialId = null;
+let currentMaterialMovementReload = null;
 
 function materialStatusTag(row) {
   if (row.balance < 0) return '<span class="tag bad">від’ємний</span>';
@@ -2732,6 +2717,7 @@ async function loadStickers() {
           ${STICKER_PROCESS_STATUSES.map((s) => `<option value="${s}" ${m.process_status === s ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
       </td>
+      <td class="row-actions"><button class="secondary" onclick="openMaterialMovement(${m.id}, '${escAttr(m.name)}', loadStickers)">+ Рух</button></td>
     </tr>
   `).join('');
 }
@@ -2776,6 +2762,8 @@ document.getElementById('stickerSearch').addEventListener('input', () => {
   clearTimeout(window._stickerSearchTimer);
   window._stickerSearchTimer = setTimeout(loadStickers, 250);
 });
+
+document.getElementById('btnAddSticker').onclick = () => openAddMaterial('наліпка', loadStickers);
 
 async function loadMaterials() {
   const search = document.getElementById('materialSearch').value.trim();
@@ -2832,15 +2820,20 @@ document.getElementById('materialSearch').addEventListener('input', () => {
   window._materialSearchTimer = setTimeout(loadMaterials, 250);
 });
 
-document.getElementById('btnAddMaterial').onclick = () => {
+let currentMaterialAddReload = loadMaterials;
+
+function openAddMaterial(presetType, reloadFn) {
+  currentMaterialAddReload = reloadFn || loadMaterials;
   document.getElementById('mName').value = '';
-  document.getElementById('mType').value = 'пачка';
+  document.getElementById('mType').value = presetType || 'пачка';
   document.getElementById('mSizeLabel').value = '';
   document.getElementById('mStation').value = '';
   document.getElementById('mMinStock').value = 0;
   document.getElementById('mReorderDays').value = '';
   document.getElementById('materialOverlay').classList.add('open');
-};
+}
+
+document.getElementById('btnAddMaterial').onclick = () => openAddMaterial('пачка', loadMaterials);
 
 document.getElementById('btnCancelMaterial').onclick = () => {
   document.getElementById('materialOverlay').classList.remove('open');
@@ -2867,11 +2860,12 @@ document.getElementById('btnSaveMaterial').onclick = async () => {
 
   document.getElementById('materialOverlay').classList.remove('open');
   showToast('Матеріал збережено');
-  loadMaterials();
+  (currentMaterialAddReload || loadMaterials)();
 };
 
-function openMaterialMovement(id, name) {
+function openMaterialMovement(id, name, reloadFn) {
   currentMaterialId = id;
+  currentMaterialMovementReload = reloadFn || loadMaterials;
   document.getElementById('materialMovementTitle').textContent = 'Рух — ' + name;
   document.getElementById('materialMovementQty').value = '';
   document.getElementById('materialMovementNote').value = '';
@@ -2901,7 +2895,7 @@ document.getElementById('btnSaveMaterialMovement').onclick = async () => {
 
   document.getElementById('materialMovementOverlay').classList.remove('open');
   showToast('Збережено. Новий залишок: ' + fmt(data.balance));
-  loadMaterials();
+  (currentMaterialMovementReload || loadMaterials)();
 };
 
 // ---- Специфікація товару: довільні поля (пачка/плівка/наліпка/...), які
@@ -3010,102 +3004,6 @@ async function deleteSpec(id) {
 
 document.getElementById('btnCloseSpec').onclick = () => {
   document.getElementById('specOverlay').classList.remove('open');
-};
-
-// ---- Склад набору дріпів: із яких окремих смаків (свій код SAP кожен) ----
-let currentDripSetCode = null;
-
-async function openDripComponents(code, name) {
-  currentDripSetCode = code;
-  document.getElementById('dripComponentsTitle').textContent = 'Склад набору — ' + name;
-
-  if (!window._productsCache) {
-    const resp = await fetch('/api/products');
-    const data = await resp.json();
-    window._productsCache = data.ok ? data.products : [];
-  }
-
-  await renderDripComponentRows();
-  document.getElementById('dripComponentsOverlay').classList.add('open');
-}
-
-async function renderDripComponentRows() {
-  const resp = await fetch('/api/products/' + encodeURIComponent(currentDripSetCode) + '/drip-components');
-  const data = await resp.json();
-  const components = data.ok ? data.components : [];
-
-  const existingRows = components.map((c) => `
-    <div class="field" style="border-bottom: 1px solid var(--border); padding-bottom: 10px; display:flex; gap:8px; align-items:flex-end;">
-      <div style="flex:1;">
-        <label>${c.component_name || c.component_product_code} <span style="color: var(--muted);">(${c.component_product_code})</span></label>
-        <input type="number" id="dripQty_${c.id}" min="0" step="any" value="${c.qty_per_set}">
-      </div>
-      <button class="secondary" onclick="saveDripComponentQty(${c.id}, '${c.component_product_code}')">Зберегти</button>
-      <a href="#" onclick="deleteDripComponent(${c.id}); return false;" style="color: var(--bad); font-size: 12px;">видалити</a>
-    </div>
-  `).join('') || '<p style="color: var(--muted); font-size: 12px; margin: 0 0 10px;">Компонентів ще немає — додай перший нижче.</p>';
-
-  const newRow = `
-    <div class="field">
-      <label>Додати компонент</label>
-      <input type="text" id="dripComponentNewCode" list="dripComponentProductsList" placeholder="код або назва смаку" style="margin-bottom:6px;">
-      <datalist id="dripComponentProductsList">
-        ${window._productsCache.map((p) => `<option value="${p.code} — ${(p.name || '').replace(/"/g, '&quot;')}">`).join('')}
-      </datalist>
-      <div style="display:flex; gap:8px;">
-        <input type="number" id="dripComponentNewQty" min="0" step="any" placeholder="к-сть на 1 набір" value="1" style="flex:1;">
-        <button onclick="addDripComponent()">Додати</button>
-      </div>
-    </div>
-  `;
-
-  document.getElementById('dripComponentsRows').innerHTML = existingRows + newRow;
-}
-
-async function saveDripComponentQty(id, componentCode) {
-  const qty = document.getElementById('dripQty_' + id).value;
-
-  const resp = await fetch('/api/products/' + encodeURIComponent(currentDripSetCode) + '/drip-components', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ component_product_code: componentCode, qty_per_set: qty || 1 })
-  });
-  const data = await resp.json();
-  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
-  showToast('Збережено');
-  await renderDripComponentRows();
-}
-
-async function addDripComponent() {
-  const input = document.getElementById('dripComponentNewCode').value.trim();
-  const [maybeCode] = input.split(' — ');
-  const matched = (window._productsCache || []).find((p) => p.code === maybeCode);
-  const componentCode = matched ? matched.code : maybeCode;
-  const qty = document.getElementById('dripComponentNewQty').value;
-
-  if (!componentCode) { showToast('Обери товар'); return; }
-
-  const resp = await fetch('/api/products/' + encodeURIComponent(currentDripSetCode) + '/drip-components', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ component_product_code: componentCode, qty_per_set: qty || 1 })
-  });
-  const data = await resp.json();
-  if (!data.ok) { showToast(data.error || 'Не вдалося додати'); return; }
-  showToast('Компонент додано');
-  await renderDripComponentRows();
-}
-
-async function deleteDripComponent(id) {
-  const resp = await fetch('/api/drip-set-components/' + id, { method: 'DELETE' });
-  const data = await resp.json();
-  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
-  showToast('Компонент видалено');
-  await renderDripComponentRows();
-}
-
-document.getElementById('btnCloseDripComponents').onclick = () => {
-  document.getElementById('dripComponentsOverlay').classList.remove('open');
 };
 
 const ALL_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabNapivfabrykat', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];

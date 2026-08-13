@@ -248,19 +248,12 @@ async function initSchema() {
       UNIQUE (product_code, role)
     );
 
-    -- Склад набору дріпів: із яких окремих смаків (кожен — свій код SAP,
-    -- виробляється на Дріп станку) складається готовий набір (збирається на
-    -- Збірці дріпів). qty_per_set — скільки одиниць цього смаку йде в ОДИН
-    -- набір. Використовується і для показу складу набору на задачі станції,
-    -- і для списання компонентів зі складу при завершенні задачі на набір.
-    CREATE TABLE IF NOT EXISTS drip_set_components (
-      id SERIAL PRIMARY KEY,
-      set_product_code TEXT NOT NULL REFERENCES products(code),
-      component_product_code TEXT NOT NULL REFERENCES products(code),
-      qty_per_set NUMERIC NOT NULL DEFAULT 1,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE (set_product_code, component_product_code)
-    );
+    -- Склад набору дріпів (drip_set_components) видалено — виявився зайвим і
+    -- плутав (окремою від Специфікації системою "з чого складається
+    -- набір"), і форс-мажорна заміна пакування для замовлення не мала до
+    -- нього стосунку. Планування, які смаки й скільки виготовити на Дріп
+    -- станку та зібрати на Збірці дріпів, тепер ведеться вручну.
+    DROP TABLE IF EXISTS drip_set_components;
 
     -- Форс-мажорна заміна пакування для конкретного рядка замовлення (наприклад
     -- потрібної пачки немає на складі і відвантажують в іншій) — не чіпає
@@ -364,9 +357,9 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
-    -- Коли задача на набір дріпів (продукт зі складом у drip_set_components)
-    -- завершується — рухи складу (набір +, кожен компонент −) створюються
-    -- рівно один раз; цей прапорець про це.
+    -- Коли задача на бленд (з recipe_id, див. нижче) завершується — рухи
+    -- складу (бленд +, кожен компонент напівфабрикату −) створюються рівно
+    -- один раз; цей прапорець про це.
     ALTER TABLE production_tasks ADD COLUMN IF NOT EXISTS stock_applied_at TIMESTAMPTZ;
     -- Задача на бленд (напр. "замішай 300кг Наті Бой") може явно вказати,
     -- яка технологічна карта застосовується — щоб показати склад бленду в
@@ -432,12 +425,6 @@ async function initSchema() {
     ALTER TABLE product_specs DROP CONSTRAINT IF EXISTS product_specs_product_code_fkey;
     ALTER TABLE product_specs ADD CONSTRAINT product_specs_product_code_fkey FOREIGN KEY (product_code) REFERENCES products(code) ON UPDATE CASCADE;
 
-    ALTER TABLE drip_set_components DROP CONSTRAINT IF EXISTS drip_set_components_set_product_code_fkey;
-    ALTER TABLE drip_set_components ADD CONSTRAINT drip_set_components_set_product_code_fkey FOREIGN KEY (set_product_code) REFERENCES products(code) ON UPDATE CASCADE;
-
-    ALTER TABLE drip_set_components DROP CONSTRAINT IF EXISTS drip_set_components_component_product_code_fkey;
-    ALTER TABLE drip_set_components ADD CONSTRAINT drip_set_components_component_product_code_fkey FOREIGN KEY (component_product_code) REFERENCES products(code) ON UPDATE CASCADE;
-
     ALTER TABLE products DROP CONSTRAINT IF EXISTS products_source_green_coffee_code_fkey;
     ALTER TABLE products ADD CONSTRAINT products_source_green_coffee_code_fkey FOREIGN KEY (source_green_coffee_code) REFERENCES products(code) ON UPDATE CASCADE;
 
@@ -498,7 +485,7 @@ async function updateProductFields(code, { status, station, min_stock, unit, is_
 
 // Ручна зміна коду позиції (будь-якого товару — готова продукція, зелена
 // кава, напівфабрикат). FK з ON UPDATE CASCADE (див. initSchema) підхоплює
-// stock_movements/product_specs/drip_set_components/roasting_batches/
+// stock_movements/product_specs/roasting_batches/
 // products.source_green_coffee_code автоматично. order_lines і
 // production_tasks не мають FK на products (щоб можна було зберігати
 // замовлення на товар, якого ще нема в довіднику на момент імпорту), тож
@@ -2203,38 +2190,6 @@ async function deleteProductSpec(id) {
   return rowCount;
 }
 
-async function listDripSetComponents(setProductCode) {
-  const { rows } = await pool.query(
-    `SELECT dsc.*, p.name AS component_name, p.short_name AS component_short_name, p.unit AS component_unit
-     FROM drip_set_components dsc
-     JOIN products p ON p.code = dsc.component_product_code
-     WHERE dsc.set_product_code = $1
-     ORDER BY lower(p.name) ASC`,
-    [setProductCode]
-  );
-  return rows.map((r) => ({ ...r, qty_per_set: Number(r.qty_per_set) }));
-}
-
-async function upsertDripSetComponent({ set_product_code, component_product_code, qty_per_set }) {
-  if (set_product_code === component_product_code) {
-    throw new Error('Набір не може містити сам себе як компонент');
-  }
-  const { rows } = await pool.query(
-    `INSERT INTO drip_set_components (set_product_code, component_product_code, qty_per_set)
-     VALUES ($1,$2,$3)
-     ON CONFLICT (set_product_code, component_product_code) DO UPDATE SET
-       qty_per_set = excluded.qty_per_set
-     RETURNING *`,
-    [set_product_code, component_product_code, qty_per_set || 1]
-  );
-  return rows[0];
-}
-
-async function deleteDripSetComponent(id) {
-  const { rowCount } = await pool.query('DELETE FROM drip_set_components WHERE id = $1', [id]);
-  return rowCount;
-}
-
 const TASK_STATUSES = ['заплановано', 'виконується', 'пауза', 'завершено', 'заблоковано', 'скасовано'];
 
 // Станції беруться з трьох джерел: реєстр (stations), уже призначені
@@ -2502,18 +2457,6 @@ async function listTasks({ station = '', dateFrom = '', dateTo = '', status = ''
     `SELECT pt.*,
             br.blend_name, br.category AS recipe_category, br.batch_size,
             COALESCE(
-              (SELECT json_agg(json_build_object(
-                 'component_product_code', dsc.component_product_code,
-                 'component_name', p.name,
-                 'qty_per_set', dsc.qty_per_set,
-                 'total_qty', dsc.qty_per_set * COALESCE(pt.actual_qty, pt.planned_qty)
-               ) ORDER BY p.name)
-               FROM drip_set_components dsc
-               JOIN products p ON p.code = dsc.component_product_code
-               WHERE dsc.set_product_code = pt.product_code),
-              '[]'
-            ) AS drip_components,
-            COALESCE(
               (SELECT json_agg(json_build_object('name', bc.component_name, 'qty', bc.qty))
                FROM blend_components bc WHERE bc.recipe_id = pt.recipe_id),
               '[]'
@@ -2548,12 +2491,12 @@ async function listTasks({ station = '', dateFrom = '', dateTo = '', status = ''
   });
 }
 
-// Завершення задачі на набір дріпів (продукт зі складом компонентів у
-// drip_set_components) автоматично: (1) заводить на склад готовий набір
-// рухом "приймання виробництва", (2) списує з кожного компонента рівно
-// стільки, скільки пішло на зібрану кількість (qty_per_set × actual_qty).
-// Для товарів без визначеного складу набору (усі інші задачі станцій)
-// поведінка не змінюється — рухів складу не створюється, як і раніше.
+// Завершення задачі на бленд (продукт з явно вказаною рецептурою,
+// recipe_id) автоматично: списує напівфабрикат кожного розпізнаного
+// компонента і заводить готовий бленд на склад рухом "приймання
+// виробництва". Для задач без рецептури (усі інші задачі станцій, включно з
+// Дріп станком і Збіркою дріпів — там планування й списання зараз ведеться
+// вручну) рухів складу не створюється.
 async function updateTaskStatus(id, { status, actual_qty, comment }) {
   if (!TASK_STATUSES.includes(status)) {
     throw new Error(`Unknown status: ${status}`);
@@ -2572,28 +2515,7 @@ async function updateTaskStatus(id, { status, actual_qty, comment }) {
   if (!task) return null;
 
   if (task.status === 'завершено' && task.actual_qty !== null && !task.stock_applied_at) {
-    const components = await listDripSetComponents(task.product_code);
-    if (components.length > 0) {
-      const qty = Number(task.actual_qty);
-      await addMovement({
-        product_code: task.product_code,
-        movement_type: 'production_in',
-        qty,
-        movement_date: task.task_date,
-        note: `Задача станції №${task.id} (набір дріпів)`
-      });
-      for (const c of components) {
-        await addMovement({
-          product_code: c.component_product_code,
-          movement_type: 'component_used',
-          qty: qty * c.qty_per_set,
-          movement_date: task.task_date,
-          note: `Задача станції №${task.id} — компонент набору ${task.product_code}`
-        });
-      }
-      await pool.query('UPDATE production_tasks SET stock_applied_at = now() WHERE id = $1', [task.id]);
-      task.stock_applied_at = new Date();
-    } else if (task.recipe_id) {
+    if (task.recipe_id) {
       // Задача на бленд із явно вказаною рецептурою: списує напівфабрикат
       // кожного розпізнаного компонента (масштабовано під actual_qty відносно
       // batch_size рецептури) і заводить готовий бленд на склад — так само,
@@ -2650,9 +2572,9 @@ async function updateTaskStatus(id, { status, actual_qty, comment }) {
 // автоматично (чи вручну) прив'язали саме до цього рядка, більше не
 // актуальна на станції: продукцію вже реально відвантажили. Завершує її з
 // actual_qty = planned_qty (типовий випадок — відвантажили рівно стільки,
-// скільки й планували); якщо задача на набір дріпів чи бленд, це так само
-// коректно списує компоненти через updateTaskStatus. Уже завершені чи
-// скасовані задачі не чіпає.
+// скільки й планували); якщо задача на бленд, це так само коректно списує
+// компоненти через updateTaskStatus. Уже завершені чи скасовані задачі не
+// чіпає.
 async function completeTasksForOrderLine(orderLineId) {
   const { rows } = await pool.query(
     `SELECT id, planned_qty FROM production_tasks WHERE order_line_id = $1 AND status NOT IN ('завершено', 'скасовано')`,
@@ -2875,9 +2797,6 @@ export default {
   listProductSpecs,
   upsertProductSpec,
   deleteProductSpec,
-  listDripSetComponents,
-  upsertDripSetComponent,
-  deleteDripSetComponent,
   ORDER_STATUSES,
   PRODUCT_STATUSES,
   TASK_STATUSES,
