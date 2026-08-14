@@ -1600,6 +1600,13 @@ async function addOrderLine(orderNumber, { product_code, product_name, qty }) {
 // Список замовлень, згрупований по номеру документа. Якщо в межах одного
 // замовлення позиції мають різний статус (наприклад частину вже відвантажили
 // окремим рухом) — показуємо "змішаний", щоб це впадало в очі.
+// delivery_method/ttn на рівні замовлення — не окреме поле, а виведене з
+// рядків: показується лише коли ВСІ позиції вже відвантажені (Тетяна
+// вводить спосіб доставки/ТТН по кожній позиції окремо в процесі
+// відвантаження) І всі мають однаковий спосіб доставки — інакше "—"
+// (мішана доставка треба дивитись по позиціях). ТТН — найперший
+// заповнений (за id рядка), якщо позицій із різними ТТН декілька (напр.
+// кінцевий споживач отримав кількома посилками).
 async function listOrders({ search = '', status = '' } = {}) {
   const conditions = [];
   const params = [];
@@ -1622,8 +1629,22 @@ async function listOrders({ search = '', status = '' } = {}) {
             MAX(customer_code) AS customer_code,
             MAX(customer_name) AS customer_name,
             MAX(branch_name) AS branch_name,
-            MAX(delivery_method) AS delivery_method,
-            MAX(ttn) AS ttn,
+            CASE
+              WHEN COUNT(DISTINCT status) = 1 AND MIN(status) = 'відвантажено'
+                   AND COUNT(DISTINCT NULLIF(delivery_method, '')) = 1
+              THEN MAX(delivery_method)
+              ELSE ''
+            END AS delivery_method,
+            CASE
+              WHEN COUNT(DISTINCT status) = 1 AND MIN(status) = 'відвантажено'
+                   AND COUNT(DISTINCT NULLIF(delivery_method, '')) = 1
+              THEN (
+                SELECT ol2.ttn FROM order_lines ol2
+                WHERE ol2.order_number = order_lines.order_number AND ol2.ttn <> ''
+                ORDER BY ol2.id ASC LIMIT 1
+              )
+              ELSE ''
+            END AS ttn,
             COUNT(*)::int AS line_count,
             SUM(qty) AS total_qty,
             CASE WHEN COUNT(DISTINCT status) = 1 THEN MIN(status) ELSE 'змішаний' END AS status,
@@ -1635,7 +1656,7 @@ async function listOrders({ search = '', status = '' } = {}) {
      ORDER BY MIN(ship_date) DESC NULLS LAST, MAX(imported_at) DESC`,
     params
   );
-  return rows.map((r) => ({ ...r, total_qty: Number(r.total_qty) }));
+  return rows.map((r) => ({ ...r, total_qty: Number(r.total_qty), delivery_method: r.delivery_method || '', ttn: r.ttn || '' }));
 }
 
 async function getOrderLines(orderNumber) {

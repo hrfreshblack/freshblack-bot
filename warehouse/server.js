@@ -781,7 +781,7 @@ app.delete('/api/order-line-overrides/:id', requireRole('кладовщик'), a
   }
 });
 
-app.post('/api/orders/:orderNumber/status', requireRole(), async (req, res) => {
+app.post('/api/orders/:orderNumber/status', requireRole('кладовщик'), async (req, res) => {
   try {
     const { status, note } = req.body || {};
     if (!db.ORDER_STATUSES.includes(status)) {
