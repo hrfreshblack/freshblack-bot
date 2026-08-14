@@ -1921,6 +1921,13 @@ async function renderOrderDetail(orderNumber) {
             <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="addOrderLine('${orderNumber}')">✓ Додати</button>
           </div>
         </details>
+        <details style="margin-top:8px;">
+          <summary style="cursor:pointer; font-size:12px; color: var(--bad);">Скасувати все замовлення</summary>
+          <div style="display:flex; gap:4px; margin-top:6px; flex-wrap: wrap; align-items:center;">
+            <input type="text" id="cancelOrderNote_${orderNumber}" placeholder="причина скасування (необов'язково)" style="font-size:12px; flex:1; min-width:220px;">
+            <button class="secondary" style="font-size:11px; padding:4px 6px; color: var(--bad);" onclick="cancelWholeOrder('${orderNumber}')">Скасувати всі позиції</button>
+          </div>
+        </details>
       ` : ''}
     </div>
   `;
@@ -1944,6 +1951,21 @@ async function saveLineStatus(lineId, orderNumber) {
   if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
   showToast('Статус позиції оновлено');
   await renderOrderDetail(orderNumber);
+}
+
+async function cancelWholeOrder(orderNumber) {
+  if (!confirm('Скасувати ВСІ позиції замовлення №' + orderNumber + '? Уже відвантажений товар повернеться на склад.')) return;
+  const note = document.getElementById('cancelOrderNote_' + orderNumber).value.trim();
+  const resp = await fetch('/api/orders/' + encodeURIComponent(orderNumber) + '/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'скасовано', note })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося скасувати замовлення'); return; }
+  showToast('Замовлення скасовано');
+  await loadOrders();
+  toggleOrderRow(orderNumber);
 }
 
 async function saveLineDelivery(lineId, orderNumber) {
