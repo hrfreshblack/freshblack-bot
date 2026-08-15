@@ -1,0 +1,1011 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fresh Black HR CRM</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2e38;
+    --text: #e8e9ed;
+    --muted: #9aa0ab;
+    --accent: #c9a24b;
+    --accent2: #4f8cff;
+    --ok: #35c281;
+    --warn: #e0a83c;
+    --bad: #e0523c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 14px;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header { padding: 14px 24px 0; display: flex; flex-direction: column; }
+  .brandRow { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; }
+  h1 { font-size: 16px; margin: 0; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .workspaceSwitch { font-size: 12px; color: var(--muted); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; }
+  .workspaceSwitch:hover { color: var(--text); border-color: var(--accent); }
+  nav.tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  nav.tabs button {
+    background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    color: var(--muted); padding: 9px 2px; font-weight: 600; font-size: 13px; cursor: pointer;
+  }
+  nav.tabs button:hover { color: var(--text); }
+  nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+  .viewToolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 14px 0 14px; }
+
+  input, select, button, textarea {
+    font: inherit; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  }
+  input[type="search"] { min-width: 220px; }
+  button { cursor: pointer; background: var(--accent); border-color: var(--accent); color: #16130a; font-weight: 600; }
+  button.secondary { background: transparent; color: var(--text); border-color: var(--border); }
+  button.bad { background: transparent; color: var(--bad); border-color: var(--bad); }
+  button:active { transform: translateY(1px); }
+  main { padding: 0 24px 40px; }
+  .tableWrap { }
+  table { width: 100%; border-collapse: collapse; min-width: 720px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th {
+    color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em;
+    position: sticky; top: 0; background: var(--bg); z-index: 2; box-shadow: 0 1px 0 var(--border);
+  }
+  tr:hover td { background: #1b1f28; }
+  .clickable { cursor: pointer; }
+  .tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .tag.ok { background: rgba(53,194,129,0.15); color: var(--ok); }
+  .tag.warn { background: rgba(224,168,60,0.15); color: var(--warn); }
+  .tag.bad { background: rgba(224,82,60,0.15); color: var(--bad); }
+  .tag.neutral { background: rgba(154,160,171,0.15); color: var(--muted); }
+  .tag.accent { background: rgba(201,162,75,0.18); color: var(--accent); }
+  .row-actions button { padding: 5px 9px; font-size: 12px; }
+  .clientLink { color: var(--accent2); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+
+  .kpiRow { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0 24px; }
+  .kpiCard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 18px; min-width: 150px; flex: 1; }
+  .kpiCard .kpiValue { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpiCard .kpiLabel { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  .cardsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .personCard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer; }
+  .personCard:hover { border-color: var(--accent); }
+  .personCard .avatar { width: 40px; height: 40px; border-radius: 50%; background: #2a2e38; display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--muted); margin-bottom: 8px; }
+  .personCard .name { font-weight: 700; }
+  .personCard .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  .deptTree { }
+  .deptNode { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; background: var(--panel); }
+  .deptNode .deptHeader { display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+  .deptNode .deptName { font-weight: 700; }
+  .deptNode .deptCounts { font-size: 12px; color: var(--muted); }
+  .deptChildren { margin-left: 20px; margin-top: 8px; }
+  .posRow { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+  .posRow:first-child { border-top: none; }
+  .posTitle { font-weight: 600; }
+  .posMeta { color: var(--muted); font-size: 12px; }
+
+  .profileTabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 16px 0; flex-wrap: wrap; }
+  .profileTabs button { background: none; border: none; color: var(--muted); padding: 8px 14px; font-size: 13px; font-weight: 600; border-bottom: 2px solid transparent; border-radius: 0; }
+  .profileTabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .profilePanel { display: none; }
+  .profilePanel.active { display: block; }
+  .fieldGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .fieldGrid .fieldItem label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .fieldGrid .fieldItem input, .fieldGrid .fieldItem select { width: 100%; }
+
+  .historyCard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+  .historyCard .historyTitle { font-weight: 700; }
+  .historyCard .historyMeta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .historyCard.current { border-color: var(--accent); }
+
+  .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .overlay.open { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: 100%; max-width: 460px; max-height: 90vh; overflow-y: auto; }
+  .modal h2 { margin: 0 0 14px; font-size: 15px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .field input, .field select, .field textarea { width: 100%; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+  #toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--border); padding: 10px 18px; border-radius: 8px; font-size: 13px;
+    display: none; max-width: min(560px, calc(100vw - 32px)); z-index: 20;
+  }
+  .ⓘ { color: var(--muted); cursor: help; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div class="overlay open" id="loginScreen">
+  <div class="modal" style="max-width: 340px;">
+    <h2>🗂 Fresh Black HR CRM — Вхід</h2>
+    <div class="field">
+      <label>Логін</label>
+      <input type="text" id="loginUsername" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Пароль</label>
+      <input type="password" id="loginPassword" autocomplete="current-password">
+    </div>
+    <div id="loginError" style="color: var(--bad); font-size: 12px; margin-bottom: 8px; display: none;"></div>
+    <div class="modal-actions">
+      <button id="btnLogin">Увійти</button>
+    </div>
+  </div>
+</div>
+
+<div id="appShell" style="display: none;">
+<header>
+  <div class="brandRow">
+    <h1>🗂 Fresh Black HR CRM</h1>
+    <div style="display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted);">
+      <a class="workspaceSwitch" href="https://splendid-tenderness-production-f002.up.railway.app/" title="Перейти у Виробництво (ERP)">📦 Виробництво</a>
+      <span id="currentUserLabel"></span>
+      <button class="secondary" id="btnLogout" style="padding: 5px 10px; font-size: 12px;">Вийти</button>
+    </div>
+  </div>
+  <nav class="tabs">
+    <button id="tabDashboard" onclick="showTab('dashboard')">Дашборд</button>
+    <button id="tabPeople" onclick="showTab('people')">Співробітники</button>
+    <button id="tabOrg" onclick="showTab('org')">Оргструктура</button>
+  </nav>
+</header>
+
+<main>
+
+  <div id="viewDashboard" style="display:none;">
+    <div class="kpiRow" id="dashboardKpis"></div>
+    <p style="color: var(--muted); font-size: 12px;">Перший зріз HR CRM: Employee Master Data + Organization Structure. Recruitment, Onboarding, Performance, Compensation-аналітика та інші модулі з ТЗ — наступні кроки.</p>
+  </div>
+
+  <div id="viewPeople" style="display:none;">
+    <div class="viewToolbar">
+      <input type="search" id="peopleSearch" placeholder="Пошук за ПІБ, телефоном, email…">
+      <select id="peopleStatusFilter"><option value="">— усі статуси —</option></select>
+      <select id="peopleDeptFilter"><option value="">— усі департаменти —</option></select>
+      <button id="btnAddEmployee">+ Співробітник</button>
+    </div>
+    <div class="cardsGrid" id="peopleCards"></div>
+    <div class="empty" id="peopleEmpty" style="display:none;">Нікого не знайдено.</div>
+  </div>
+
+  <div id="viewEmployeeProfile" style="display:none;">
+    <button class="secondary" onclick="showTab('people')">← До списку співробітників</button>
+    <div id="employeeProfileHeader" style="margin: 16px 0;"></div>
+    <div class="profileTabs">
+      <button class="active" onclick="showProfileTab('overview')">Overview</button>
+      <button onclick="showProfileTab('personal')">Personal</button>
+      <button onclick="showProfileTab('employment')">Employment</button>
+      <button onclick="showProfileTab('compensation')">Compensation</button>
+      <button onclick="showProfileTab('changes')">Changes</button>
+    </div>
+    <div class="profilePanel active" id="profileOverview"></div>
+    <div class="profilePanel" id="profilePersonal"></div>
+    <div class="profilePanel" id="profileEmployment"></div>
+    <div class="profilePanel" id="profileCompensation"></div>
+    <div class="profilePanel" id="profileChanges"></div>
+  </div>
+
+  <div id="viewOrg" style="display:none;">
+    <div class="viewToolbar">
+      <button id="btnAddDepartment">+ Департамент</button>
+      <button class="secondary" id="btnAddPosition">+ Посада</button>
+    </div>
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Дерево департаментів → посади → хто зараз їх займає. Графічний Chart View з drag&drop — наступний крок; зараз це List/Department View з ТЗ п.8.</p>
+    <div class="deptTree" id="orgTree"></div>
+  </div>
+
+</main>
+</div>
+
+<!-- Модалка: новий/редагування департамент -->
+<div class="overlay" id="departmentOverlay">
+  <div class="modal">
+    <h2 id="departmentModalTitle">Новий департамент</h2>
+    <input type="hidden" id="deptId">
+    <div class="field">
+      <label>Назва</label>
+      <input type="text" id="deptName" placeholder="напр. Виробництво">
+    </div>
+    <div class="field">
+      <label>Батьківський департамент</label>
+      <select id="deptParent"><option value="">— немає (верхній рівень) —</option></select>
+    </div>
+    <div class="field">
+      <label>Плановий headcount</label>
+      <input type="number" id="deptHeadcount" min="0" step="1" value="0">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('departmentOverlay')">Скасувати</button>
+      <button id="btnSaveDepartment">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: нова/редагування посада -->
+<div class="overlay" id="positionOverlay">
+  <div class="modal">
+    <h2 id="positionModalTitle">Нова посада</h2>
+    <input type="hidden" id="posId">
+    <div class="field">
+      <label>Назва посади</label>
+      <input type="text" id="posTitle" placeholder="напр. Продавець-консультант">
+    </div>
+    <div class="field">
+      <label>Департамент</label>
+      <select id="posDepartment"></select>
+    </div>
+    <div class="field">
+      <label>Підпорядковується посаді (керівник, за оргструктурою)</label>
+      <select id="posReportsTo"><option value="">— немає —</option></select>
+    </div>
+    <div class="field">
+      <label>Статус</label>
+      <select id="posStatus"></select>
+    </div>
+    <div class="field">
+      <label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="posIsDeptHead" style="width:auto;"> Керівник департаменту</label>
+    </div>
+    <div class="field">
+      <label>Коментар</label>
+      <input type="text" id="posNote">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('positionOverlay')">Скасувати</button>
+      <button id="btnSavePosition">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: новий співробітник -->
+<div class="overlay" id="employeeOverlay">
+  <div class="modal">
+    <h2>Новий співробітник</h2>
+    <div class="field"><label>ПІБ</label><input type="text" id="empFullName"></div>
+    <div class="field"><label>Дата народження</label><input type="date" id="empBirthDate"></div>
+    <div class="field"><label>Телефон</label><input type="text" id="empPhone"></div>
+    <div class="field"><label>Email</label><input type="text" id="empPersonalEmail"></div>
+    <div class="field"><label>Employee ID (необов'язково)</label><input type="text" id="empNumber"></div>
+    <div class="field"><label>Статус</label><select id="empStatus"></select></div>
+    <div class="field"><label>Дата прийому</label><input type="date" id="empStartDate"></div>
+    <div class="field"><label>Департамент</label><select id="empDepartment"><option value="">— не вказано —</option></select></div>
+    <div class="field"><label>Посада (вакантна в цьому департаменті)</label><select id="empPosition"><option value="">— спершу обери департамент —</option></select></div>
+    <div class="field"><label>Керівник</label><select id="empManager"><option value="">— не вказано —</option></select></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('employeeOverlay')">Скасувати</button>
+      <button id="btnSaveEmployee">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: зміна працевлаштування -->
+<div class="overlay" id="employmentChangeOverlay">
+  <div class="modal">
+    <h2>Зміна працевлаштування</h2>
+    <p style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;">Поточний період закриється, створиться новий — історія зберігається.</p>
+    <div class="field"><label>Департамент</label><select id="chgDepartment"></select></div>
+    <div class="field"><label>Посада</label><select id="chgPosition"></select></div>
+    <div class="field"><label>Керівник</label><select id="chgManager"><option value="">— не вказано —</option></select></div>
+    <div class="field"><label>Дата з</label><input type="date" id="chgStartDate"></div>
+    <div class="field"><label>Формат</label><input type="text" id="chgFormat" placeholder="офіс / віддалено / гібрид"></div>
+    <div class="field"><label>Причина зміни</label><input type="text" id="chgReason" placeholder="напр. підвищення, переведення"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('employmentChangeOverlay')">Скасувати</button>
+      <button id="btnSaveEmploymentChange">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: нова компенсація -->
+<div class="overlay" id="compensationOverlay">
+  <div class="modal">
+    <h2>Нова компенсація</h2>
+    <div class="field"><label>Діє з</label><input type="date" id="compFrom"></div>
+    <div class="field"><label>Фіксована ставка</label><input type="number" id="compFixed" step="any" min="0"></div>
+    <div class="field"><label>Валюта</label><input type="text" id="compCurrency" value="UAH"></div>
+    <div class="field"><label>Тип бонусу</label><input type="text" id="compBonusType" placeholder="percent/fixed/KPI/sales"></div>
+    <div class="field"><label>Причина</label><input type="text" id="compReason" placeholder="probation completed / review / promotion"></div>
+    <div class="field"><label>Коментар</label><input type="text" id="compComment"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('compensationOverlay')">Скасувати</button>
+      <button id="btnSaveCompensation">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+function escAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
+function fmt(n) { return (Number(n) || 0).toLocaleString('uk-UA', { maximumFractionDigits: 2 }); }
+function isoDate(d) { return d.toISOString().slice(0, 10); }
+
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3500);
+}
+
+function closeOverlay(id) { document.getElementById(id).classList.remove('open'); }
+
+// ---- Auth ----
+
+async function initApp() {
+  const resp = await fetch('/api/me');
+  const data = await resp.json();
+  if (!data.ok) { showLoginScreen(); return; }
+  window._me = data.account;
+
+  document.getElementById('loginScreen').classList.remove('open');
+  document.getElementById('appShell').style.display = '';
+  document.getElementById('currentUserLabel').textContent = window._me.display_name || window._me.username;
+
+  await loadDictionaries();
+  showTab('dashboard');
+}
+
+function showLoginScreen() {
+  document.getElementById('appShell').style.display = 'none';
+  document.getElementById('loginScreen').classList.add('open');
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('loginError').style.display = 'none';
+  document.getElementById('loginUsername').focus();
+}
+
+async function doLogin() {
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errorBox = document.getElementById('loginError');
+  errorBox.style.display = 'none';
+  if (!username || !password) {
+    errorBox.textContent = 'Введи логін і пароль';
+    errorBox.style.display = 'block';
+    return;
+  }
+  const resp = await fetch('/api/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  });
+  const data = await resp.json();
+  if (!data.ok) {
+    errorBox.textContent = data.error || 'Не вдалося увійти';
+    errorBox.style.display = 'block';
+    return;
+  }
+  await initApp();
+}
+
+document.getElementById('btnLogin').onclick = doLogin;
+document.getElementById('loginPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+document.getElementById('btnLogout').onclick = async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  showLoginScreen();
+};
+
+async function apiFetch(url, opts) {
+  const resp = await fetch(url, opts);
+  if (resp.status === 401) { showLoginScreen(); throw new Error('unauthorized'); }
+  return resp;
+}
+
+// ---- Dictionaries ----
+
+window._dict = { employeeStatuses: [], positionStatuses: [], reservationStatuses: [] };
+
+async function loadDictionaries() {
+  const resp = await apiFetch('/api/dictionaries');
+  const data = await resp.json();
+  if (!data.ok) return;
+  window._dict = data;
+  document.getElementById('empStatus').innerHTML = data.employeeStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('posStatus').innerHTML = data.positionStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('peopleStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.employeeStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+}
+
+// ---- Tabs ----
+
+const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg'];
+
+function showTab(tab) {
+  document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
+  document.getElementById('viewPeople').style.display = tab === 'people' ? '' : 'none';
+  document.getElementById('viewEmployeeProfile').style.display = 'none';
+  document.getElementById('viewOrg').style.display = tab === 'org' ? '' : 'none';
+  document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
+  document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
+  document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
+  if (tab === 'dashboard') loadDashboard();
+  if (tab === 'people') loadPeople();
+  if (tab === 'org') loadOrg();
+}
+
+// ---- Dashboard ----
+
+async function loadDashboard() {
+  const [empResp, orgResp] = await Promise.all([apiFetch('/api/employees'), apiFetch('/api/org-tree')]);
+  const empData = await empResp.json();
+  const orgData = await orgResp.json();
+  if (!empData.ok || !orgData.ok) return;
+
+  const employees = empData.employees;
+  const active = employees.filter((e) => ['Active', 'Probation', 'Part-time'].includes(e.status));
+  const probation = employees.filter((e) => e.status === 'Probation');
+  const vacant = orgData.positions.filter((p) => p.status === 'Vacant' || p.status === 'Recruitment Active');
+  const departments = orgData.departments.length;
+
+  document.getElementById('dashboardKpis').innerHTML = `
+    <div class="kpiCard"><div class="kpiValue">${active.length}</div><div class="kpiLabel">Active headcount</div></div>
+    <div class="kpiCard"><div class="kpiValue">${probation.length}</div><div class="kpiLabel">На випробувальному</div></div>
+    <div class="kpiCard"><div class="kpiValue">${vacant.length}</div><div class="kpiLabel">Вакантні посади</div></div>
+    <div class="kpiCard"><div class="kpiValue">${departments}</div><div class="kpiLabel">Департаментів</div></div>
+    <div class="kpiCard"><div class="kpiValue">${employees.length}</div><div class="kpiLabel">Усього в системі</div></div>
+  `;
+}
+
+// ---- People (Employees) ----
+
+let peopleDepartmentsCache = [];
+
+async function loadPeople() {
+  if (peopleDepartmentsCache.length === 0) {
+    const dResp = await apiFetch('/api/departments');
+    const dData = await dResp.json();
+    if (dData.ok) {
+      peopleDepartmentsCache = dData.departments;
+      document.getElementById('peopleDeptFilter').innerHTML = '<option value="">— усі департаменти —</option>' + dData.departments.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+    }
+  }
+
+  const search = document.getElementById('peopleSearch').value.trim();
+  const status = document.getElementById('peopleStatusFilter').value;
+  const department_id = document.getElementById('peopleDeptFilter').value;
+  const params = new URLSearchParams({ search, status });
+  if (department_id) params.set('department_id', department_id);
+
+  const resp = await apiFetch('/api/employees?' + params.toString());
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  const cards = document.getElementById('peopleCards');
+  const empty = document.getElementById('peopleEmpty');
+  if (!data.employees.length) {
+    cards.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  cards.innerHTML = data.employees.map((e) => `
+    <div class="personCard" onclick="openEmployeeProfile(${e.id})">
+      <div class="avatar">${(e.full_name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase()}</div>
+      <div class="name">${escAttr(e.full_name)}</div>
+      <div class="meta">${e.position_title || 'без посади'}${e.department_name ? ' · ' + e.department_name : ''}</div>
+      <div class="meta">${employeeStatusTag(e.status)} ${e.tenure ? '· ' + e.tenure : ''}</div>
+    </div>
+  `).join('');
+}
+
+function employeeStatusTag(status) {
+  const cls = status === 'Active' ? 'ok' : status === 'Former Employee' ? 'neutral' : status === 'Leaving' || status === 'Suspended' ? 'bad' : 'warn';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+
+document.getElementById('peopleSearch').addEventListener('input', () => {
+  clearTimeout(window._peopleSearchTimer);
+  window._peopleSearchTimer = setTimeout(loadPeople, 250);
+});
+document.getElementById('peopleStatusFilter').addEventListener('change', loadPeople);
+document.getElementById('peopleDeptFilter').addEventListener('change', loadPeople);
+
+// ---- Add employee modal ----
+
+document.getElementById('btnAddEmployee').onclick = async () => {
+  document.getElementById('empFullName').value = '';
+  document.getElementById('empBirthDate').value = '';
+  document.getElementById('empPhone').value = '';
+  document.getElementById('empPersonalEmail').value = '';
+  document.getElementById('empNumber').value = '';
+  document.getElementById('empStatus').value = 'Future Employee';
+  document.getElementById('empStartDate').value = isoDate(new Date());
+  document.getElementById('empManager').innerHTML = '<option value="">— не вказано —</option>';
+
+  const dResp = await apiFetch('/api/departments');
+  const dData = await dResp.json();
+  document.getElementById('empDepartment').innerHTML = '<option value="">— не вказано —</option>' + (dData.ok ? dData.departments.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('') : '');
+  document.getElementById('empPosition').innerHTML = '<option value="">— спершу обери департамент —</option>';
+
+  const eResp = await apiFetch('/api/employees');
+  const eData = await eResp.json();
+  window._allEmployeesForManagerSelect = eData.ok ? eData.employees : [];
+  document.getElementById('empManager').innerHTML = '<option value="">— не вказано —</option>' + window._allEmployeesForManagerSelect.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
+
+  document.getElementById('employeeOverlay').classList.add('open');
+};
+
+document.getElementById('empDepartment').addEventListener('change', async () => {
+  const departmentId = document.getElementById('empDepartment').value;
+  const posSelect = document.getElementById('empPosition');
+  if (!departmentId) { posSelect.innerHTML = '<option value="">— спершу обери департамент —</option>'; return; }
+  const resp = await apiFetch('/api/positions?department_id=' + departmentId);
+  const data = await resp.json();
+  const positions = data.ok ? data.positions : [];
+  posSelect.innerHTML = '<option value="">— не вказано —</option>' + positions.map((p) => `<option value="${p.id}">${escAttr(p.title)}${p.status === 'Vacant' ? ' (вакантна)' : ' — зайнята: ' + escAttr(p.current_employee_name || '')}</option>`).join('');
+});
+
+document.getElementById('btnSaveEmployee').onclick = async () => {
+  const full_name = document.getElementById('empFullName').value.trim();
+  if (!full_name) { showToast('ПІБ обов’язкове'); return; }
+
+  const body = {
+    full_name,
+    birth_date: document.getElementById('empBirthDate').value || null,
+    phone: document.getElementById('empPhone').value.trim(),
+    personal_email: document.getElementById('empPersonalEmail').value.trim(),
+    employee_number: document.getElementById('empNumber').value.trim() || null,
+    status: document.getElementById('empStatus').value,
+    start_date: document.getElementById('empStartDate').value || null,
+    department_id: document.getElementById('empDepartment').value || null,
+    position_id: document.getElementById('empPosition').value || null,
+    manager_employee_id: document.getElementById('empManager').value || null
+  };
+
+  const resp = await apiFetch('/api/employees', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('employeeOverlay');
+  showToast('Співробітника додано');
+  loadPeople();
+};
+
+// ---- Employee profile ----
+
+let currentEmployeeId = null;
+
+async function openEmployeeProfile(id) {
+  currentEmployeeId = id;
+  document.getElementById('viewDashboard').style.display = 'none';
+  document.getElementById('viewPeople').style.display = 'none';
+  document.getElementById('viewOrg').style.display = 'none';
+  document.getElementById('viewEmployeeProfile').style.display = '';
+  await renderEmployeeProfile();
+}
+
+async function renderEmployeeProfile() {
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити профіль'); return; }
+  const e = data.employee;
+  window._currentEmployee = e;
+
+  document.getElementById('employeeProfileHeader').innerHTML = `
+    <div style="display:flex; align-items:center; gap:14px;">
+      <div class="avatar" style="width:56px;height:56px;border-radius:50%;background:#2a2e38;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:var(--muted);">${(e.full_name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase()}</div>
+      <div>
+        <div style="font-size:20px; font-weight:700;">${escAttr(e.full_name)}</div>
+        <div style="color:var(--muted); font-size:13px;">${e.current_period ? escAttr(e.current_period.position_title) + ' · ' + escAttr(e.current_period.department_name) : 'Посада не призначена'} ${employeeStatusTag(e.status)} ${e.tenure ? '· стаж ' + e.tenure : ''}</div>
+      </div>
+    </div>
+  `;
+
+  renderOverviewTab(e);
+  renderPersonalTab(e);
+  renderEmploymentTab(e);
+  renderCompensationTab(e);
+  renderChangesTab(e);
+}
+
+function showProfileTab(tab) {
+  ['overview', 'personal', 'employment', 'compensation', 'changes'].forEach((t) => {
+    document.getElementById('profile' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
+  });
+  document.querySelectorAll('.profileTabs button').forEach((b) => b.classList.remove('active'));
+  event.target.classList.add('active');
+}
+
+function renderOverviewTab(e) {
+  const cur = e.current_period;
+  document.getElementById('profileOverview').innerHTML = `
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Employee ID</label>${e.employee_number || '—'}</div>
+      <div class="fieldItem"><label>Статус</label>${employeeStatusTag(e.status)}</div>
+      <div class="fieldItem"><label>Посада</label>${cur ? escAttr(cur.position_title) : '—'}</div>
+      <div class="fieldItem"><label>Департамент</label>${cur ? escAttr(cur.department_name) : '—'}</div>
+      <div class="fieldItem"><label>Керівник</label>${cur && cur.manager_name ? escAttr(cur.manager_name) : '—'}</div>
+      <div class="fieldItem"><label>Дата прийому (перша)</label>${e.first_hire_date ? new Date(e.first_hire_date).toLocaleDateString('uk-UA') : '—'}</div>
+      <div class="fieldItem"><label>Стаж (tenure)</label>${e.tenure || '—'}</div>
+      <div class="fieldItem"><label>Corporate email</label>${e.corporate_email || '—'}</div>
+    </div>
+    <div style="margin-top:8px;">
+      <button class="secondary" onclick="openStatusChange()">Змінити статус</button>
+    </div>
+  `;
+}
+
+function renderPersonalTab(e) {
+  document.getElementById('profilePersonal').innerHTML = `
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>ПІБ</label><input type="text" id="pFullName" value="${escAttr(e.full_name)}"></div>
+      <div class="fieldItem"><label>Дата народження</label><input type="date" id="pBirthDate" value="${e.birth_date ? e.birth_date.slice(0, 10) : ''}"></div>
+      <div class="fieldItem"><label>Стать</label>
+        <select id="pGender">
+          <option value="" ${!e.gender ? 'selected' : ''}>— не вказано —</option>
+          <option value="Female" ${e.gender === 'Female' ? 'selected' : ''}>Жінка</option>
+          <option value="Male" ${e.gender === 'Male' ? 'selected' : ''}>Чоловік</option>
+        </select>
+      </div>
+      <div class="fieldItem"><label>Телефон</label><input type="text" id="pPhone" value="${escAttr(e.phone)}"></div>
+      <div class="fieldItem"><label>Email</label><input type="text" id="pEmail" value="${escAttr(e.personal_email)}"></div>
+      <div class="fieldItem"><label>Telegram</label><input type="text" id="pTelegram" value="${escAttr(e.telegram)}"></div>
+      <div class="fieldItem"><label>Місто</label><input type="text" id="pCity" value="${escAttr(e.city)}"></div>
+      <div class="fieldItem"><label>Екстрений контакт</label><input type="text" id="pEmergency" value="${escAttr(e.emergency_contact)}"></div>
+      <div class="fieldItem"><label>Corporate email</label><input type="text" id="pCorpEmail" value="${escAttr(e.corporate_email)}"></div>
+    </div>
+    <button onclick="savePersonalTab()">Зберегти особисті дані</button>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Reservation / Military status <span class="ⓘ" title="Чутливе поле — обмежений доступ.">ⓘ</span></h3>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Applicable</label>
+        <select id="pResApplicable">
+          <option value="Not applicable" ${e.reservation_applicable === 'Not applicable' ? 'selected' : ''}>Not applicable</option>
+          <option value="Yes" ${e.reservation_applicable === 'Yes' ? 'selected' : ''}>Yes</option>
+          <option value="No" ${e.reservation_applicable === 'No' ? 'selected' : ''}>No</option>
+        </select>
+      </div>
+      <div class="fieldItem"><label>Reservation status</label>
+        <select id="pResStatus">
+          <option value="">—</option>
+          ${window._dict.reservationStatuses.map((s) => `<option value="${s}" ${e.reservation_status === s ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fieldItem"><label>Start date</label><input type="date" id="pResStart" value="${e.reservation_start_date ? e.reservation_start_date.slice(0, 10) : ''}"></div>
+      <div class="fieldItem"><label>End date</label><input type="date" id="pResEnd" value="${e.reservation_end_date ? e.reservation_end_date.slice(0, 10) : ''}"></div>
+      <div class="fieldItem"><label>Comment</label><input type="text" id="pResComment" value="${escAttr(e.reservation_comment)}"></div>
+    </div>
+    <button onclick="saveReservationFields()">Зберегти reservation</button>
+  `;
+}
+
+async function savePersonalTab() {
+  const body = {
+    full_name: document.getElementById('pFullName').value.trim(),
+    birth_date: document.getElementById('pBirthDate').value || null,
+    gender: document.getElementById('pGender').value,
+    phone: document.getElementById('pPhone').value.trim(),
+    personal_email: document.getElementById('pEmail').value.trim(),
+    telegram: document.getElementById('pTelegram').value.trim(),
+    city: document.getElementById('pCity').value.trim(),
+    emergency_contact: document.getElementById('pEmergency').value.trim()
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/personal', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  const corp = document.getElementById('pCorpEmail').value.trim();
+  await apiFetch('/api/employees/' + currentEmployeeId + '/fields', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ corporate_email: corp })
+  });
+  showToast('Збережено');
+  renderEmployeeProfile();
+}
+
+async function saveReservationFields() {
+  const body = {
+    reservation_applicable: document.getElementById('pResApplicable').value,
+    reservation_status: document.getElementById('pResStatus').value,
+    reservation_start_date: document.getElementById('pResStart').value || null,
+    reservation_end_date: document.getElementById('pResEnd').value || null,
+    reservation_comment: document.getElementById('pResComment').value.trim()
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/fields', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+}
+
+function renderEmploymentTab(e) {
+  document.getElementById('profileEmployment').innerHTML = `
+    <button onclick="openEmploymentChange()">+ Зміна посади/департаменту/керівника</button>
+    <div style="margin-top:14px;">
+      ${e.employment_periods.map((p) => `
+        <div class="historyCard ${!p.end_date ? 'current' : ''}">
+          <div class="historyTitle">${escAttr(p.position_title)} · ${escAttr(p.department_name)}</div>
+          <div class="historyMeta">
+            ${new Date(p.start_date).toLocaleDateString('uk-UA')} — ${p.end_date ? new Date(p.end_date).toLocaleDateString('uk-UA') : 'дотепер'}
+            ${p.manager_name ? ' · керівник: ' + escAttr(p.manager_name) : ''}
+            ${p.employment_format ? ' · ' + escAttr(p.employment_format) : ''}
+          </div>
+          ${p.change_reason ? `<div class="historyMeta">Причина: ${escAttr(p.change_reason)}</div>` : ''}
+        </div>
+      `).join('') || '<p style="color:var(--muted);">Ще немає жодного періоду працевлаштування.</p>'}
+    </div>
+  `;
+}
+
+async function openEmploymentChange() {
+  const dResp = await apiFetch('/api/departments');
+  const dData = await dResp.json();
+  document.getElementById('chgDepartment').innerHTML = (dData.ok ? dData.departments : []).map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+
+  const eResp = await apiFetch('/api/employees');
+  const eData = await eResp.json();
+  const employees = eData.ok ? eData.employees.filter((e) => e.id !== currentEmployeeId) : [];
+  document.getElementById('chgManager').innerHTML = '<option value="">— не вказано —</option>' + employees.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
+
+  await refreshChangePositions();
+  document.getElementById('chgStartDate').value = isoDate(new Date());
+  document.getElementById('chgFormat').value = '';
+  document.getElementById('chgReason').value = '';
+  document.getElementById('employmentChangeOverlay').classList.add('open');
+}
+
+document.getElementById('chgDepartment').addEventListener('change', refreshChangePositions);
+
+async function refreshChangePositions() {
+  const departmentId = document.getElementById('chgDepartment').value;
+  if (!departmentId) { document.getElementById('chgPosition').innerHTML = ''; return; }
+  const resp = await apiFetch('/api/positions?department_id=' + departmentId);
+  const data = await resp.json();
+  const positions = data.ok ? data.positions : [];
+  document.getElementById('chgPosition').innerHTML = positions.map((p) => `<option value="${p.id}">${escAttr(p.title)}${p.status === 'Vacant' ? ' (вакантна)' : ' — зайнята: ' + escAttr(p.current_employee_name || '')}</option>`).join('');
+}
+
+document.getElementById('btnSaveEmploymentChange').onclick = async () => {
+  const body = {
+    department_id: document.getElementById('chgDepartment').value,
+    position_id: document.getElementById('chgPosition').value,
+    manager_employee_id: document.getElementById('chgManager').value || null,
+    start_date: document.getElementById('chgStartDate').value,
+    employment_format: document.getElementById('chgFormat').value.trim(),
+    change_reason: document.getElementById('chgReason').value.trim()
+  };
+  if (!body.department_id || !body.position_id || !body.start_date) { showToast('Заповни департамент, посаду і дату'); return; }
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/employment', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('employmentChangeOverlay');
+  showToast('Збережено');
+  renderEmployeeProfile();
+};
+
+function renderCompensationTab(e) {
+  document.getElementById('profileCompensation').innerHTML = `
+    <button onclick="openCompensationModal()">+ Нова компенсація</button>
+    <div style="margin-top:14px;">
+      ${e.compensation_records.map((c) => `
+        <div class="historyCard ${!c.effective_to ? 'current' : ''}">
+          <div class="historyTitle">${fmt(c.fixed_salary)} ${escAttr(c.currency)}${c.bonus_type ? ' + ' + escAttr(c.bonus_type) : ''}</div>
+          <div class="historyMeta">${new Date(c.effective_from).toLocaleDateString('uk-UA')} — ${c.effective_to ? new Date(c.effective_to).toLocaleDateString('uk-UA') : 'дотепер'}${c.reason ? ' · ' + escAttr(c.reason) : ''}</div>
+          ${c.comment ? `<div class="historyMeta">${escAttr(c.comment)}</div>` : ''}
+        </div>
+      `).join('') || '<p style="color:var(--muted);">Ще немає записів компенсації.</p>'}
+    </div>
+  `;
+}
+
+function openCompensationModal() {
+  document.getElementById('compFrom').value = isoDate(new Date());
+  document.getElementById('compFixed').value = '';
+  document.getElementById('compCurrency').value = 'UAH';
+  document.getElementById('compBonusType').value = '';
+  document.getElementById('compReason').value = '';
+  document.getElementById('compComment').value = '';
+  document.getElementById('compensationOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveCompensation').onclick = async () => {
+  const body = {
+    effective_from: document.getElementById('compFrom').value,
+    fixed_salary: document.getElementById('compFixed').value || null,
+    currency: document.getElementById('compCurrency').value.trim() || 'UAH',
+    bonus_type: document.getElementById('compBonusType').value.trim(),
+    reason: document.getElementById('compReason').value.trim(),
+    comment: document.getElementById('compComment').value.trim()
+  };
+  if (!body.effective_from) { showToast('Вкажи дату "Діє з"'); return; }
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/compensation', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('compensationOverlay');
+  showToast('Збережено');
+  renderEmployeeProfile();
+};
+
+async function renderChangesTab(e) {
+  const resp = await apiFetch('/api/audit-log?entity_type=employee&entity_id=' + e.id);
+  const data = await resp.json();
+  const entries = data.ok ? data.entries : [];
+  document.getElementById('profileChanges').innerHTML = entries.length ? entries.map((a) => `
+    <div class="historyCard">
+      <div class="historyTitle">${a.action}</div>
+      <div class="historyMeta">${new Date(a.created_at).toLocaleString('uk-UA')} · ${escAttr(a.actor || '—')}</div>
+      ${a.old_value ? `<div class="historyMeta">було: ${escAttr(JSON.stringify(a.old_value))}</div>` : ''}
+      ${a.new_value ? `<div class="historyMeta">стало: ${escAttr(JSON.stringify(a.new_value))}</div>` : ''}
+    </div>
+  `).join('') : '<p style="color:var(--muted);">Ще немає записів.</p>';
+}
+
+function openStatusChange() {
+  const status = prompt('Новий статус (' + window._dict.employeeStatuses.join(', ') + '):', window._currentEmployee.status);
+  if (!status) return;
+  if (!window._dict.employeeStatuses.includes(status)) { showToast('Невідомий статус'); return; }
+  apiFetch('/api/employees/' + currentEmployeeId + '/status', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+  }).then((r) => r.json()).then((data) => {
+    if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+    showToast('Статус змінено');
+    renderEmployeeProfile();
+  });
+}
+
+// ---- Organization Structure ----
+
+async function loadOrg() {
+  const resp = await apiFetch('/api/org-tree');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  const byDept = {};
+  data.positions.forEach((p) => {
+    if (!byDept[p.department_id]) byDept[p.department_id] = [];
+    byDept[p.department_id].push(p);
+  });
+
+  const byParent = {};
+  data.departments.forEach((d) => {
+    const key = d.parent_department_id || 'root';
+    if (!byParent[key]) byParent[key] = [];
+    byParent[key].push(d);
+  });
+
+  function renderDept(dept) {
+    const positions = byDept[dept.id] || [];
+    const children = byParent[dept.id] || [];
+    return `
+      <div class="deptNode">
+        <div class="deptHeader">
+          <div class="deptName">${escAttr(dept.name)}</div>
+          <div class="deptCounts">
+            ${dept.filled_count}/${dept.position_count} зайнято · план ${dept.planned_headcount}
+            <button class="secondary" style="font-size:11px; padding:4px 8px; margin-left:8px;" onclick="event.stopPropagation(); editDepartment(${dept.id})">✎</button>
+          </div>
+        </div>
+        ${positions.map((p) => `
+          <div class="posRow">
+            <div>
+              <div class="posTitle">${escAttr(p.title)} ${p.is_department_head ? '<span class="tag accent">керівник</span>' : ''}</div>
+              <div class="posMeta">${p.current_employee_name ? escAttr(p.current_employee_name) : positionStatusLabel(p.status)}${p.reports_to_title ? ' · підпорядк.: ' + escAttr(p.reports_to_title) : ''}</div>
+            </div>
+            <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="editPosition(${p.id})">✎</button>
+          </div>
+        `).join('')}
+        ${children.length ? `<div class="deptChildren">${children.map(renderDept).join('')}</div>` : ''}
+      </div>
+    `;
+  }
+
+  window._orgDepartments = data.departments;
+  window._orgPositions = data.positions;
+
+  const roots = byParent['root'] || [];
+  document.getElementById('orgTree').innerHTML = roots.map(renderDept).join('') || '<p style="color:var(--muted);">Ще немає жодного департаменту — почни з кнопки "+ Департамент".</p>';
+}
+
+function positionStatusLabel(status) {
+  const cls = status === 'Filled' ? 'ok' : status === 'Vacant' ? 'warn' : status === 'Recruitment Active' ? 'accent' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+
+// ---- Department modal ----
+
+document.getElementById('btnAddDepartment').onclick = () => {
+  document.getElementById('departmentModalTitle').textContent = 'Новий департамент';
+  document.getElementById('deptId').value = '';
+  document.getElementById('deptName').value = '';
+  document.getElementById('deptHeadcount').value = 0;
+  document.getElementById('deptParent').innerHTML = '<option value="">— немає (верхній рівень) —</option>' + (window._orgDepartments || []).map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  document.getElementById('departmentOverlay').classList.add('open');
+};
+
+function editDepartment(id) {
+  const dept = (window._orgDepartments || []).find((d) => d.id === id);
+  if (!dept) return;
+  document.getElementById('departmentModalTitle').textContent = 'Редагувати департамент';
+  document.getElementById('deptId').value = dept.id;
+  document.getElementById('deptName').value = dept.name;
+  document.getElementById('deptHeadcount').value = dept.planned_headcount;
+  document.getElementById('deptParent').innerHTML = '<option value="">— немає (верхній рівень) —</option>' + (window._orgDepartments || []).filter((d) => d.id !== id).map((d) => `<option value="${d.id}" ${d.id === dept.parent_department_id ? 'selected' : ''}>${escAttr(d.name)}</option>`).join('');
+  document.getElementById('departmentOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveDepartment').onclick = async () => {
+  const id = document.getElementById('deptId').value;
+  const name = document.getElementById('deptName').value.trim();
+  if (!name) { showToast('Назва обов’язкова'); return; }
+  const body = {
+    name,
+    parent_department_id: document.getElementById('deptParent').value || null,
+    planned_headcount: document.getElementById('deptHeadcount').value || 0
+  };
+  const url = id ? '/api/departments/' + id : '/api/departments';
+  const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('departmentOverlay');
+  showToast('Збережено');
+  loadOrg();
+};
+
+// ---- Position modal ----
+
+document.getElementById('btnAddPosition').onclick = () => {
+  document.getElementById('positionModalTitle').textContent = 'Нова посада';
+  document.getElementById('posId').value = '';
+  document.getElementById('posTitle').value = '';
+  document.getElementById('posDepartment').innerHTML = (window._orgDepartments || []).map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  document.getElementById('posReportsTo').innerHTML = '<option value="">— немає —</option>' + (window._orgPositions || []).map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
+  document.getElementById('posStatus').value = 'Vacant';
+  document.getElementById('posIsDeptHead').checked = false;
+  document.getElementById('posNote').value = '';
+  document.getElementById('positionOverlay').classList.add('open');
+};
+
+function editPosition(id) {
+  const pos = (window._orgPositions || []).find((p) => p.id === id);
+  if (!pos) return;
+  document.getElementById('positionModalTitle').textContent = 'Редагувати посаду';
+  document.getElementById('posId').value = pos.id;
+  document.getElementById('posTitle').value = pos.title;
+  document.getElementById('posDepartment').innerHTML = (window._orgDepartments || []).map((d) => `<option value="${d.id}" ${d.id === pos.department_id ? 'selected' : ''}>${escAttr(d.name)}</option>`).join('');
+  document.getElementById('posReportsTo').innerHTML = '<option value="">— немає —</option>' + (window._orgPositions || []).filter((p) => p.id !== id).map((p) => `<option value="${p.id}" ${p.id === pos.reports_to_position_id ? 'selected' : ''}>${escAttr(p.title)}</option>`).join('');
+  document.getElementById('posStatus').value = pos.status;
+  document.getElementById('posIsDeptHead').checked = pos.is_department_head;
+  document.getElementById('posNote').value = pos.note || '';
+  document.getElementById('positionOverlay').classList.add('open');
+}
+
+document.getElementById('btnSavePosition').onclick = async () => {
+  const id = document.getElementById('posId').value;
+  const title = document.getElementById('posTitle').value.trim();
+  if (!title) { showToast('Назва посади обов’язкова'); return; }
+  const body = {
+    title,
+    department_id: document.getElementById('posDepartment').value,
+    reports_to_position_id: document.getElementById('posReportsTo').value || null,
+    status: document.getElementById('posStatus').value,
+    is_department_head: document.getElementById('posIsDeptHead').checked,
+    note: document.getElementById('posNote').value.trim()
+  };
+  const url = id ? '/api/positions/' + id : '/api/positions';
+  const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('positionOverlay');
+  showToast('Збережено');
+  loadOrg();
+};
+
+initApp();
+</script>
+</body>
+</html>
