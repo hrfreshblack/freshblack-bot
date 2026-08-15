@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import db from './db.js';
 import seedAccounts from './seed-accounts.js';
+import { signSsoToken, verifySsoToken } from './sso.js';
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is not set.');
@@ -107,7 +108,40 @@ app.post('/api/logout', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Прийом переходу з іншого застосунку Fresh Black Workspace (ERP
+// виробництва) — публічний маршрут (до authMiddleware), бо на цьому етапі
+// своєї сесії ще нема. Токен підтверджує лише "цю людину щойно пропустила
+// інша наша система" — заводить сесію тут, ЛИШЕ якщо в цьому застосунку
+// вже є акаунт із таким самим username (нікого не створює й не підвищує
+// права).
+app.get('/sso', async (req, res) => {
+  try {
+    const token = String(req.query.token || '');
+    const username = token ? verifySsoToken(token) : null;
+    if (username) {
+      const account = await db.findAccountByUsername(username);
+      if (account) {
+        const sessionToken = await db.createSession(account.username);
+        setSessionCookie(res, sessionToken);
+      }
+    }
+  } catch (error) {
+    console.error('GET /sso ERROR:', error?.message || error);
+  }
+  res.redirect('/');
+});
+
 app.use(authMiddleware);
+
+app.get('/api/sso-token', (req, res) => {
+  try {
+    const token = signSsoToken(req.account.username);
+    res.json({ ok: true, token });
+  } catch (error) {
+    console.error('GET /api/sso-token ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'SSO не налаштовано' });
+  }
+});
 
 app.get('/api/me', (req, res) => {
   const { username, role, display_name } = req.account;

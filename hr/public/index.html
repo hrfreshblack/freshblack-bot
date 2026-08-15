@@ -147,7 +147,7 @@
   <div class="brandRow">
     <h1>🗂 Fresh Black HR CRM</h1>
     <div style="display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted);">
-      <a class="workspaceSwitch" href="https://splendid-tenderness-production-f002.up.railway.app/" title="Перейти у Виробництво (ERP)">📦 Виробництво</a>
+      <a class="workspaceSwitch" href="#" onclick="switchWorkspace('https://splendid-tenderness-production-f002.up.railway.app'); return false;" title="Перейти у Виробництво (ERP)">📦 Виробництво</a>
       <span id="currentUserLabel"></span>
       <button class="secondary" id="btnLogout" style="padding: 5px 10px; font-size: 12px;">Вийти</button>
     </div>
@@ -393,6 +393,24 @@ document.getElementById('btnLogout').onclick = async () => {
   await fetch('/api/logout', { method: 'POST' });
   showLoginScreen();
 };
+
+// Перехід в іншу систему Fresh Black Workspace без повторного логіна —
+// бере одноразовий короткоживучий токен тут і передає його туди; якщо
+// щось не так (SSO не налаштовано, немає акаунта з таким username там) —
+// просто відкриває звичайний екран входу цільової системи.
+async function switchWorkspace(targetBaseUrl) {
+  try {
+    const resp = await fetch('/api/sso-token');
+    const data = await resp.json();
+    if (data.ok && data.token) {
+      window.location.href = targetBaseUrl + '/sso?token=' + encodeURIComponent(data.token);
+      return;
+    }
+  } catch (error) {
+    console.error('switchWorkspace ERROR:', error?.message || error);
+  }
+  window.location.href = targetBaseUrl + '/';
+}
 
 async function apiFetch(url, opts) {
   const resp = await fetch(url, opts);
