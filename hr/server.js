@@ -162,7 +162,11 @@ app.get('/api/dictionaries', (req, res) => {
     rejectionReasonsCandidate: db.REJECTION_REASONS_CANDIDATE,
     offerStatuses: db.OFFER_STATUSES,
     interviewTypes: db.INTERVIEW_TYPES,
-    interviewStatuses: db.INTERVIEW_STATUSES
+    interviewStatuses: db.INTERVIEW_STATUSES,
+    onboardingMilestones: db.ONBOARDING_MILESTONES,
+    onboardingTaskStatuses: db.ONBOARDING_TASK_STATUSES,
+    onboardingTemplateScopes: db.ONBOARDING_TEMPLATE_SCOPES,
+    probationDecisions: db.PROBATION_DECISIONS
   });
 });
 
@@ -731,6 +735,184 @@ app.post('/api/offers/:id/status', requireRole(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/offers/:id/status ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус офера' });
+  }
+});
+
+// ---- Onboarding / Adaptation: templates ----
+
+app.get('/api/onboarding-templates', async (req, res) => {
+  try {
+    const department_id = req.query.department_id ? Number(req.query.department_id) : null;
+    const position_id = req.query.position_id ? Number(req.query.position_id) : null;
+    const templates = await db.listOnboardingTemplates({ department_id, position_id });
+    res.json({ ok: true, templates });
+  } catch (error) {
+    console.error('GET /api/onboarding-templates ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати шаблони' });
+  }
+});
+
+app.post('/api/onboarding-templates', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title || !body.milestone) {
+      res.status(400).json({ ok: false, error: 'Назва і етап обов’язкові' });
+      return;
+    }
+    const template = await db.createOnboardingTemplate(body);
+    res.json({ ok: true, template });
+  } catch (error) {
+    console.error('POST /api/onboarding-templates ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити шаблон' });
+  }
+});
+
+app.post('/api/onboarding-templates/:id', requireRole(), async (req, res) => {
+  try {
+    const template = await db.updateOnboardingTemplate(Number(req.params.id), req.body || {});
+    if (!template) {
+      res.status(404).json({ ok: false, error: 'Шаблон не знайдено' });
+      return;
+    }
+    res.json({ ok: true, template });
+  } catch (error) {
+    console.error('POST /api/onboarding-templates/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити шаблон' });
+  }
+});
+
+// ---- Onboarding / Adaptation: per-employee tasks ----
+
+app.get('/api/employees/:id/onboarding-tasks', async (req, res) => {
+  try {
+    const tasks = await db.listOnboardingTasks(Number(req.params.id));
+    res.json({ ok: true, tasks });
+  } catch (error) {
+    console.error('GET /api/employees/:id/onboarding-tasks ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати задачі' });
+  }
+});
+
+app.post('/api/employees/:id/onboarding-tasks/generate', requireRole(), async (req, res) => {
+  try {
+    const employee = await db.getEmployee(Number(req.params.id));
+    if (!employee) {
+      res.status(404).json({ ok: false, error: 'Співробітника не знайдено' });
+      return;
+    }
+    const cur = employee.current_period;
+    const tasks = await db.generateOnboardingTasks(employee.id, {
+      department_id: cur?.department_id || null,
+      position_id: cur?.position_id || null,
+      start_date: cur?.start_date || employee.first_hire_date
+    }, req.account.username);
+    res.json({ ok: true, tasks });
+  } catch (error) {
+    console.error('POST /api/employees/:id/onboarding-tasks/generate ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося згенерувати задачі' });
+  }
+});
+
+app.post('/api/employees/:id/onboarding-tasks', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title || !body.milestone) {
+      res.status(400).json({ ok: false, error: 'Назва і етап обов’язкові' });
+      return;
+    }
+    const task = await db.createAdHocOnboardingTask({ ...body, employee_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, task });
+  } catch (error) {
+    console.error('POST /api/employees/:id/onboarding-tasks ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити задачу' });
+  }
+});
+
+app.post('/api/onboarding-tasks/:id', requireRole(), async (req, res) => {
+  try {
+    const task = await db.updateOnboardingTask(Number(req.params.id), req.body || {}, req.account.username);
+    if (!task) {
+      res.status(404).json({ ok: false, error: 'Задачу не знайдено' });
+      return;
+    }
+    res.json({ ok: true, task });
+  } catch (error) {
+    console.error('POST /api/onboarding-tasks/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити задачу' });
+  }
+});
+
+// ---- Preboarding ----
+
+app.get('/api/employees/:id/preboarding', async (req, res) => {
+  try {
+    const info = await db.getPreboardingInfo(Number(req.params.id));
+    res.json({ ok: true, info });
+  } catch (error) {
+    console.error('GET /api/employees/:id/preboarding ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати preboarding-дані' });
+  }
+});
+
+app.post('/api/employees/:id/preboarding', requireRole(), async (req, res) => {
+  try {
+    const info = await db.upsertPreboardingInfo(Number(req.params.id), req.body || {});
+    res.json({ ok: true, info });
+  } catch (error) {
+    console.error('POST /api/employees/:id/preboarding ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.get('/api/employees/:id/welcome-letter-draft', async (req, res) => {
+  try {
+    const employee = await db.getEmployee(Number(req.params.id));
+    if (!employee) {
+      res.status(404).json({ ok: false, error: 'Співробітника не знайдено' });
+      return;
+    }
+    const info = await db.getPreboardingInfo(employee.id);
+    const cur = employee.current_period;
+    const text = db.buildWelcomeLetterText({
+      full_name: employee.full_name,
+      first_hire_date: employee.first_hire_date,
+      position_title: cur?.position_title,
+      department_name: cur?.department_name
+    }, info);
+    res.json({ ok: true, text });
+  } catch (error) {
+    console.error('GET /api/employees/:id/welcome-letter-draft ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося згенерувати чернетку' });
+  }
+});
+
+// ---- Probation ----
+
+app.post('/api/employees/:id/probation', requireRole(), async (req, res) => {
+  try {
+    const employee = await db.setProbation(Number(req.params.id), req.body || {});
+    if (!employee) {
+      res.status(404).json({ ok: false, error: 'Співробітника не знайдено' });
+      return;
+    }
+    res.json({ ok: true, employee });
+  } catch (error) {
+    console.error('POST /api/employees/:id/probation ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.post('/api/employees/:id/probation-decision', requireRole(), async (req, res) => {
+  try {
+    const employee = await db.recordProbationDecision(Number(req.params.id), req.body || {}, req.account.username);
+    if (!employee) {
+      res.status(404).json({ ok: false, error: 'Співробітника не знайдено' });
+      return;
+    }
+    res.json({ ok: true, employee });
+  } catch (error) {
+    console.error('POST /api/employees/:id/probation-decision ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти рішення' });
   }
 });
 

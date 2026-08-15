@@ -35,6 +35,12 @@ const OFFER_STATUSES = ['Draft', 'Sent', 'Accepted', 'Declined', 'Expired', 'Wit
 const INTERVIEW_TYPES = ['HR Screening', 'Technical/Professional', 'Final', 'Test Task Review', 'Reference Check'];
 const INTERVIEW_STATUSES = ['Scheduled', 'Completed', 'Cancelled', 'No Show'];
 
+// Onboarding / Adaptation (ТЗ розділи 20, 23, 23.1)
+const ONBOARDING_MILESTONES = ['Day 1 / Week 1', '14 days', '30 days', '60 days', '90 days'];
+const ONBOARDING_TASK_STATUSES = ['Not Started', 'In Progress', 'Waiting', 'Completed', 'Skipped'];
+const ONBOARDING_TEMPLATE_SCOPES = ['Company', 'Department', 'Position'];
+const PROBATION_DECISIONS = ['Passed', 'Extended', 'Failed'];
+
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hr_accounts (
@@ -309,6 +315,72 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_offers_application ON hr_offers(application_id);
+
+    -- Probation control (ТЗ 23.1) — поля на hr_employees, а не окрема
+    -- таблиця: один активний випробувальний період на співробітника,
+    -- продовження просто зсуває end_date з причиною (не окрема історія).
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_period_days INTEGER NOT NULL DEFAULT 90;
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_end_date DATE;
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_goals TEXT NOT NULL DEFAULT '';
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_decision TEXT NOT NULL DEFAULT '';
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_decision_date DATE;
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_decision_reason TEXT NOT NULL DEFAULT '';
+
+    -- ==================== Onboarding / Adaptation (ТЗ 20, 23, 23.1) ====================
+
+    -- Бібліотека шаблонів завдань — компанія в цілому, або конкретний
+    -- департамент/посада (ТЗ 24 "Position automation": посада може мати
+    -- прив'язаний Adaptation Template).
+    CREATE TABLE IF NOT EXISTS hr_onboarding_templates (
+      id SERIAL PRIMARY KEY,
+      scope TEXT NOT NULL DEFAULT 'Company',
+      department_id INTEGER REFERENCES hr_departments(id),
+      position_id INTEGER REFERENCES hr_positions(id),
+      milestone TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      owner_role TEXT NOT NULL DEFAULT '',
+      due_offset_days INTEGER NOT NULL DEFAULT 0,
+      required BOOLEAN NOT NULL DEFAULT true,
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_onb_templates_scope ON hr_onboarding_templates(scope, department_id, position_id);
+
+    -- Задачі конкретного співробітника — згенеровані з шаблонів
+    -- (generateOnboardingTasks, ідемпотентно за template_id) або ad-hoc.
+    CREATE TABLE IF NOT EXISTS hr_onboarding_tasks (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      template_id INTEGER REFERENCES hr_onboarding_templates(id),
+      milestone TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      owner_role TEXT NOT NULL DEFAULT '',
+      due_date DATE,
+      required BOOLEAN NOT NULL DEFAULT true,
+      status TEXT NOT NULL DEFAULT 'Not Started',
+      evidence_url TEXT NOT NULL DEFAULT '',
+      comment TEXT NOT NULL DEFAULT '',
+      skip_reason TEXT NOT NULL DEFAULT '',
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_onb_tasks_employee ON hr_onboarding_tasks(employee_id);
+
+    -- Preboarding — одна картка на співробітника (ТЗ 20 Welcome Letter
+    -- Generator: текст лишається editable, тому зберігаємо саме текст, а
+    -- не тільки вхідні поля).
+    CREATE TABLE IF NOT EXISTS hr_preboarding_info (
+      employee_id INTEGER PRIMARY KEY REFERENCES hr_employees(id),
+      workplace_location TEXT NOT NULL DEFAULT '',
+      hr_contact TEXT NOT NULL DEFAULT '',
+      documents_to_bring TEXT NOT NULL DEFAULT '',
+      first_day_agenda TEXT NOT NULL DEFAULT '',
+      welcome_letter_text TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -1385,6 +1457,18 @@ async function updateOfferStatus(id, status, actor, approved_by) {
 
     await client.query('COMMIT');
     await writeAudit({ actor, action: 'offer_accepted', entity_type: 'offer', entity_id: id, new_value: { employee_id: employee.id } });
+
+    // Best-effort: пробація і onboarding-задачі не мають блокувати сам
+    // факт прийняття офера, якщо тут щось піде не так.
+    try {
+      await setProbation(employee.id, { probation_goals: offer.probation_goals || '' });
+      if (vacancy?.position_id || vacancy?.department_id) {
+        await generateOnboardingTasks(employee.id, { department_id: vacancy.department_id, position_id: vacancy.position_id, start_date: offer.start_date }, actor);
+      }
+    } catch (sideEffectError) {
+      console.error('offer_accepted onboarding/probation side effect ERROR:', sideEffectError?.message || sideEffectError);
+    }
+
     return offerRows[0];
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1392,6 +1476,247 @@ async function updateOfferStatus(id, status, actor, approved_by) {
   } finally {
     client.release();
   }
+}
+
+// ---------------------------------------------------------------------
+// Onboarding / Adaptation — templates library
+// ---------------------------------------------------------------------
+
+async function listOnboardingTemplates({ department_id = null, position_id = null } = {}) {
+  const conditions = ['t.active = true'];
+  const params = [];
+  if (department_id) {
+    params.push(department_id);
+    conditions.push(`t.department_id = $${params.length}`);
+  }
+  if (position_id) {
+    params.push(position_id);
+    conditions.push(`t.position_id = $${params.length}`);
+  }
+  const { rows } = await pool.query(`
+    SELECT t.*, d.name AS department_name, p.title AS position_title
+    FROM hr_onboarding_templates t
+    LEFT JOIN hr_departments d ON d.id = t.department_id
+    LEFT JOIN hr_positions p ON p.id = t.position_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY t.scope, t.milestone, t.id
+  `, params);
+  return rows;
+}
+
+async function createOnboardingTemplate({ scope, department_id, position_id, milestone, title, description, owner_role, due_offset_days, required }) {
+  if (!ONBOARDING_TEMPLATE_SCOPES.includes(scope)) throw new Error(`Unknown template scope: ${scope}`);
+  if (!ONBOARDING_MILESTONES.includes(milestone)) throw new Error(`Unknown milestone: ${milestone}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_onboarding_templates (scope, department_id, position_id, milestone, title, description, owner_role, due_offset_days, required)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [scope, scope === 'Department' ? department_id : null, scope === 'Position' ? position_id : null, milestone, title,
+      description || '', owner_role || '', due_offset_days ?? 0, required ?? true]
+  );
+  return rows[0];
+}
+
+async function updateOnboardingTemplate(id, { title, description, owner_role, due_offset_days, required, active }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_onboarding_templates SET
+       title = COALESCE($2, title),
+       description = COALESCE($3, description),
+       owner_role = COALESCE($4, owner_role),
+       due_offset_days = COALESCE($5, due_offset_days),
+       required = COALESCE($6, required),
+       active = COALESCE($7, active)
+     WHERE id = $1 RETURNING *`,
+    [id, title ?? null, description ?? null, owner_role ?? null, due_offset_days ?? null, required ?? null, active ?? null]
+  );
+  return rows[0] || null;
+}
+
+// ---------------------------------------------------------------------
+// Onboarding / Adaptation — per-employee tasks
+// ---------------------------------------------------------------------
+
+// Генерує задачі з усіх активних шаблонів, що підходять під Company +
+// департамент + посаду співробітника. Ідемпотентно: шаблон, з якого вже
+// створена задача цьому співробітнику, повторно не застосовується —
+// можна безпечно викликати ще раз після додавання нових шаблонів.
+async function generateOnboardingTasks(employeeId, { department_id, position_id, start_date }, createdBy) {
+  const { rows: templates } = await pool.query(`
+    SELECT * FROM hr_onboarding_templates
+    WHERE active = true AND (
+      scope = 'Company'
+      OR (scope = 'Department' AND department_id = $1)
+      OR (scope = 'Position' AND position_id = $2)
+    )
+  `, [department_id || null, position_id || null]);
+
+  if (!templates.length) return [];
+
+  const { rows: existing } = await pool.query(
+    `SELECT template_id FROM hr_onboarding_tasks WHERE employee_id = $1 AND template_id IS NOT NULL`,
+    [employeeId]
+  );
+  const existingTemplateIds = new Set(existing.map((r) => r.template_id));
+  const toCreate = templates.filter((t) => !existingTemplateIds.has(t.id));
+  if (!toCreate.length) return [];
+
+  const created = [];
+  for (const t of toCreate) {
+    const dueDate = start_date ? new Date(start_date) : null;
+    if (dueDate) dueDate.setDate(dueDate.getDate() + (t.due_offset_days || 0));
+    const { rows } = await pool.query(
+      `INSERT INTO hr_onboarding_tasks (employee_id, template_id, milestone, title, description, owner_role, due_date, required)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [employeeId, t.id, t.milestone, t.title, t.description, t.owner_role, dueDate ? dueDate.toISOString().slice(0, 10) : null, t.required]
+    );
+    created.push(rows[0]);
+  }
+  await writeAudit({ actor: createdBy, action: 'onboarding_tasks_generated', entity_type: 'employee', entity_id: employeeId, new_value: { count: created.length } });
+  return created;
+}
+
+async function createAdHocOnboardingTask({ employee_id, milestone, title, description, owner_role, due_date, required }, createdBy) {
+  if (!ONBOARDING_MILESTONES.includes(milestone)) throw new Error(`Unknown milestone: ${milestone}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_onboarding_tasks (employee_id, milestone, title, description, owner_role, due_date, required)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [employee_id, milestone, title, description || '', owner_role || '', due_date || null, required ?? true]
+  );
+  await writeAudit({ actor: createdBy, action: 'create', entity_type: 'onboarding_task', entity_id: rows[0].id, new_value: { title } });
+  return rows[0];
+}
+
+async function listOnboardingTasks(employeeId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM hr_onboarding_tasks WHERE employee_id = $1 ORDER BY
+       array_position(ARRAY['Day 1 / Week 1','14 days','30 days','60 days','90 days'], milestone), due_date NULLS LAST, id`,
+    [employeeId]
+  );
+  const today = new Date().toISOString().slice(0, 10);
+  return rows.map((t) => ({
+    ...t,
+    is_overdue: !!(t.due_date && t.due_date.toISOString().slice(0, 10) < today && !['Completed', 'Skipped'].includes(t.status))
+  }));
+}
+
+async function updateOnboardingTask(id, { status, evidence_url, comment, skip_reason, due_date }, actor) {
+  if (status && !ONBOARDING_TASK_STATUSES.includes(status)) {
+    throw new Error(`Unknown onboarding task status: ${status}`);
+  }
+  if (status === 'Skipped' && !skip_reason) {
+    throw new Error('Для пропуску задачі потрібно вказати причину');
+  }
+  const { rows: before } = await pool.query('SELECT status, employee_id FROM hr_onboarding_tasks WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_onboarding_tasks SET
+       status = COALESCE($2, status),
+       evidence_url = COALESCE($3, evidence_url),
+       comment = COALESCE($4, comment),
+       skip_reason = COALESCE($5, skip_reason),
+       due_date = COALESCE($6, due_date),
+       completed_at = CASE WHEN $2 = 'Completed' THEN now() ELSE completed_at END,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, status ?? null, evidence_url ?? null, comment ?? null, skip_reason ?? null, due_date ?? null]
+  );
+  if (status && status !== before[0].status) {
+    await writeAudit({ actor, action: 'status_change', entity_type: 'onboarding_task', entity_id: id, old_value: { status: before[0].status }, new_value: { status } });
+  }
+  return rows[0];
+}
+
+// ---------------------------------------------------------------------
+// Preboarding
+// ---------------------------------------------------------------------
+
+async function getPreboardingInfo(employeeId) {
+  const { rows } = await pool.query('SELECT * FROM hr_preboarding_info WHERE employee_id = $1', [employeeId]);
+  return rows[0] || null;
+}
+
+async function upsertPreboardingInfo(employeeId, { workplace_location, hr_contact, documents_to_bring, first_day_agenda, welcome_letter_text }) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_preboarding_info (employee_id, workplace_location, hr_contact, documents_to_bring, first_day_agenda, welcome_letter_text)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (employee_id) DO UPDATE SET
+       workplace_location = COALESCE($2, hr_preboarding_info.workplace_location),
+       hr_contact = COALESCE($3, hr_preboarding_info.hr_contact),
+       documents_to_bring = COALESCE($4, hr_preboarding_info.documents_to_bring),
+       first_day_agenda = COALESCE($5, hr_preboarding_info.first_day_agenda),
+       welcome_letter_text = COALESCE($6, hr_preboarding_info.welcome_letter_text),
+       updated_at = now()
+     RETURNING *`,
+    [employeeId, workplace_location ?? '', hr_contact ?? '', documents_to_bring ?? '', first_day_agenda ?? '', welcome_letter_text ?? '']
+  );
+  return rows[0];
+}
+
+// Текст листа — початковий чорновик; лишається editable (ТЗ 20), тому
+// це лише генератор чорновика, не джерело правди.
+function buildWelcomeLetterText({ full_name, first_hire_date, position_title, department_name }, info) {
+  const dateStr = first_hire_date ? new Date(first_hire_date).toLocaleDateString('uk-UA') : '[дата]';
+  return `Вітаємо в Fresh Black, ${full_name || '[ім\'я]'}!
+
+Твій перший робочий день: ${dateStr}${info?.workplace_location ? ', ' + info.workplace_location : ''}.
+Посада: ${position_title || '[посада]'}${department_name ? ', ' + department_name : ''}.
+${info?.hr_contact ? 'Контакт HR: ' + info.hr_contact + '.' : ''}
+${info?.documents_to_bring ? '\nДокументи, які треба взяти з собою:\n' + info.documents_to_bring : ''}
+${info?.first_day_agenda ? '\nПлан першого дня:\n' + info.first_day_agenda : ''}
+
+До зустрічі!`;
+}
+
+// ---------------------------------------------------------------------
+// Probation control (ТЗ 23.1)
+// ---------------------------------------------------------------------
+
+function computeProbationEndDate(firstHireDate, periodDays) {
+  if (!firstHireDate) return null;
+  const d = new Date(firstHireDate);
+  d.setDate(d.getDate() + (periodDays || 90));
+  return d.toISOString().slice(0, 10);
+}
+
+async function setProbation(employeeId, { probation_period_days, probation_goals }) {
+  const { rows: empRows } = await pool.query('SELECT first_hire_date FROM hr_employees WHERE id = $1', [employeeId]);
+  if (!empRows[0]) return null;
+  const periodDays = probation_period_days ?? 90;
+  const endDate = computeProbationEndDate(empRows[0].first_hire_date, periodDays);
+  const { rows } = await pool.query(
+    `UPDATE hr_employees SET
+       probation_period_days = $2,
+       probation_end_date = $3,
+       probation_goals = COALESCE($4, probation_goals),
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [employeeId, periodDays, endDate, probation_goals ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function recordProbationDecision(employeeId, { decision, reason, new_end_date }, actor) {
+  if (!PROBATION_DECISIONS.includes(decision)) throw new Error(`Unknown probation decision: ${decision}`);
+  if (decision === 'Extended' && (!new_end_date || !reason)) {
+    throw new Error('Продовження випробувального терміну вимагає нової дати і причини');
+  }
+  const { rows: before } = await pool.query('SELECT probation_decision, probation_end_date FROM hr_employees WHERE id = $1', [employeeId]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_employees SET
+       probation_decision = $2,
+       probation_decision_reason = COALESCE($3, ''),
+       probation_decision_date = CURRENT_DATE,
+       probation_end_date = COALESCE($4, probation_end_date),
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [employeeId, decision, reason ?? null, decision === 'Extended' ? new_end_date : null]
+  );
+  await writeAudit({
+    actor, action: 'probation_decision', entity_type: 'employee', entity_id: employeeId,
+    old_value: { decision: before[0].probation_decision, end_date: before[0].probation_end_date },
+    new_value: { decision, reason, new_end_date }
+  });
+  return rows[0];
 }
 
 export default {
@@ -1459,5 +1784,21 @@ export default {
   createOffer,
   getOffer,
   updateOffer,
-  updateOfferStatus
+  updateOfferStatus,
+  ONBOARDING_MILESTONES,
+  ONBOARDING_TASK_STATUSES,
+  ONBOARDING_TEMPLATE_SCOPES,
+  PROBATION_DECISIONS,
+  listOnboardingTemplates,
+  createOnboardingTemplate,
+  updateOnboardingTemplate,
+  generateOnboardingTasks,
+  createAdHocOnboardingTask,
+  listOnboardingTasks,
+  updateOnboardingTask,
+  getPreboardingInfo,
+  upsertPreboardingInfo,
+  buildWelcomeLetterText,
+  setProbation,
+  recordProbationDecision
 };

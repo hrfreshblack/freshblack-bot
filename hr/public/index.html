@@ -157,6 +157,7 @@
     <button id="tabPeople" onclick="showTab('people')">Співробітники</button>
     <button id="tabOrg" onclick="showTab('org')">Оргструктура</button>
     <button id="tabRecruitment" onclick="showTab('recruitment')">Рекрутинг</button>
+    <button id="tabOnboardingTemplates" onclick="showTab('onboardingTemplates')">Адаптація</button>
   </nav>
 </header>
 
@@ -186,12 +187,14 @@
       <button onclick="showProfileTab('personal')">Personal</button>
       <button onclick="showProfileTab('employment')">Employment</button>
       <button onclick="showProfileTab('compensation')">Compensation</button>
+      <button onclick="showProfileTab('onboarding')">Onboarding</button>
       <button onclick="showProfileTab('changes')">Changes</button>
     </div>
     <div class="profilePanel active" id="profileOverview"></div>
     <div class="profilePanel" id="profilePersonal"></div>
     <div class="profilePanel" id="profileEmployment"></div>
     <div class="profilePanel" id="profileCompensation"></div>
+    <div class="profilePanel" id="profileOnboarding"></div>
     <div class="profilePanel" id="profileChanges"></div>
   </div>
 
@@ -284,6 +287,17 @@
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Офер</h3>
     <div id="applicationOffers"></div>
     <button class="secondary" onclick="openAddOffer()">+ Офер</button>
+  </div>
+
+  <div id="viewOnboardingTemplates" style="display:none;">
+    <div class="viewToolbar">
+      <select id="obtFilterDepartment"><option value="">— усі департаменти —</option></select>
+      <select id="obtFilterPosition"><option value="">— усі посади —</option></select>
+      <button id="btnAddOnboardingTemplate">+ Шаблон</button>
+    </div>
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Бібліотека задач адаптації — компанія в цілому, або конкретний департамент/посада. При прийнятті офера (і кнопкою "Згенерувати з шаблонів" у профілі співробітника) підходящі шаблони перетворюються на особисті задачі співробітника.</p>
+    <div class="tableWrap"><table><thead><tr><th>Етап</th><th>Назва</th><th>Область</th><th>Дедлайн (днів від старту)</th><th>Відповідальний</th><th></th></tr></thead><tbody id="obtTemplatesBody"></tbody></table></div>
+    <div class="empty" id="obtTemplatesEmpty" style="display:none;">Шаблонів ще немає.</div>
   </div>
 
 </main>
@@ -537,6 +551,49 @@
   </div>
 </div>
 
+<!-- Модалка: задача адаптації вручну -->
+<div class="overlay" id="onboardingTaskOverlay">
+  <div class="modal">
+    <h2>Нова задача адаптації</h2>
+    <div class="field"><label>Етап</label><select id="obtMilestone"></select></div>
+    <div class="field"><label>Назва</label><input type="text" id="obtTitle"></div>
+    <div class="field"><label>Опис</label><textarea id="obtDescription" rows="2"></textarea></div>
+    <div class="field"><label>Відповідальний (роль)</label><input type="text" id="obtOwnerRole" placeholder="HR / Manager / Buddy / Employee"></div>
+    <div class="field"><label>Дедлайн</label><input type="date" id="obtDueDate"></div>
+    <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="obtRequired" style="width:auto;" checked> Обов'язкова</label></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('onboardingTaskOverlay')">Скасувати</button>
+      <button id="btnSaveOnboardingTask">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: шаблон задачі адаптації -->
+<div class="overlay" id="onboardingTemplateOverlay">
+  <div class="modal">
+    <h2>Новий шаблон задачі</h2>
+    <div class="field"><label>Область</label>
+      <select id="otScope">
+        <option value="Company">Уся компанія</option>
+        <option value="Department">Департамент</option>
+        <option value="Position">Посада</option>
+      </select>
+    </div>
+    <div class="field" id="otDepartmentWrap" style="display:none;"><label>Департамент</label><select id="otDepartment"></select></div>
+    <div class="field" id="otPositionWrap" style="display:none;"><label>Посада</label><select id="otPosition"></select></div>
+    <div class="field"><label>Етап</label><select id="otMilestone"></select></div>
+    <div class="field"><label>Назва</label><input type="text" id="otTitle"></div>
+    <div class="field"><label>Опис</label><textarea id="otDescription" rows="2"></textarea></div>
+    <div class="field"><label>Відповідальний (роль)</label><input type="text" id="otOwnerRole" placeholder="HR / Manager / Buddy / Employee"></div>
+    <div class="field"><label>Дедлайн (днів від дати старту)</label><input type="number" id="otDueOffsetDays" value="0"></div>
+    <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="otRequired" style="width:auto;" checked> Обов'язкова</label></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('onboardingTemplateOverlay')">Скасувати</button>
+      <button id="btnSaveOnboardingTemplate">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -657,7 +714,7 @@ async function loadDictionaries() {
 
 // ---- Tabs ----
 
-const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment'];
+const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates'];
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
@@ -668,14 +725,17 @@ function showTab(tab) {
   document.getElementById('viewVacancyDetail').style.display = 'none';
   document.getElementById('viewCandidateDetail').style.display = 'none';
   document.getElementById('viewApplicationDetail').style.display = 'none';
+  document.getElementById('viewOnboardingTemplates').style.display = tab === 'onboardingTemplates' ? '' : 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
   document.getElementById('tabRecruitment').classList.toggle('active', tab === 'recruitment');
+  document.getElementById('tabOnboardingTemplates').classList.toggle('active', tab === 'onboardingTemplates');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'people') loadPeople();
   if (tab === 'org') loadOrg();
   if (tab === 'recruitment') showRecruitmentSubTab(window._recruitmentSubTab || 'requests');
+  if (tab === 'onboardingTemplates') loadOnboardingTemplates();
 }
 
 // ---- Dashboard ----
@@ -852,11 +912,12 @@ async function renderEmployeeProfile() {
   renderPersonalTab(e);
   renderEmploymentTab(e);
   renderCompensationTab(e);
+  renderOnboardingTab(e);
   renderChangesTab(e);
 }
 
 function showProfileTab(tab) {
-  ['overview', 'personal', 'employment', 'compensation', 'changes'].forEach((t) => {
+  ['overview', 'personal', 'employment', 'compensation', 'onboarding', 'changes'].forEach((t) => {
     document.getElementById('profile' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
   });
   document.querySelectorAll('.profileTabs button').forEach((b) => b.classList.remove('active'));
@@ -1076,6 +1137,282 @@ document.getElementById('btnSaveCompensation').onclick = async () => {
   closeOverlay('compensationOverlay');
   showToast('Збережено');
   renderEmployeeProfile();
+};
+
+function probationDecisionTag(decision) {
+  const cls = decision === 'Passed' ? 'ok' : decision === 'Failed' ? 'bad' : decision === 'Extended' ? 'warn' : 'neutral';
+  return `<span class="tag ${cls}">${decision}</span>`;
+}
+function onboardingTaskStatusTag(t) {
+  if (t.is_overdue) return '<span class="tag bad">Overdue</span>';
+  const cls = t.status === 'Completed' ? 'ok' : t.status === 'Skipped' ? 'neutral' : (t.status === 'In Progress' || t.status === 'Waiting') ? 'warn' : 'neutral';
+  return `<span class="tag ${cls}">${t.status}</span>`;
+}
+
+async function renderOnboardingTab(e) {
+  const panel = document.getElementById('profileOnboarding');
+  const [preResp, tasksResp] = await Promise.all([
+    apiFetch('/api/employees/' + e.id + '/preboarding'),
+    apiFetch('/api/employees/' + e.id + '/onboarding-tasks')
+  ]);
+  const preData = await preResp.json();
+  const tasksData = await tasksResp.json();
+  const info = preData.ok ? preData.info : null;
+  const tasks = tasksData.ok ? tasksData.tasks : [];
+
+  const grouped = {};
+  tasks.forEach((t) => { (grouped[t.milestone] = grouped[t.milestone] || []).push(t); });
+
+  panel.innerHTML = `
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:0 0 8px;">Preboarding / Welcome</h3>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Локація / робоче місце</label><input type="text" id="preLocation" value="${escAttr(info?.workplace_location)}"></div>
+      <div class="fieldItem"><label>Контакт HR</label><input type="text" id="preHrContact" value="${escAttr(info?.hr_contact)}"></div>
+    </div>
+    <div class="field"><label>Документи, які взяти</label><textarea id="preDocs" rows="2">${escAttr(info?.documents_to_bring)}</textarea></div>
+    <div class="field"><label>План першого дня</label><textarea id="preAgenda" rows="2">${escAttr(info?.first_day_agenda)}</textarea></div>
+    <div class="field"><label>Текст листа (editable)</label><textarea id="preWelcomeText" rows="5">${escAttr(info?.welcome_letter_text)}</textarea></div>
+    <div style="display:flex; gap:8px; margin-bottom:20px;">
+      <button onclick="savePreboarding()">Зберегти</button>
+      <button class="secondary" onclick="regenerateWelcomeDraft()">Згенерувати чернетку листа</button>
+    </div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Випробувальний термін</h3>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Тривалість (днів)</label><input type="number" id="probPeriodDays" min="1" value="${e.probation_period_days || 90}"></div>
+      <div class="fieldItem"><label>Дата завершення</label>${e.probation_end_date ? new Date(e.probation_end_date).toLocaleDateString('uk-UA') : '—'}</div>
+      <div class="fieldItem"><label>Рішення</label>${e.probation_decision ? probationDecisionTag(e.probation_decision) : '—'}${e.probation_decision_date ? ' · ' + new Date(e.probation_decision_date).toLocaleDateString('uk-UA') : ''}</div>
+    </div>
+    <div class="field"><label>Цілі на випробувальний</label><textarea id="probGoals" rows="2">${escAttr(e.probation_goals)}</textarea></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;">
+      <button class="secondary" onclick="saveProbationSettings()">Зберегти тривалість/цілі</button>
+      <button onclick="recordProbationDecisionAction('Passed')">Пройшов</button>
+      <button class="secondary" onclick="recordProbationDecisionAction('Extended')">Продовжити</button>
+      <button class="bad" onclick="recordProbationDecisionAction('Failed')">Не пройшов</button>
+    </div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Задачі адаптації</h3>
+    <div style="display:flex; gap:8px; margin-bottom:12px;">
+      <button class="secondary" onclick="generateOnboardingTasksForCurrent()">Згенерувати з шаблонів</button>
+      <button class="secondary" onclick="openAddOnboardingTask()">+ Задача вручну</button>
+    </div>
+    ${(window._dict.onboardingMilestones || []).map((m) => (grouped[m] && grouped[m].length) ? `
+      <div style="margin-bottom:14px;">
+        <div style="font-weight:700; font-size:13px; margin-bottom:6px;">${m}</div>
+        ${grouped[m].map((t) => `
+          <div class="historyCard">
+            <div class="historyTitle">${escAttr(t.title)} ${onboardingTaskStatusTag(t)}</div>
+            <div class="historyMeta">${t.owner_role ? escAttr(t.owner_role) + ' · ' : ''}${t.due_date ? 'до ' + new Date(t.due_date).toLocaleDateString('uk-UA') : 'без дедлайну'}${t.required ? '' : " · необов'язкова"}</div>
+            ${t.description ? '<div class="historyMeta">' + escAttr(t.description) + '</div>' : ''}
+            ${t.comment ? '<div class="historyMeta">Коментар: ' + escAttr(t.comment) + '</div>' : ''}
+            <div style="margin-top:6px;"><button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="quickUpdateOnboardingTask(${t.id})">✎ Оновити</button></div>
+          </div>
+        `).join('')}
+      </div>
+    ` : '').join('') || '<p style="color:var(--muted);">Ще немає задач адаптації.</p>'}
+  `;
+}
+
+async function savePreboarding() {
+  const body = {
+    workplace_location: document.getElementById('preLocation').value.trim(),
+    hr_contact: document.getElementById('preHrContact').value.trim(),
+    documents_to_bring: document.getElementById('preDocs').value.trim(),
+    first_day_agenda: document.getElementById('preAgenda').value.trim(),
+    welcome_letter_text: document.getElementById('preWelcomeText').value
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/preboarding', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+}
+
+async function regenerateWelcomeDraft() {
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/welcome-letter-draft');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося згенерувати'); return; }
+  document.getElementById('preWelcomeText').value = data.text;
+  showToast('Чернетку згенеровано — не забудь зберегти');
+}
+
+async function saveProbationSettings() {
+  const body = {
+    probation_period_days: document.getElementById('probPeriodDays').value || 90,
+    probation_goals: document.getElementById('probGoals').value.trim()
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/probation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+  renderEmployeeProfile();
+}
+
+async function recordProbationDecisionAction(decision) {
+  let reason = '';
+  let new_end_date = '';
+  if (decision === 'Extended') {
+    new_end_date = prompt('Нова дата завершення (YYYY-MM-DD):', '') || '';
+    if (!new_end_date) return;
+    reason = prompt('Причина продовження:', '') || '';
+    if (!reason) { showToast('Причина обов’язкова'); return; }
+  } else if (decision === 'Failed') {
+    reason = prompt('Причина (необов’язково):', '') || '';
+  }
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/probation-decision', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, reason, new_end_date: new_end_date || null })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти рішення'); return; }
+  showToast('Рішення збережено');
+  renderEmployeeProfile();
+}
+
+async function generateOnboardingTasksForCurrent() {
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/onboarding-tasks/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося згенерувати'); return; }
+  showToast(data.tasks.length ? 'Додано задач: ' + data.tasks.length : 'Нових задач з шаблонів немає');
+  renderEmployeeProfile();
+}
+
+function openAddOnboardingTask() {
+  document.getElementById('obtMilestone').innerHTML = (window._dict.onboardingMilestones || []).map((m) => `<option value="${m}">${m}</option>`).join('');
+  document.getElementById('obtTitle').value = '';
+  document.getElementById('obtDescription').value = '';
+  document.getElementById('obtOwnerRole').value = '';
+  document.getElementById('obtDueDate').value = '';
+  document.getElementById('obtRequired').checked = true;
+  document.getElementById('onboardingTaskOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveOnboardingTask').onclick = async () => {
+  const title = document.getElementById('obtTitle').value.trim();
+  if (!title) { showToast('Назва обов’язкова'); return; }
+  const body = {
+    milestone: document.getElementById('obtMilestone').value,
+    title,
+    description: document.getElementById('obtDescription').value.trim(),
+    owner_role: document.getElementById('obtOwnerRole').value.trim(),
+    due_date: document.getElementById('obtDueDate').value || null,
+    required: document.getElementById('obtRequired').checked
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/onboarding-tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('onboardingTaskOverlay');
+  showToast('Задачу додано');
+  renderEmployeeProfile();
+};
+
+function quickUpdateOnboardingTask(id) {
+  const status = prompt('Статус (' + window._dict.onboardingTaskStatuses.join(', ') + '):', 'Completed');
+  if (!status) return;
+  if (!window._dict.onboardingTaskStatuses.includes(status)) { showToast('Невідомий статус'); return; }
+  let skip_reason = '';
+  if (status === 'Skipped') {
+    skip_reason = prompt('Причина пропуску:', '') || '';
+    if (!skip_reason) { showToast('Причина обов’язкова'); return; }
+  }
+  const comment = prompt('Коментар (необов’язково):', '') || '';
+  apiFetch('/api/onboarding-tasks/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status, skip_reason, comment }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      showToast('Оновлено');
+      renderEmployeeProfile();
+    });
+}
+
+// ---- Onboarding Templates admin ----
+
+async function loadOnboardingTemplates() {
+  await ensureRecruitmentRefsLoaded();
+  if (!document.getElementById('obtFilterDepartment').options.length || document.getElementById('obtFilterDepartment').options.length === 1) {
+    document.getElementById('obtFilterDepartment').innerHTML = '<option value="">— усі департаменти —</option>' + window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+    const posResp = await apiFetch('/api/positions');
+    const posData = await posResp.json();
+    window._positionsCache = posData.ok ? posData.positions : [];
+    document.getElementById('obtFilterPosition').innerHTML = '<option value="">— усі посади —</option>' + window._positionsCache.map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
+  }
+
+  const department_id = document.getElementById('obtFilterDepartment').value;
+  const position_id = document.getElementById('obtFilterPosition').value;
+  const params = new URLSearchParams();
+  if (department_id) params.set('department_id', department_id);
+  if (position_id) params.set('position_id', position_id);
+  const resp = await apiFetch('/api/onboarding-templates?' + params.toString());
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  const body = document.getElementById('obtTemplatesBody');
+  const empty = document.getElementById('obtTemplatesEmpty');
+  if (!data.templates.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = data.templates.map((t) => `
+    <tr>
+      <td>${escAttr(t.milestone)}</td>
+      <td>${escAttr(t.title)}</td>
+      <td>${t.scope === 'Company' ? 'Уся компанія' : t.scope === 'Department' ? escAttr(t.department_name || '') : escAttr(t.position_title || '')}</td>
+      <td>${t.due_offset_days}</td>
+      <td>${escAttr(t.owner_role || '—')}</td>
+      <td class="row-actions"><button class="secondary" onclick="deactivateOnboardingTemplate(${t.id})">Деактивувати</button></td>
+    </tr>
+  `).join('');
+}
+document.getElementById('obtFilterDepartment').addEventListener('change', loadOnboardingTemplates);
+document.getElementById('obtFilterPosition').addEventListener('change', loadOnboardingTemplates);
+
+function deactivateOnboardingTemplate(id) {
+  apiFetch('/api/onboarding-templates/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: false }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося деактивувати'); return; }
+      showToast('Деактивовано');
+      loadOnboardingTemplates();
+    });
+}
+
+document.getElementById('btnAddOnboardingTemplate').onclick = async () => {
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('otScope').value = 'Company';
+  document.getElementById('otDepartmentWrap').style.display = 'none';
+  document.getElementById('otPositionWrap').style.display = 'none';
+  document.getElementById('otDepartment').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  const posResp = await apiFetch('/api/positions');
+  const posData = await posResp.json();
+  document.getElementById('otPosition').innerHTML = (posData.ok ? posData.positions : []).map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
+  document.getElementById('otMilestone').innerHTML = (window._dict.onboardingMilestones || []).map((m) => `<option value="${m}">${m}</option>`).join('');
+  document.getElementById('otTitle').value = '';
+  document.getElementById('otDescription').value = '';
+  document.getElementById('otOwnerRole').value = '';
+  document.getElementById('otDueOffsetDays').value = 0;
+  document.getElementById('otRequired').checked = true;
+  document.getElementById('onboardingTemplateOverlay').classList.add('open');
+};
+
+document.getElementById('otScope').addEventListener('change', () => {
+  const scope = document.getElementById('otScope').value;
+  document.getElementById('otDepartmentWrap').style.display = scope === 'Department' ? '' : 'none';
+  document.getElementById('otPositionWrap').style.display = scope === 'Position' ? '' : 'none';
+});
+
+document.getElementById('btnSaveOnboardingTemplate').onclick = async () => {
+  const title = document.getElementById('otTitle').value.trim();
+  if (!title) { showToast('Назва обов’язкова'); return; }
+  const body = {
+    scope: document.getElementById('otScope').value,
+    department_id: document.getElementById('otDepartment').value || null,
+    position_id: document.getElementById('otPosition').value || null,
+    milestone: document.getElementById('otMilestone').value,
+    title,
+    description: document.getElementById('otDescription').value.trim(),
+    owner_role: document.getElementById('otOwnerRole').value.trim(),
+    due_offset_days: document.getElementById('otDueOffsetDays').value || 0,
+    required: document.getElementById('otRequired').checked
+  };
+  const resp = await apiFetch('/api/onboarding-templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('onboardingTemplateOverlay');
+  showToast('Шаблон додано');
+  loadOnboardingTemplates();
 };
 
 async function renderChangesTab(e) {
