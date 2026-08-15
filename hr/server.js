@@ -149,7 +149,21 @@ app.get('/api/me', (req, res) => {
 });
 
 app.get('/api/dictionaries', (req, res) => {
-  res.json({ ok: true, employeeStatuses: db.EMPLOYEE_STATUSES, positionStatuses: db.POSITION_STATUSES, reservationStatuses: db.RESERVATION_STATUSES });
+  res.json({
+    ok: true,
+    employeeStatuses: db.EMPLOYEE_STATUSES,
+    positionStatuses: db.POSITION_STATUSES,
+    reservationStatuses: db.RESERVATION_STATUSES,
+    vacancyRequestStatuses: db.VACANCY_REQUEST_STATUSES,
+    vacancyStatuses: db.VACANCY_STATUSES,
+    applicationStages: db.APPLICATION_STAGES,
+    applicationStatuses: db.APPLICATION_STATUSES,
+    rejectionReasonsCompany: db.REJECTION_REASONS_COMPANY,
+    rejectionReasonsCandidate: db.REJECTION_REASONS_CANDIDATE,
+    offerStatuses: db.OFFER_STATUSES,
+    interviewTypes: db.INTERVIEW_TYPES,
+    interviewStatuses: db.INTERVIEW_STATUSES
+  });
 });
 
 // ---- Departments ----
@@ -366,6 +380,357 @@ app.get('/api/audit-log', requireRole(), async (req, res) => {
   } catch (error) {
     console.error('GET /api/audit-log ERROR:', error?.message || error);
     res.status(500).json({ ok: false, error: 'Не вдалося отримати журнал змін' });
+  }
+});
+
+// ---- Recruitment / ATS: Vacancy Requests ----
+
+app.get('/api/vacancy-requests', async (req, res) => {
+  try {
+    const status = String(req.query.status || '').trim();
+    const requests = await db.listVacancyRequests({ status });
+    res.json({ ok: true, requests });
+  } catch (error) {
+    console.error('GET /api/vacancy-requests ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати заявки на вакансії' });
+  }
+});
+
+app.get('/api/vacancy-requests/:id', async (req, res) => {
+  try {
+    const request = await db.getVacancyRequest(Number(req.params.id));
+    if (!request) {
+      res.status(404).json({ ok: false, error: 'Заявку не знайдено' });
+      return;
+    }
+    res.json({ ok: true, request });
+  } catch (error) {
+    console.error('GET /api/vacancy-requests/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати заявку' });
+  }
+});
+
+app.post('/api/vacancy-requests', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.position_title || !body.department_id) {
+      res.status(400).json({ ok: false, error: 'Назва посади і департамент обов’язкові' });
+      return;
+    }
+    const request = await db.createVacancyRequest(body, req.account.username);
+    res.json({ ok: true, request });
+  } catch (error) {
+    console.error('POST /api/vacancy-requests ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити заявку' });
+  }
+});
+
+app.post('/api/vacancy-requests/:id', requireRole(), async (req, res) => {
+  try {
+    const request = await db.updateVacancyRequest(Number(req.params.id), req.body || {});
+    if (!request) {
+      res.status(404).json({ ok: false, error: 'Заявку не знайдено' });
+      return;
+    }
+    res.json({ ok: true, request });
+  } catch (error) {
+    console.error('POST /api/vacancy-requests/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити заявку' });
+  }
+});
+
+app.post('/api/vacancy-requests/:id/status', requireRole(), async (req, res) => {
+  try {
+    const { status, status_note } = req.body || {};
+    const request = await db.updateVacancyRequestStatus(Number(req.params.id), status, status_note, req.account.username);
+    if (!request) {
+      res.status(404).json({ ok: false, error: 'Заявку не знайдено' });
+      return;
+    }
+    res.json({ ok: true, request });
+  } catch (error) {
+    console.error('POST /api/vacancy-requests/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+app.post('/api/vacancy-requests/:id/convert', requireRole(), async (req, res) => {
+  try {
+    const { position_id, recruiter_username, target_date, priority } = req.body || {};
+    const vacancy = await db.convertVacancyRequestToVacancy(Number(req.params.id), { position_id, recruiter_username, target_date, priority }, req.account.username);
+    res.json({ ok: true, vacancy });
+  } catch (error) {
+    console.error('POST /api/vacancy-requests/:id/convert ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося конвертувати у вакансію' });
+  }
+});
+
+// ---- Recruitment / ATS: Vacancies ----
+
+app.get('/api/vacancies', async (req, res) => {
+  try {
+    const status = String(req.query.status || '').trim();
+    const vacancies = await db.listVacancies({ status });
+    res.json({ ok: true, vacancies });
+  } catch (error) {
+    console.error('GET /api/vacancies ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати вакансії' });
+  }
+});
+
+app.get('/api/vacancies/:id', async (req, res) => {
+  try {
+    const vacancy = await db.getVacancy(Number(req.params.id));
+    if (!vacancy) {
+      res.status(404).json({ ok: false, error: 'Вакансію не знайдено' });
+      return;
+    }
+    res.json({ ok: true, vacancy });
+  } catch (error) {
+    console.error('GET /api/vacancies/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати вакансію' });
+  }
+});
+
+app.post('/api/vacancies', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title || !body.department_id) {
+      res.status(400).json({ ok: false, error: 'Назва і департамент обов’язкові' });
+      return;
+    }
+    const vacancy = await db.createVacancy(body, req.account.username);
+    res.json({ ok: true, vacancy });
+  } catch (error) {
+    console.error('POST /api/vacancies ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити вакансію' });
+  }
+});
+
+app.post('/api/vacancies/:id', requireRole(), async (req, res) => {
+  try {
+    const vacancy = await db.updateVacancy(Number(req.params.id), req.body || {});
+    if (!vacancy) {
+      res.status(404).json({ ok: false, error: 'Вакансію не знайдено' });
+      return;
+    }
+    res.json({ ok: true, vacancy });
+  } catch (error) {
+    console.error('POST /api/vacancies/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити вакансію' });
+  }
+});
+
+app.post('/api/vacancies/:id/status', requireRole(), async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    const vacancy = await db.updateVacancyStatus(Number(req.params.id), status, req.account.username);
+    if (!vacancy) {
+      res.status(404).json({ ok: false, error: 'Вакансію не знайдено' });
+      return;
+    }
+    res.json({ ok: true, vacancy });
+  } catch (error) {
+    console.error('POST /api/vacancies/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+// ---- Recruitment / ATS: Candidates ----
+
+app.get('/api/candidates', async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const candidates = await db.listCandidates({ search });
+    res.json({ ok: true, candidates });
+  } catch (error) {
+    console.error('GET /api/candidates ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати кандидатів' });
+  }
+});
+
+app.get('/api/candidates/:id', async (req, res) => {
+  try {
+    const candidate = await db.getCandidate(Number(req.params.id));
+    if (!candidate) {
+      res.status(404).json({ ok: false, error: 'Кандидата не знайдено' });
+      return;
+    }
+    res.json({ ok: true, candidate });
+  } catch (error) {
+    console.error('GET /api/candidates/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати кандидата' });
+  }
+});
+
+app.post('/api/candidates', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.full_name || !String(body.full_name).trim()) {
+      res.status(400).json({ ok: false, error: 'ПІБ обов’язкове' });
+      return;
+    }
+    const result = await db.createCandidate(body, req.account.username);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('POST /api/candidates ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити кандидата' });
+  }
+});
+
+app.post('/api/candidates/:id', requireRole(), async (req, res) => {
+  try {
+    const candidate = await db.updateCandidateFields(Number(req.params.id), req.body || {});
+    if (!candidate) {
+      res.status(404).json({ ok: false, error: 'Кандидата не знайдено' });
+      return;
+    }
+    res.json({ ok: true, candidate });
+  } catch (error) {
+    console.error('POST /api/candidates/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.post('/api/candidates/:id/personal', requireRole(), async (req, res) => {
+  try {
+    const candidate = await db.getCandidate(Number(req.params.id));
+    if (!candidate) {
+      res.status(404).json({ ok: false, error: 'Кандидата не знайдено' });
+      return;
+    }
+    const person = await db.updatePersonFields(candidate.person_id, req.body || {});
+    res.json({ ok: true, person });
+  } catch (error) {
+    console.error('POST /api/candidates/:id/personal ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+// ---- Recruitment / ATS: Applications ----
+
+app.get('/api/applications/:id', async (req, res) => {
+  try {
+    const application = await db.getApplication(Number(req.params.id));
+    if (!application) {
+      res.status(404).json({ ok: false, error: 'Заявку не знайдено' });
+      return;
+    }
+    res.json({ ok: true, application });
+  } catch (error) {
+    console.error('GET /api/applications/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати заявку' });
+  }
+});
+
+app.post('/api/applications', requireRole(), async (req, res) => {
+  try {
+    const { candidate_id, vacancy_id, applied_date } = req.body || {};
+    if (!candidate_id || !vacancy_id) {
+      res.status(400).json({ ok: false, error: 'Кандидат і вакансія обов’язкові' });
+      return;
+    }
+    const application = await db.createApplication({ candidate_id, vacancy_id, applied_date }, req.account.username);
+    res.json({ ok: true, application });
+  } catch (error) {
+    console.error('POST /api/applications ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити заявку' });
+  }
+});
+
+app.post('/api/applications/:id/stage', requireRole(), async (req, res) => {
+  try {
+    const { stage } = req.body || {};
+    const application = await db.updateApplicationStage(Number(req.params.id), stage, req.account.username);
+    if (!application) {
+      res.status(404).json({ ok: false, error: 'Заявку не знайдено' });
+      return;
+    }
+    res.json({ ok: true, application });
+  } catch (error) {
+    console.error('POST /api/applications/:id/stage ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити етап' });
+  }
+});
+
+app.post('/api/applications/:id/status', requireRole(), async (req, res) => {
+  try {
+    const application = await db.updateApplicationStatus(Number(req.params.id), req.body || {}, req.account.username);
+    if (!application) {
+      res.status(404).json({ ok: false, error: 'Заявку не знайдено' });
+      return;
+    }
+    res.json({ ok: true, application });
+  } catch (error) {
+    console.error('POST /api/applications/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+// ---- Recruitment / ATS: Interviews ----
+
+app.post('/api/applications/:id/interviews', requireRole(), async (req, res) => {
+  try {
+    const interview = await db.createInterview({ ...(req.body || {}), application_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, interview });
+  } catch (error) {
+    console.error('POST /api/applications/:id/interviews ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити інтерв’ю' });
+  }
+});
+
+app.post('/api/interviews/:id', requireRole(), async (req, res) => {
+  try {
+    const interview = await db.updateInterview(Number(req.params.id), req.body || {});
+    if (!interview) {
+      res.status(404).json({ ok: false, error: 'Інтерв’ю не знайдено' });
+      return;
+    }
+    res.json({ ok: true, interview });
+  } catch (error) {
+    console.error('POST /api/interviews/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити інтерв’ю' });
+  }
+});
+
+// ---- Recruitment / ATS: Offers ----
+
+app.post('/api/applications/:id/offers', requireRole(), async (req, res) => {
+  try {
+    const offer = await db.createOffer({ ...(req.body || {}), application_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, offer });
+  } catch (error) {
+    console.error('POST /api/applications/:id/offers ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити офер' });
+  }
+});
+
+app.post('/api/offers/:id', requireRole(), async (req, res) => {
+  try {
+    const offer = await db.updateOffer(Number(req.params.id), req.body || {});
+    if (!offer) {
+      res.status(404).json({ ok: false, error: 'Офер не знайдено' });
+      return;
+    }
+    res.json({ ok: true, offer });
+  } catch (error) {
+    console.error('POST /api/offers/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити офер' });
+  }
+});
+
+app.post('/api/offers/:id/status', requireRole(), async (req, res) => {
+  try {
+    const { status, approved_by } = req.body || {};
+    const offer = await db.updateOfferStatus(Number(req.params.id), status, req.account.username, approved_by);
+    if (!offer) {
+      res.status(404).json({ ok: false, error: 'Офер не знайдено' });
+      return;
+    }
+    res.json({ ok: true, offer });
+  } catch (error) {
+    console.error('POST /api/offers/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус офера' });
   }
 });
 
