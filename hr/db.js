@@ -24,6 +24,17 @@ const EMPLOYEE_STATUSES = [
 const POSITION_STATUSES = ['Filled', 'Vacant', 'Recruitment Active', 'Planned', 'Frozen', 'Closed'];
 const RESERVATION_STATUSES = ['Not Reserved', 'In Progress', 'Reserved', 'Expiring', 'Other'];
 
+// Recruitment / ATS (ТЗ розділи 9-19)
+const VACANCY_REQUEST_STATUSES = ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Converted to Vacancy', 'Cancelled'];
+const VACANCY_STATUSES = ['Open', 'On Hold', 'Filled', 'Cancelled', 'Closed'];
+const APPLICATION_STAGES = ['New Candidate', 'Screening', 'Interview', 'Test Task', 'Reference Check', 'Offer', 'Hired'];
+const APPLICATION_STATUSES = ['Active', 'Rejected', 'Withdrawn', 'Hired'];
+const REJECTION_REASONS_COMPANY = ['Недостатньо досвіду', 'Не підходить за компетенціями', 'Не пройшов тестове завдання', 'Завищені зарплатні очікування', 'Не підходить за soft skills', 'Вакансію закрито/заморожено', 'Інше'];
+const REJECTION_REASONS_CANDIDATE = ['Прийняв іншу пропозицію', 'Не влаштовують умови', 'Не влаштовує зарплата', 'Змінив рішення щодо пошуку роботи', 'Не виходить на зв`язок', 'Інше'];
+const OFFER_STATUSES = ['Draft', 'Sent', 'Accepted', 'Declined', 'Expired', 'Withdrawn'];
+const INTERVIEW_TYPES = ['HR Screening', 'Technical/Professional', 'Final', 'Test Task Review', 'Reference Check'];
+const INTERVIEW_STATUSES = ['Scheduled', 'Completed', 'Cancelled', 'No Show'];
+
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hr_accounts (
@@ -163,6 +174,141 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_compensation_employee ON hr_compensation_records(employee_id);
+
+    -- ==================== Recruitment / ATS (ТЗ розділи 9-19) ====================
+
+    -- Vacancy Request: погодження потреби ще ДО того, як існує вакансія
+    -- (ТЗ 9.1/9.2) — керівник ініціює, HRD фінально погоджує, потім
+    -- окрема дія "Convert to Vacancy" (не автоматично на Approved).
+    CREATE TABLE IF NOT EXISTS hr_vacancy_requests (
+      id SERIAL PRIMARY KEY,
+      position_title TEXT NOT NULL,
+      department_id INTEGER NOT NULL REFERENCES hr_departments(id),
+      hiring_manager_employee_id INTEGER REFERENCES hr_employees(id),
+      request_reason TEXT NOT NULL DEFAULT '',
+      quantity INTEGER NOT NULL DEFAULT 1,
+      priority TEXT NOT NULL DEFAULT '',
+      desired_start_date DATE,
+      ideal_candidate_portrait TEXT NOT NULL DEFAULT '',
+      responsibilities TEXT NOT NULL DEFAULT '',
+      skills_professional TEXT NOT NULL DEFAULT '',
+      skills_technical TEXT NOT NULL DEFAULT '',
+      skills_additional TEXT NOT NULL DEFAULT '',
+      product_knowledge TEXT NOT NULL DEFAULT '',
+      personal_qualities_required TEXT NOT NULL DEFAULT '',
+      personal_qualities_desired TEXT NOT NULL DEFAULT '',
+      compensation_trial TEXT NOT NULL DEFAULT '',
+      compensation_probation TEXT NOT NULL DEFAULT '',
+      compensation_after_probation TEXT NOT NULL DEFAULT '',
+      compensation_bonus_formula TEXT NOT NULL DEFAULT '',
+      probation_goals TEXT NOT NULL DEFAULT '',
+      career_growth TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Draft',
+      status_note TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_vacancy_requests_status ON hr_vacancy_requests(status);
+
+    CREATE TABLE IF NOT EXISTS hr_vacancies (
+      id SERIAL PRIMARY KEY,
+      vacancy_request_id INTEGER REFERENCES hr_vacancy_requests(id),
+      position_id INTEGER REFERENCES hr_positions(id),
+      department_id INTEGER NOT NULL REFERENCES hr_departments(id),
+      hiring_manager_employee_id INTEGER REFERENCES hr_employees(id),
+      recruiter_username TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Open',
+      priority TEXT NOT NULL DEFAULT '',
+      target_date DATE,
+      profile_snapshot TEXT NOT NULL DEFAULT '',
+      override_reason TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_vacancies_status ON hr_vacancies(status);
+
+    -- Candidate = hr_persons профіль + рекрутингові поля (ТЗ п.3 "one
+    -- person — one master record", п.10 Candidate/Application). Той самий
+    -- person_id пізніше стає hr_employees при Offer Accepted — не
+    -- дублюється.
+    CREATE TABLE IF NOT EXISTS hr_candidates (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL UNIQUE REFERENCES hr_persons(id),
+      current_job_title TEXT NOT NULL DEFAULT '',
+      desired_role TEXT NOT NULL DEFAULT '',
+      desired_salary TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT '',
+      owner_recruiter TEXT NOT NULL DEFAULT '',
+      resume_url TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      talent_pool_segment TEXT NOT NULL DEFAULT '',
+      talent_pool_category TEXT NOT NULL DEFAULT '',
+      talent_pool_next_contact DATE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Application: Candidate ↔ Vacancy (не сам Candidate — той самий
+    -- кандидат може мати кілька заявок одночасно, ТЗ п.10).
+    CREATE TABLE IF NOT EXISTS hr_applications (
+      id SERIAL PRIMARY KEY,
+      candidate_id INTEGER NOT NULL REFERENCES hr_candidates(id),
+      vacancy_id INTEGER NOT NULL REFERENCES hr_vacancies(id),
+      stage TEXT NOT NULL DEFAULT 'New Candidate',
+      status TEXT NOT NULL DEFAULT 'Active',
+      rejection_reason TEXT NOT NULL DEFAULT '',
+      rejection_comment TEXT NOT NULL DEFAULT '',
+      applied_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      next_action TEXT NOT NULL DEFAULT '',
+      next_action_date DATE,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (candidate_id, vacancy_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_applications_vacancy ON hr_applications(vacancy_id);
+    CREATE INDEX IF NOT EXISTS idx_hr_applications_candidate ON hr_applications(candidate_id);
+
+    -- Interview: спрощено на цьому зрізі — дата/тип/нотатки/рішення, без
+    -- формального зваженого scorecard-шаблону (ТЗ п.16 Scorecard templates
+    -- — наступний крок) і без Google Calendar sync.
+    CREATE TABLE IF NOT EXISTS hr_interviews (
+      id SERIAL PRIMARY KEY,
+      application_id INTEGER NOT NULL REFERENCES hr_applications(id),
+      interview_type TEXT NOT NULL DEFAULT '',
+      scheduled_at TIMESTAMPTZ,
+      participants TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Scheduled',
+      notes TEXT NOT NULL DEFAULT '',
+      decision TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_interviews_application ON hr_interviews(application_id);
+
+    -- Offer: Accepted створює Future Employee РІВНО ОДИН РАЗ (employee_id
+    -- фіксує це — ТЗ п.37 idempotent).
+    CREATE TABLE IF NOT EXISTS hr_offers (
+      id SERIAL PRIMARY KEY,
+      application_id INTEGER NOT NULL REFERENCES hr_applications(id),
+      fixed_salary NUMERIC,
+      currency TEXT NOT NULL DEFAULT 'UAH',
+      bonus_formula TEXT NOT NULL DEFAULT '',
+      kpi_bonus TEXT NOT NULL DEFAULT '',
+      start_date DATE,
+      probation_goals TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Draft',
+      acceptance_deadline DATE,
+      employee_id INTEGER REFERENCES hr_employees(id),
+      created_by TEXT NOT NULL DEFAULT '',
+      approved_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_offers_application ON hr_offers(application_id);
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -688,11 +834,580 @@ async function getOrgTree() {
   return { departments, positions };
 }
 
+// ---------------------------------------------------------------------
+// Recruitment / ATS — Vacancy Requests
+// ---------------------------------------------------------------------
+
+const VACANCY_REQUEST_FIELDS = [
+  'position_title', 'department_id', 'hiring_manager_employee_id', 'request_reason', 'quantity', 'priority',
+  'desired_start_date', 'ideal_candidate_portrait', 'responsibilities', 'skills_professional', 'skills_technical',
+  'skills_additional', 'product_knowledge', 'personal_qualities_required', 'personal_qualities_desired',
+  'compensation_trial', 'compensation_probation', 'compensation_after_probation', 'compensation_bonus_formula',
+  'probation_goals', 'career_growth', 'notes'
+];
+
+async function listVacancyRequests({ status = '' } = {}) {
+  const conditions = [];
+  const params = [];
+  if (status) {
+    params.push(status);
+    conditions.push(`vr.status = $${params.length}`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(`
+    SELECT vr.*, d.name AS department_name, per.full_name AS hiring_manager_name
+    FROM hr_vacancy_requests vr
+    JOIN hr_departments d ON d.id = vr.department_id
+    LEFT JOIN hr_employees mgr ON mgr.id = vr.hiring_manager_employee_id
+    LEFT JOIN hr_persons per ON per.id = mgr.person_id
+    ${where}
+    ORDER BY vr.created_at DESC
+  `, params);
+  return rows;
+}
+
+async function getVacancyRequest(id) {
+  const { rows } = await pool.query(`
+    SELECT vr.*, d.name AS department_name, per.full_name AS hiring_manager_name
+    FROM hr_vacancy_requests vr
+    JOIN hr_departments d ON d.id = vr.department_id
+    LEFT JOIN hr_employees mgr ON mgr.id = vr.hiring_manager_employee_id
+    LEFT JOIN hr_persons per ON per.id = mgr.person_id
+    WHERE vr.id = $1
+  `, [id]);
+  if (!rows[0]) return null;
+  const { rows: vacancies } = await pool.query(`SELECT * FROM hr_vacancies WHERE vacancy_request_id = $1`, [id]);
+  return { ...rows[0], vacancy: vacancies[0] || null };
+}
+
+const VACANCY_REQUEST_NULLABLE_FIELDS = new Set(['hiring_manager_employee_id', 'desired_start_date']);
+
+async function createVacancyRequest(fields, created_by) {
+  const cols = VACANCY_REQUEST_FIELDS;
+  const values = cols.map((c) => {
+    if (c === 'quantity') return fields.quantity || 1;
+    if (VACANCY_REQUEST_NULLABLE_FIELDS.has(c)) return fields[c] || null;
+    return fields[c] ?? '';
+  });
+  const { rows } = await pool.query(
+    `INSERT INTO hr_vacancy_requests (${cols.join(', ')}, created_by)
+     VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}, $${cols.length + 1}) RETURNING *`,
+    [...values, created_by || '']
+  );
+  await writeAudit({ actor: created_by, action: 'create', entity_type: 'vacancy_request', entity_id: rows[0].id, new_value: { position_title: rows[0].position_title } });
+  return rows[0];
+}
+
+async function updateVacancyRequest(id, fields) {
+  const cols = VACANCY_REQUEST_FIELDS.filter((c) => fields[c] !== undefined);
+  if (!cols.length) return getVacancyRequest(id);
+  const setClause = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
+  const { rows } = await pool.query(
+    `UPDATE hr_vacancy_requests SET ${setClause}, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, ...cols.map((c) => fields[c])]
+  );
+  return rows[0] || null;
+}
+
+async function updateVacancyRequestStatus(id, status, status_note, actor) {
+  if (!VACANCY_REQUEST_STATUSES.includes(status)) {
+    throw new Error(`Unknown vacancy request status: ${status}`);
+  }
+  const { rows: before } = await pool.query('SELECT status FROM hr_vacancy_requests WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_vacancy_requests SET status = $2, status_note = COALESCE($3, status_note), updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, status, status_note ?? null]
+  );
+  await writeAudit({ actor, action: 'status_change', entity_type: 'vacancy_request', entity_id: id, old_value: { status: before[0].status }, new_value: { status } });
+  return rows[0];
+}
+
+// Convert to Vacancy — окрема свідома дія (ТЗ 9.2), не автоматично на
+// Approved; idempotent — повторний виклик повертає вже створену вакансію.
+async function convertVacancyRequestToVacancy(requestId, { position_id, recruiter_username, target_date, priority }, actor) {
+  const { rows: existing } = await pool.query(`SELECT * FROM hr_vacancies WHERE vacancy_request_id = $1`, [requestId]);
+  if (existing[0]) return existing[0];
+
+  const request = await getVacancyRequest(requestId);
+  if (!request) throw new Error('Заявку на вакансію не знайдено');
+  if (request.status !== 'Approved') {
+    throw new Error('Конвертувати у вакансію можна лише погоджену заявку (Approved)');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO hr_vacancies (vacancy_request_id, position_id, department_id, hiring_manager_employee_id, recruiter_username, title, priority, target_date, profile_snapshot)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [requestId, position_id || null, request.department_id, request.hiring_manager_employee_id, recruiter_username || '',
+        request.position_title, priority || request.priority || '', target_date || null, request.ideal_candidate_portrait || '']
+    );
+    await client.query(`UPDATE hr_vacancy_requests SET status = 'Converted to Vacancy', updated_at = now() WHERE id = $1`, [requestId]);
+    if (position_id) {
+      await client.query(`UPDATE hr_positions SET status = 'Recruitment Active', updated_at = now() WHERE id = $1`, [position_id]);
+    }
+    await client.query('COMMIT');
+    await writeAudit({ actor, action: 'convert_to_vacancy', entity_type: 'vacancy_request', entity_id: requestId, new_value: { vacancy_id: rows[0].id } });
+    return rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// ---------------------------------------------------------------------
+// Recruitment / ATS — Vacancies
+// ---------------------------------------------------------------------
+
+async function listVacancies({ status = '' } = {}) {
+  const conditions = [];
+  const params = [];
+  if (status) {
+    params.push(status);
+    conditions.push(`v.status = $${params.length}`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(`
+    SELECT v.*, d.name AS department_name, per.full_name AS hiring_manager_name,
+      (SELECT COUNT(*)::int FROM hr_applications a WHERE a.vacancy_id = v.id AND a.status = 'Active') AS active_applications_count
+    FROM hr_vacancies v
+    JOIN hr_departments d ON d.id = v.department_id
+    LEFT JOIN hr_employees mgr ON mgr.id = v.hiring_manager_employee_id
+    LEFT JOIN hr_persons per ON per.id = mgr.person_id
+    ${where}
+    ORDER BY v.created_at DESC
+  `, params);
+  return rows;
+}
+
+async function getVacancy(id) {
+  const { rows } = await pool.query(`
+    SELECT v.*, d.name AS department_name, per.full_name AS hiring_manager_name
+    FROM hr_vacancies v
+    JOIN hr_departments d ON d.id = v.department_id
+    LEFT JOIN hr_employees mgr ON mgr.id = v.hiring_manager_employee_id
+    LEFT JOIN hr_persons per ON per.id = mgr.person_id
+    WHERE v.id = $1
+  `, [id]);
+  if (!rows[0]) return null;
+  const applications = await listApplicationsForVacancy(id);
+  return { ...rows[0], applications };
+}
+
+async function createVacancy({ position_id, department_id, hiring_manager_employee_id, recruiter_username, title, priority, target_date, profile_snapshot, override_reason }, created_by) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_vacancies (position_id, department_id, hiring_manager_employee_id, recruiter_username, title, priority, target_date, profile_snapshot, override_reason)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [position_id || null, department_id, hiring_manager_employee_id || null, recruiter_username || '', title, priority || '', target_date || null, profile_snapshot || '', override_reason || '']
+  );
+  await writeAudit({ actor: created_by, action: 'create', entity_type: 'vacancy', entity_id: rows[0].id, new_value: { title } });
+  return rows[0];
+}
+
+async function updateVacancy(id, { recruiter_username, priority, target_date, profile_snapshot }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_vacancies SET
+       recruiter_username = COALESCE($2, recruiter_username),
+       priority = COALESCE($3, priority),
+       target_date = $4,
+       profile_snapshot = COALESCE($5, profile_snapshot),
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, recruiter_username ?? null, priority ?? null, target_date ?? null, profile_snapshot ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function updateVacancyStatus(id, status, actor) {
+  if (!VACANCY_STATUSES.includes(status)) {
+    throw new Error(`Unknown vacancy status: ${status}`);
+  }
+  const { rows: before } = await pool.query('SELECT status, position_id FROM hr_vacancies WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_vacancies SET status = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, status]
+  );
+  if (before[0].position_id && (status === 'Cancelled' || status === 'Closed') && before[0].status !== 'Filled') {
+    await pool.query(`UPDATE hr_positions SET status = 'Vacant', updated_at = now() WHERE id = $1 AND status = 'Recruitment Active'`, [before[0].position_id]);
+  }
+  await writeAudit({ actor, action: 'status_change', entity_type: 'vacancy', entity_id: id, old_value: { status: before[0].status }, new_value: { status } });
+  return rows[0];
+}
+
+// ---------------------------------------------------------------------
+// Recruitment / ATS — Candidates
+// ---------------------------------------------------------------------
+
+async function findDuplicateCandidate({ phone, personal_email }) {
+  const conditions = [];
+  const params = [];
+  if (phone) {
+    params.push(phone);
+    conditions.push(`per.phone = $${params.length}`);
+  }
+  if (personal_email) {
+    params.push(personal_email.toLowerCase());
+    conditions.push(`lower(per.personal_email) = $${params.length}`);
+  }
+  if (!conditions.length) return null;
+  const { rows } = await pool.query(`
+    SELECT c.*, per.full_name, per.phone, per.personal_email
+    FROM hr_candidates c JOIN hr_persons per ON per.id = c.person_id
+    WHERE ${conditions.join(' OR ')}
+    LIMIT 1
+  `, params);
+  return rows[0] || null;
+}
+
+// Дублікати за телефоном/email не створюються повторно — та сама Person
+// (ТЗ п.3 "one person — one master record"); повертаємо існуючого
+// кандидата з прапорцем duplicate: true, щоб UI попередив користувача.
+async function createCandidate({ full_name, phone, personal_email, telegram, city, current_job_title, desired_role,
+  desired_salary, source, owner_recruiter, resume_url, notes }, created_by) {
+  const duplicate = await findDuplicateCandidate({ phone, personal_email });
+  if (duplicate) {
+    return { candidate: duplicate, duplicate: true };
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: personRows } = await client.query(
+      `INSERT INTO hr_persons (full_name, phone, personal_email, telegram, city) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [full_name, phone || '', personal_email || '', telegram || '', city || '']
+    );
+    const person = personRows[0];
+    const { rows: candRows } = await client.query(
+      `INSERT INTO hr_candidates (person_id, current_job_title, desired_role, desired_salary, source, owner_recruiter, resume_url, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [person.id, current_job_title || '', desired_role || '', desired_salary || '', source || '', owner_recruiter || '', resume_url || '', notes || '']
+    );
+    await client.query('COMMIT');
+    await writeAudit({ actor: created_by, action: 'create', entity_type: 'candidate', entity_id: candRows[0].id, new_value: { full_name } });
+    return { candidate: { ...candRows[0], full_name, phone: phone || '', personal_email: personal_email || '' }, duplicate: false };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function listCandidates({ search = '' } = {}) {
+  const conditions = [];
+  const params = [];
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    conditions.push(`(lower(per.full_name) LIKE $${params.length} OR lower(per.phone) LIKE $${params.length} OR lower(per.personal_email) LIKE $${params.length})`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(`
+    SELECT c.*, per.full_name, per.phone, per.personal_email, per.telegram, per.city,
+      (SELECT COUNT(*)::int FROM hr_applications a WHERE a.candidate_id = c.id AND a.status = 'Active') AS active_applications_count
+    FROM hr_candidates c
+    JOIN hr_persons per ON per.id = c.person_id
+    ${where}
+    ORDER BY c.created_at DESC
+  `, params);
+  return rows;
+}
+
+async function getCandidate(id) {
+  const { rows } = await pool.query(`
+    SELECT c.*, per.*, c.id AS id, c.created_at AS created_at
+    FROM hr_candidates c JOIN hr_persons per ON per.id = c.person_id
+    WHERE c.id = $1
+  `, [id]);
+  if (!rows[0]) return null;
+  const { rows: applications } = await pool.query(`
+    SELECT a.*, v.title AS vacancy_title, v.status AS vacancy_status
+    FROM hr_applications a JOIN hr_vacancies v ON v.id = a.vacancy_id
+    WHERE a.candidate_id = $1
+    ORDER BY a.created_at DESC
+  `, [id]);
+  return { ...rows[0], applications };
+}
+
+async function updateCandidateFields(id, { current_job_title, desired_role, desired_salary, source, owner_recruiter,
+  resume_url, notes, talent_pool_segment, talent_pool_category, talent_pool_next_contact }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_candidates SET
+       current_job_title = COALESCE($2, current_job_title),
+       desired_role = COALESCE($3, desired_role),
+       desired_salary = COALESCE($4, desired_salary),
+       source = COALESCE($5, source),
+       owner_recruiter = COALESCE($6, owner_recruiter),
+       resume_url = COALESCE($7, resume_url),
+       notes = COALESCE($8, notes),
+       talent_pool_segment = COALESCE($9, talent_pool_segment),
+       talent_pool_category = COALESCE($10, talent_pool_category),
+       talent_pool_next_contact = $11,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, current_job_title ?? null, desired_role ?? null, desired_salary ?? null, source ?? null, owner_recruiter ?? null,
+      resume_url ?? null, notes ?? null, talent_pool_segment ?? null, talent_pool_category ?? null, talent_pool_next_contact ?? null]
+  );
+  return rows[0] || null;
+}
+
+// ---------------------------------------------------------------------
+// Recruitment / ATS — Applications
+// ---------------------------------------------------------------------
+
+async function listApplicationsForVacancy(vacancyId) {
+  const { rows } = await pool.query(`
+    SELECT a.*, per.full_name AS candidate_name, per.phone AS candidate_phone, per.personal_email AS candidate_email
+    FROM hr_applications a
+    JOIN hr_candidates c ON c.id = a.candidate_id
+    JOIN hr_persons per ON per.id = c.person_id
+    WHERE a.vacancy_id = $1
+    ORDER BY a.created_at DESC
+  `, [vacancyId]);
+  return rows;
+}
+
+async function getApplication(id) {
+  const { rows } = await pool.query(`
+    SELECT a.*, per.full_name AS candidate_name, per.phone AS candidate_phone, per.personal_email AS candidate_email,
+      v.title AS vacancy_title, v.status AS vacancy_status, v.department_id
+    FROM hr_applications a
+    JOIN hr_candidates c ON c.id = a.candidate_id
+    JOIN hr_persons per ON per.id = c.person_id
+    JOIN hr_vacancies v ON v.id = a.vacancy_id
+    WHERE a.id = $1
+  `, [id]);
+  if (!rows[0]) return null;
+  const { rows: interviews } = await pool.query(`SELECT * FROM hr_interviews WHERE application_id = $1 ORDER BY scheduled_at DESC NULLS LAST, id DESC`, [id]);
+  const { rows: offers } = await pool.query(`SELECT * FROM hr_offers WHERE application_id = $1 ORDER BY created_at DESC`, [id]);
+  return { ...rows[0], interviews, offers };
+}
+
+// Заявка кандидата на вакансію — унікальна пара (candidate_id, vacancy_id);
+// повторний виклик повертає вже існуючу заявку (idempotent).
+async function createApplication({ candidate_id, vacancy_id, applied_date }, created_by) {
+  const { rows: existing } = await pool.query(
+    `SELECT * FROM hr_applications WHERE candidate_id = $1 AND vacancy_id = $2`,
+    [candidate_id, vacancy_id]
+  );
+  if (existing[0]) return existing[0];
+  const { rows } = await pool.query(
+    `INSERT INTO hr_applications (candidate_id, vacancy_id, applied_date, created_by)
+     VALUES ($1,$2,COALESCE($3, CURRENT_DATE),$4) RETURNING *`,
+    [candidate_id, vacancy_id, applied_date || null, created_by || '']
+  );
+  await writeAudit({ actor: created_by, action: 'create', entity_type: 'application', entity_id: rows[0].id, new_value: { candidate_id, vacancy_id } });
+  return rows[0];
+}
+
+async function updateApplicationStage(id, stage, actor) {
+  if (!APPLICATION_STAGES.includes(stage)) {
+    throw new Error(`Unknown application stage: ${stage}`);
+  }
+  const { rows: before } = await pool.query('SELECT stage FROM hr_applications WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_applications SET stage = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, stage]
+  );
+  await writeAudit({ actor, action: 'stage_change', entity_type: 'application', entity_id: id, old_value: { stage: before[0].stage }, new_value: { stage } });
+  return rows[0];
+}
+
+async function updateApplicationStatus(id, { status, rejection_reason, rejection_comment, next_action, next_action_date }, actor) {
+  if (!APPLICATION_STATUSES.includes(status)) {
+    throw new Error(`Unknown application status: ${status}`);
+  }
+  if (status === 'Rejected' && !rejection_reason) {
+    throw new Error('Для відмови потрібно вказати причину');
+  }
+  const { rows: before } = await pool.query('SELECT status FROM hr_applications WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_applications SET
+       status = $2,
+       rejection_reason = COALESCE($3, rejection_reason),
+       rejection_comment = COALESCE($4, rejection_comment),
+       next_action = COALESCE($5, next_action),
+       next_action_date = $6,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, status, rejection_reason ?? null, rejection_comment ?? null, next_action ?? null, next_action_date ?? null]
+  );
+  await writeAudit({ actor, action: 'status_change', entity_type: 'application', entity_id: id, old_value: { status: before[0].status }, new_value: { status, rejection_reason } });
+  return rows[0];
+}
+
+// ---------------------------------------------------------------------
+// Recruitment / ATS — Interviews
+// ---------------------------------------------------------------------
+
+async function createInterview({ application_id, interview_type, scheduled_at, participants, notes }, created_by) {
+  if (interview_type && !INTERVIEW_TYPES.includes(interview_type)) {
+    throw new Error(`Unknown interview type: ${interview_type}`);
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO hr_interviews (application_id, interview_type, scheduled_at, participants, notes, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [application_id, interview_type || '', scheduled_at || null, participants || '', notes || '', created_by || '']
+  );
+  return rows[0];
+}
+
+async function listInterviewsForApplication(applicationId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM hr_interviews WHERE application_id = $1 ORDER BY scheduled_at DESC NULLS LAST, id DESC`,
+    [applicationId]
+  );
+  return rows;
+}
+
+async function updateInterview(id, { status, notes, decision, scheduled_at, participants }) {
+  if (status && !INTERVIEW_STATUSES.includes(status)) {
+    throw new Error(`Unknown interview status: ${status}`);
+  }
+  const { rows } = await pool.query(
+    `UPDATE hr_interviews SET
+       status = COALESCE($2, status),
+       notes = COALESCE($3, notes),
+       decision = COALESCE($4, decision),
+       scheduled_at = COALESCE($5, scheduled_at),
+       participants = COALESCE($6, participants)
+     WHERE id = $1 RETURNING *`,
+    [id, status ?? null, notes ?? null, decision ?? null, scheduled_at ?? null, participants ?? null]
+  );
+  return rows[0] || null;
+}
+
+// ---------------------------------------------------------------------
+// Recruitment / ATS — Offers (Accepted → Future Employee, рівно один раз)
+// ---------------------------------------------------------------------
+
+async function createOffer({ application_id, fixed_salary, currency, bonus_formula, kpi_bonus, start_date,
+  probation_goals, acceptance_deadline }, created_by) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_offers (application_id, fixed_salary, currency, bonus_formula, kpi_bonus, start_date, probation_goals, acceptance_deadline, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [application_id, fixed_salary || null, currency || 'UAH', bonus_formula || '', kpi_bonus || '', start_date || null,
+      probation_goals || '', acceptance_deadline || null, created_by || '']
+  );
+  await writeAudit({ actor: created_by, action: 'create', entity_type: 'offer', entity_id: rows[0].id, new_value: { application_id } });
+  return rows[0];
+}
+
+async function getOffer(id) {
+  const { rows } = await pool.query(`SELECT * FROM hr_offers WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+
+async function updateOffer(id, { fixed_salary, currency, bonus_formula, kpi_bonus, start_date, probation_goals, acceptance_deadline }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_offers SET
+       fixed_salary = COALESCE($2, fixed_salary),
+       currency = COALESCE($3, currency),
+       bonus_formula = COALESCE($4, bonus_formula),
+       kpi_bonus = COALESCE($5, kpi_bonus),
+       start_date = COALESCE($6, start_date),
+       probation_goals = COALESCE($7, probation_goals),
+       acceptance_deadline = $8,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, fixed_salary ?? null, currency ?? null, bonus_formula ?? null, kpi_bonus ?? null, start_date ?? null, probation_goals ?? null, acceptance_deadline ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function updateOfferStatus(id, status, actor, approved_by) {
+  if (!OFFER_STATUSES.includes(status)) {
+    throw new Error(`Unknown offer status: ${status}`);
+  }
+  const offer = await getOffer(id);
+  if (!offer) return null;
+
+  if (status === 'Sent' && (!offer.fixed_salary || !offer.start_date)) {
+    throw new Error('Перед відправкою офера потрібно вказати оклад і дату старту');
+  }
+
+  // Idempotent: якщо співробітника вже створено з цього офера — повторний
+  // Accepted нічого не дублює (ТЗ п.37).
+  if (status === 'Accepted' && offer.employee_id) {
+    return offer;
+  }
+
+  if (status !== 'Accepted') {
+    const { rows } = await pool.query(
+      `UPDATE hr_offers SET status = $2, approved_by = COALESCE($3, approved_by), updated_at = now() WHERE id = $1 RETURNING *`,
+      [id, status, approved_by ?? null]
+    );
+    await writeAudit({ actor, action: 'status_change', entity_type: 'offer', entity_id: id, old_value: { status: offer.status }, new_value: { status } });
+    return rows[0];
+  }
+
+  const application = await getApplication(offer.application_id);
+  if (!application) throw new Error('Заявку кандидата не знайдено');
+
+  const { rows: candRows } = await pool.query(`SELECT person_id FROM hr_candidates WHERE id = $1`, [application.candidate_id]);
+  const personId = candRows[0]?.person_id;
+  if (!personId) throw new Error('Не знайдено персональний профіль кандидата');
+
+  const { rows: vacRows } = await pool.query(`SELECT position_id, department_id, hiring_manager_employee_id FROM hr_vacancies WHERE id = $1`, [application.vacancy_id]);
+  const vacancy = vacRows[0];
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: empRows } = await client.query(
+      `INSERT INTO hr_employees (person_id, status, first_hire_date)
+       VALUES ($1,'Future Employee',$2) RETURNING *`,
+      [personId, offer.start_date || null]
+    );
+    const employee = empRows[0];
+
+    if (vacancy?.position_id && vacancy?.department_id && offer.start_date) {
+      await client.query(
+        `INSERT INTO hr_employment_periods (employee_id, position_id, department_id, manager_employee_id, start_date, change_reason)
+         VALUES ($1,$2,$3,$4,$5,'Прийняття офера')`,
+        [employee.id, vacancy.position_id, vacancy.department_id, vacancy.hiring_manager_employee_id || null, offer.start_date]
+      );
+      await client.query(`UPDATE hr_positions SET status = 'Filled', updated_at = now() WHERE id = $1`, [vacancy.position_id]);
+    }
+
+    const { rows: offerRows } = await client.query(
+      `UPDATE hr_offers SET status = 'Accepted', employee_id = $2, approved_by = COALESCE($3, approved_by), updated_at = now() WHERE id = $1 RETURNING *`,
+      [id, employee.id, approved_by ?? null]
+    );
+    await client.query(`UPDATE hr_applications SET status = 'Hired', stage = 'Hired', updated_at = now() WHERE id = $1`, [offer.application_id]);
+    await client.query(`UPDATE hr_vacancies SET status = 'Filled', updated_at = now() WHERE id = $1`, [application.vacancy_id]);
+
+    await client.query('COMMIT');
+    await writeAudit({ actor, action: 'offer_accepted', entity_type: 'offer', entity_id: id, new_value: { employee_id: employee.id } });
+    return offerRows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
   POSITION_STATUSES,
   RESERVATION_STATUSES,
+  VACANCY_REQUEST_STATUSES,
+  VACANCY_STATUSES,
+  APPLICATION_STAGES,
+  APPLICATION_STATUSES,
+  REJECTION_REASONS_COMPANY,
+  REJECTION_REASONS_CANDIDATE,
+  OFFER_STATUSES,
+  INTERVIEW_TYPES,
+  INTERVIEW_STATUSES,
   createAccountIfMissingWithHash,
   findAccountByUsername,
   verifyAccountPassword,
@@ -716,5 +1431,33 @@ export default {
   updateEmployeeFields,
   changeEmployment,
   addCompensationRecord,
-  getOrgTree
+  getOrgTree,
+  listVacancyRequests,
+  getVacancyRequest,
+  createVacancyRequest,
+  updateVacancyRequest,
+  updateVacancyRequestStatus,
+  convertVacancyRequestToVacancy,
+  listVacancies,
+  getVacancy,
+  createVacancy,
+  updateVacancy,
+  updateVacancyStatus,
+  findDuplicateCandidate,
+  createCandidate,
+  listCandidates,
+  getCandidate,
+  updateCandidateFields,
+  listApplicationsForVacancy,
+  getApplication,
+  createApplication,
+  updateApplicationStage,
+  updateApplicationStatus,
+  createInterview,
+  listInterviewsForApplication,
+  updateInterview,
+  createOffer,
+  getOffer,
+  updateOffer,
+  updateOfferStatus
 };

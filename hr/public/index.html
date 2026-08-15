@@ -156,6 +156,7 @@
     <button id="tabDashboard" onclick="showTab('dashboard')">Дашборд</button>
     <button id="tabPeople" onclick="showTab('people')">Співробітники</button>
     <button id="tabOrg" onclick="showTab('org')">Оргструктура</button>
+    <button id="tabRecruitment" onclick="showTab('recruitment')">Рекрутинг</button>
   </nav>
 </header>
 
@@ -201,6 +202,88 @@
     </div>
     <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Дерево департаментів → посади → хто зараз їх займає. Графічний Chart View з drag&drop — наступний крок; зараз це List/Department View з ТЗ п.8.</p>
     <div class="deptTree" id="orgTree"></div>
+  </div>
+
+  <div id="viewRecruitment" style="display:none;">
+    <div class="profileTabs">
+      <button class="active" id="recrSubRequests" onclick="showRecruitmentSubTab('requests')">Заявки на вакансії</button>
+      <button id="recrSubVacancies" onclick="showRecruitmentSubTab('vacancies')">Вакансії</button>
+      <button id="recrSubCandidates" onclick="showRecruitmentSubTab('candidates')">Кандидати</button>
+    </div>
+
+    <div class="profilePanel active" id="recrPanelRequests">
+      <div class="viewToolbar">
+        <select id="vrStatusFilter"><option value="">— усі статуси —</option></select>
+        <button id="btnAddVacancyRequest">+ Заявка на вакансію</button>
+      </div>
+      <div class="tableWrap"><table><thead><tr><th>Посада</th><th>Департамент</th><th>К-сть</th><th>Пріоритет</th><th>Статус</th><th>Дата</th></tr></thead><tbody id="vrTableBody"></tbody></table></div>
+      <div class="empty" id="vrEmpty" style="display:none;">Заявок ще немає.</div>
+    </div>
+
+    <div class="profilePanel" id="recrPanelVacancies">
+      <div class="viewToolbar">
+        <select id="vacStatusFilter"><option value="">— усі статуси —</option></select>
+        <button class="secondary" id="btnAddVacancyDirect">+ Вакансія напряму</button>
+      </div>
+      <div class="tableWrap"><table><thead><tr><th>Назва</th><th>Департамент</th><th>Статус</th><th>Активні заявки</th><th>Рекрутер</th></tr></thead><tbody id="vacTableBody"></tbody></table></div>
+      <div class="empty" id="vacEmpty" style="display:none;">Вакансій ще немає.</div>
+    </div>
+
+    <div class="profilePanel" id="recrPanelCandidates">
+      <div class="viewToolbar">
+        <input type="search" id="candSearch" placeholder="Пошук за ПІБ, телефоном, email…">
+        <button id="btnAddCandidate">+ Кандидат</button>
+      </div>
+      <div class="tableWrap"><table><thead><tr><th>ПІБ</th><th>Телефон</th><th>Email</th><th>Джерело</th><th>Активні заявки</th></tr></thead><tbody id="candTableBody"></tbody></table></div>
+      <div class="empty" id="candEmpty" style="display:none;">Кандидатів ще немає.</div>
+    </div>
+  </div>
+
+  <div id="viewVacancyDetail" style="display:none;">
+    <button class="secondary" onclick="showTab('recruitment')">← До вакансій</button>
+    <div id="vacancyDetailHeader" style="margin:16px 0;"></div>
+    <div class="viewToolbar">
+      <button id="btnAddApplicationToVacancy">+ Кандидат на вакансію</button>
+    </div>
+    <div class="tableWrap"><table><thead><tr><th>Кандидат</th><th>Телефон</th><th>Етап</th><th>Статус</th><th>Подано</th></tr></thead><tbody id="vacApplicationsBody"></tbody></table></div>
+    <div class="empty" id="vacApplicationsEmpty" style="display:none;">Заявок на цю вакансію ще немає.</div>
+  </div>
+
+  <div id="viewCandidateDetail" style="display:none;">
+    <button class="secondary" onclick="showTab('recruitment')">← До кандидатів</button>
+    <div id="candidateDetailHeader" style="margin:16px 0;"></div>
+    <div class="fieldGrid" id="candidateDetailFields"></div>
+    <button class="secondary" onclick="openCandidateEdit(currentCandidateId)" style="margin-bottom:16px;">✎ Редагувати</button>
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Заявки на вакансії</h3>
+    <div class="tableWrap"><table><thead><tr><th>Вакансія</th><th>Етап</th><th>Статус</th><th>Подано</th></tr></thead><tbody id="candApplicationsBody"></tbody></table></div>
+    <div class="empty" id="candApplicationsEmpty" style="display:none;">Ще немає заявок.</div>
+  </div>
+
+  <div id="viewApplicationDetail" style="display:none;">
+    <button class="secondary" id="btnBackFromApplication">← Назад</button>
+    <div id="applicationDetailHeader" style="margin:16px 0;"></div>
+
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Етап</label><select id="appStageSelect"></select></div>
+      <div class="fieldItem"><label>Статус</label><select id="appStatusSelect"></select></div>
+    </div>
+    <div class="field" id="appRejectionReasonWrap" style="display:none;">
+      <label>Причина відмови</label>
+      <select id="appRejectionReason"></select>
+    </div>
+    <div class="field" id="appRejectionCommentWrap" style="display:none;">
+      <label>Коментар</label>
+      <input type="text" id="appRejectionComment">
+    </div>
+    <button onclick="saveApplicationStageStatus()">Зберегти</button>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Інтерв'ю</h3>
+    <div id="applicationInterviews"></div>
+    <button class="secondary" onclick="openAddInterview()">+ Інтерв'ю</button>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Офер</h3>
+    <div id="applicationOffers"></div>
+    <button class="secondary" onclick="openAddOffer()">+ Офер</button>
   </div>
 
 </main>
@@ -321,6 +404,139 @@
   </div>
 </div>
 
+<!-- Модалка: заявка на вакансію -->
+<div class="overlay" id="vacancyRequestOverlay">
+  <div class="modal" style="max-width: 620px;">
+    <h2 id="vrModalTitle">Нова заявка на вакансію</h2>
+    <input type="hidden" id="vrId">
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Посада</label><input type="text" id="vrPositionTitle" placeholder="напр. Обсмажник"></div>
+      <div class="fieldItem"><label>Департамент</label><select id="vrDepartment"></select></div>
+      <div class="fieldItem"><label>Керівник (ініціатор)</label><select id="vrHiringManager"><option value="">— не вказано —</option></select></div>
+      <div class="fieldItem"><label>Кількість</label><input type="number" id="vrQuantity" min="1" step="1" value="1"></div>
+      <div class="fieldItem"><label>Пріоритет</label>
+        <select id="vrPriority"><option value="">—</option><option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option><option value="Urgent">Urgent</option></select>
+      </div>
+      <div class="fieldItem"><label>Бажана дата старту</label><input type="date" id="vrDesiredStartDate"></div>
+    </div>
+    <div class="field"><label>Причина заявки</label><textarea id="vrRequestReason" rows="2"></textarea></div>
+    <div class="field"><label>Обов'язки</label><textarea id="vrResponsibilities" rows="2"></textarea></div>
+    <div class="field"><label>Портрет ідеального кандидата</label><textarea id="vrPortrait" rows="2"></textarea></div>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Оплата на випробувальному</label><input type="text" id="vrCompProbation"></div>
+      <div class="fieldItem"><label>Оплата після випробувального</label><input type="text" id="vrCompAfter"></div>
+    </div>
+    <div class="field"><label>Нотатки</label><textarea id="vrNotes" rows="2"></textarea></div>
+    <div id="vrStatusActions" style="display:none; margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.03); border-radius: 8px;">
+      <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">Статус: <span id="vrCurrentStatusTag"></span></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="secondary" onclick="setVacancyRequestStatus('Pending Approval')">На погодження</button>
+        <button class="secondary" onclick="setVacancyRequestStatus('Approved')">Погодити</button>
+        <button class="bad" onclick="setVacancyRequestStatus('Rejected')">Відхилити</button>
+        <button onclick="convertVacancyRequest()">Конвертувати у вакансію</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('vacancyRequestOverlay')">Закрити</button>
+      <button id="btnSaveVacancyRequest">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: вакансія напряму -->
+<div class="overlay" id="vacancyDirectOverlay">
+  <div class="modal">
+    <h2>Нова вакансія напряму</h2>
+    <div class="field"><label>Назва</label><input type="text" id="vacTitle"></div>
+    <div class="field"><label>Департамент</label><select id="vacDepartment"></select></div>
+    <div class="field"><label>Керівник</label><select id="vacHiringManager"><option value="">— не вказано —</option></select></div>
+    <div class="field"><label>Рекрутер (username)</label><input type="text" id="vacRecruiterUsername"></div>
+    <div class="field"><label>Пріоритет</label>
+      <select id="vacPriority"><option value="">—</option><option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option><option value="Urgent">Urgent</option></select>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('vacancyDirectOverlay')">Скасувати</button>
+      <button id="btnSaveVacancyDirect">Створити</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: кандидат -->
+<div class="overlay" id="candidateOverlay">
+  <div class="modal">
+    <h2 id="candModalTitle">Новий кандидат</h2>
+    <input type="hidden" id="candId">
+    <div class="field"><label>ПІБ</label><input type="text" id="candFullName"></div>
+    <div class="field"><label>Телефон</label><input type="text" id="candPhone"></div>
+    <div class="field"><label>Email</label><input type="text" id="candEmail"></div>
+    <div class="field"><label>Поточна посада</label><input type="text" id="candCurrentJobTitle"></div>
+    <div class="field"><label>Бажана посада</label><input type="text" id="candDesiredRole"></div>
+    <div class="field"><label>Бажана ЗП</label><input type="text" id="candDesiredSalary"></div>
+    <div class="field"><label>Джерело</label>
+      <select id="candSource"><option value="">—</option><option>Work.ua</option><option>Robota.ua</option><option>Referral</option><option>LinkedIn</option><option>Telegram</option><option>Інше</option></select>
+    </div>
+    <div class="field"><label>Посилання на резюме</label><input type="text" id="candResumeUrl"></div>
+    <div class="field"><label>Нотатки</label><textarea id="candNotes" rows="2"></textarea></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('candidateOverlay')">Скасувати</button>
+      <button id="btnSaveCandidate">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: додати кандидата на вакансію -->
+<div class="overlay" id="addApplicationOverlay">
+  <div class="modal">
+    <h2>Додати кандидата на вакансію</h2>
+    <div class="field">
+      <label>Існуючий кандидат</label>
+      <select id="appAddCandidateSelect"><option value="">— обери кандидата —</option></select>
+    </div>
+    <p style="color:var(--muted); font-size:12px; margin:10px 0 4px;">Або створи нового:</p>
+    <div class="field"><label>ПІБ нового кандидата</label><input type="text" id="appAddNewName"></div>
+    <div class="field"><label>Телефон</label><input type="text" id="appAddNewPhone"></div>
+    <div class="field"><label>Email</label><input type="text" id="appAddNewEmail"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('addApplicationOverlay')">Скасувати</button>
+      <button id="btnConfirmAddApplication">Додати</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: нове інтерв'ю -->
+<div class="overlay" id="interviewOverlay">
+  <div class="modal">
+    <h2>Нове інтерв'ю</h2>
+    <div class="field"><label>Тип</label><select id="ivType"></select></div>
+    <div class="field"><label>Дата і час</label><input type="datetime-local" id="ivScheduledAt"></div>
+    <div class="field"><label>Учасники</label><input type="text" id="ivParticipants"></div>
+    <div class="field"><label>Нотатки</label><textarea id="ivNotes" rows="2"></textarea></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('interviewOverlay')">Скасувати</button>
+      <button id="btnSaveInterview">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: офер -->
+<div class="overlay" id="offerOverlay">
+  <div class="modal">
+    <h2 id="offerModalTitle">Новий офер</h2>
+    <input type="hidden" id="offerId">
+    <div class="field"><label>Оклад</label><input type="number" id="offerSalary" step="any" min="0"></div>
+    <div class="field"><label>Валюта</label><input type="text" id="offerCurrency" value="UAH"></div>
+    <div class="field"><label>Дата старту</label><input type="date" id="offerStartDate"></div>
+    <div class="field"><label>Формула бонусу</label><input type="text" id="offerBonusFormula"></div>
+    <div class="field"><label>KPI бонус</label><input type="text" id="offerKpiBonus"></div>
+    <div class="field"><label>Цілі на випробувальний</label><textarea id="offerProbationGoals" rows="2"></textarea></div>
+    <div class="field"><label>Дедлайн прийняття</label><input type="date" id="offerAcceptanceDeadline"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('offerOverlay')">Скасувати</button>
+      <button id="btnSaveOffer">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -430,23 +646,36 @@ async function loadDictionaries() {
   document.getElementById('empStatus').innerHTML = data.employeeStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
   document.getElementById('posStatus').innerHTML = data.positionStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
   document.getElementById('peopleStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.employeeStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+
+  document.getElementById('vrStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.vacancyRequestStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('vacStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.vacancyStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('appStageSelect').innerHTML = data.applicationStages.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('appStatusSelect').innerHTML = data.applicationStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('appRejectionReason').innerHTML = [...data.rejectionReasonsCompany, ...data.rejectionReasonsCandidate].map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('ivType').innerHTML = data.interviewTypes.map((s) => `<option value="${s}">${s}</option>`).join('');
 }
 
 // ---- Tabs ----
 
-const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg'];
+const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment'];
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
   document.getElementById('viewPeople').style.display = tab === 'people' ? '' : 'none';
   document.getElementById('viewEmployeeProfile').style.display = 'none';
   document.getElementById('viewOrg').style.display = tab === 'org' ? '' : 'none';
+  document.getElementById('viewRecruitment').style.display = tab === 'recruitment' ? '' : 'none';
+  document.getElementById('viewVacancyDetail').style.display = 'none';
+  document.getElementById('viewCandidateDetail').style.display = 'none';
+  document.getElementById('viewApplicationDetail').style.display = 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
+  document.getElementById('tabRecruitment').classList.toggle('active', tab === 'recruitment');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'people') loadPeople();
   if (tab === 'org') loadOrg();
+  if (tab === 'recruitment') showRecruitmentSubTab(window._recruitmentSubTab || 'requests');
 }
 
 // ---- Dashboard ----
@@ -1022,6 +1251,634 @@ document.getElementById('btnSavePosition').onclick = async () => {
   showToast('Збережено');
   loadOrg();
 };
+
+// ---- Recruitment / ATS ----
+
+function vrStatusTag(status) {
+  const cls = status === 'Approved' ? 'ok' : status === 'Pending Approval' ? 'warn' : status === 'Rejected' || status === 'Cancelled' ? 'bad' : status === 'Converted to Vacancy' ? 'accent' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+function vacStatusTag(status) {
+  const cls = status === 'Open' ? 'ok' : status === 'On Hold' ? 'warn' : status === 'Filled' ? 'accent' : status === 'Cancelled' || status === 'Closed' ? 'bad' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+function appStatusTag(status) {
+  const cls = status === 'Active' ? 'ok' : status === 'Hired' ? 'accent' : status === 'Rejected' ? 'bad' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+function offerStatusTag(status) {
+  const cls = status === 'Accepted' ? 'accent' : status === 'Sent' ? 'warn' : status === 'Declined' || status === 'Expired' ? 'bad' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+function ivStatusTag(status) {
+  const cls = status === 'Completed' ? 'ok' : status === 'Scheduled' ? 'warn' : status === 'No Show' ? 'bad' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+
+async function ensureRecruitmentRefsLoaded() {
+  if (!window._departmentsCache || !window._departmentsCache.length) {
+    const dResp = await apiFetch('/api/departments');
+    const dData = await dResp.json();
+    window._departmentsCache = dData.ok ? dData.departments : [];
+  }
+  if (!window._employeesCache || !window._employeesCache.length) {
+    const eResp = await apiFetch('/api/employees');
+    const eData = await eResp.json();
+    window._employeesCache = eData.ok ? eData.employees : [];
+  }
+}
+
+function showRecruitmentSubTab(tab) {
+  window._recruitmentSubTab = tab;
+  ['requests', 'vacancies', 'candidates'].forEach((t) => {
+    document.getElementById('recrPanel' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
+    document.getElementById('recrSub' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
+  });
+  if (tab === 'requests') loadVacancyRequests();
+  if (tab === 'vacancies') loadVacancies();
+  if (tab === 'candidates') loadCandidates();
+}
+
+// -- Vacancy Requests --
+
+async function loadVacancyRequests() {
+  const status = document.getElementById('vrStatusFilter').value;
+  const resp = await apiFetch('/api/vacancy-requests?' + new URLSearchParams({ status }));
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  const body = document.getElementById('vrTableBody');
+  const empty = document.getElementById('vrEmpty');
+  if (!data.requests.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = data.requests.map((r) => `
+    <tr class="clickable" onclick="openVacancyRequest(${r.id})">
+      <td>${escAttr(r.position_title)}</td>
+      <td>${escAttr(r.department_name)}</td>
+      <td>${r.quantity}</td>
+      <td>${escAttr(r.priority || '—')}</td>
+      <td>${vrStatusTag(r.status)}</td>
+      <td>${new Date(r.created_at).toLocaleDateString('uk-UA')}</td>
+    </tr>
+  `).join('');
+}
+document.getElementById('vrStatusFilter').addEventListener('change', loadVacancyRequests);
+
+document.getElementById('btnAddVacancyRequest').onclick = async () => {
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('vrModalTitle').textContent = 'Нова заявка на вакансію';
+  document.getElementById('vrId').value = '';
+  document.getElementById('vrPositionTitle').value = '';
+  document.getElementById('vrDepartment').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  document.getElementById('vrHiringManager').innerHTML = '<option value="">— не вказано —</option>' + window._employeesCache.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
+  document.getElementById('vrQuantity').value = 1;
+  document.getElementById('vrPriority').value = '';
+  document.getElementById('vrDesiredStartDate').value = '';
+  document.getElementById('vrRequestReason').value = '';
+  document.getElementById('vrResponsibilities').value = '';
+  document.getElementById('vrPortrait').value = '';
+  document.getElementById('vrCompProbation').value = '';
+  document.getElementById('vrCompAfter').value = '';
+  document.getElementById('vrNotes').value = '';
+  document.getElementById('vrStatusActions').style.display = 'none';
+  document.getElementById('vacancyRequestOverlay').classList.add('open');
+};
+
+async function openVacancyRequest(id) {
+  await ensureRecruitmentRefsLoaded();
+  const resp = await apiFetch('/api/vacancy-requests/' + id);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити заявку'); return; }
+  const r = data.request;
+  document.getElementById('vrModalTitle').textContent = 'Заявка на вакансію';
+  document.getElementById('vrId').value = r.id;
+  document.getElementById('vrPositionTitle').value = r.position_title;
+  document.getElementById('vrDepartment').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}" ${d.id === r.department_id ? 'selected' : ''}>${escAttr(d.name)}</option>`).join('');
+  document.getElementById('vrHiringManager').innerHTML = '<option value="">— не вказано —</option>' + window._employeesCache.map((e) => `<option value="${e.id}" ${e.id === r.hiring_manager_employee_id ? 'selected' : ''}>${escAttr(e.full_name)}</option>`).join('');
+  document.getElementById('vrQuantity').value = r.quantity;
+  document.getElementById('vrPriority').value = r.priority || '';
+  document.getElementById('vrDesiredStartDate').value = r.desired_start_date ? r.desired_start_date.slice(0, 10) : '';
+  document.getElementById('vrRequestReason').value = r.request_reason || '';
+  document.getElementById('vrResponsibilities').value = r.responsibilities || '';
+  document.getElementById('vrPortrait').value = r.ideal_candidate_portrait || '';
+  document.getElementById('vrCompProbation').value = r.compensation_probation || '';
+  document.getElementById('vrCompAfter').value = r.compensation_after_probation || '';
+  document.getElementById('vrNotes').value = r.notes || '';
+  document.getElementById('vrCurrentStatusTag').innerHTML = vrStatusTag(r.status);
+  document.getElementById('vrStatusActions').style.display = '';
+  document.getElementById('vacancyRequestOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveVacancyRequest').onclick = async () => {
+  const position_title = document.getElementById('vrPositionTitle').value.trim();
+  const department_id = document.getElementById('vrDepartment').value;
+  if (!position_title || !department_id) { showToast('Посада і департамент обов’язкові'); return; }
+  const body = {
+    position_title,
+    department_id,
+    hiring_manager_employee_id: document.getElementById('vrHiringManager').value || null,
+    quantity: document.getElementById('vrQuantity').value || 1,
+    priority: document.getElementById('vrPriority').value,
+    desired_start_date: document.getElementById('vrDesiredStartDate').value || null,
+    request_reason: document.getElementById('vrRequestReason').value.trim(),
+    responsibilities: document.getElementById('vrResponsibilities').value.trim(),
+    ideal_candidate_portrait: document.getElementById('vrPortrait').value.trim(),
+    compensation_probation: document.getElementById('vrCompProbation').value.trim(),
+    compensation_after_probation: document.getElementById('vrCompAfter').value.trim(),
+    notes: document.getElementById('vrNotes').value.trim()
+  };
+  const id = document.getElementById('vrId').value;
+  const url = id ? '/api/vacancy-requests/' + id : '/api/vacancy-requests';
+  const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('vacancyRequestOverlay');
+  showToast('Збережено');
+  loadVacancyRequests();
+};
+
+async function setVacancyRequestStatus(status) {
+  const id = document.getElementById('vrId').value;
+  if (!id) return;
+  const resp = await apiFetch('/api/vacancy-requests/' + id + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  showToast('Статус змінено');
+  document.getElementById('vrCurrentStatusTag').innerHTML = vrStatusTag(data.request.status);
+  loadVacancyRequests();
+}
+
+async function convertVacancyRequest() {
+  const id = document.getElementById('vrId').value;
+  if (!id) return;
+  const resp = await apiFetch('/api/vacancy-requests/' + id + '/convert', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося конвертувати'); return; }
+  showToast('Вакансію створено');
+  closeOverlay('vacancyRequestOverlay');
+  loadVacancyRequests();
+  showRecruitmentSubTab('vacancies');
+}
+
+// -- Vacancies --
+
+async function loadVacancies() {
+  const status = document.getElementById('vacStatusFilter').value;
+  const resp = await apiFetch('/api/vacancies?' + new URLSearchParams({ status }));
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  const body = document.getElementById('vacTableBody');
+  const empty = document.getElementById('vacEmpty');
+  if (!data.vacancies.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = data.vacancies.map((v) => `
+    <tr class="clickable" onclick="openVacancyDetail(${v.id})">
+      <td>${escAttr(v.title)}</td>
+      <td>${escAttr(v.department_name)}</td>
+      <td>${vacStatusTag(v.status)}</td>
+      <td>${v.active_applications_count}</td>
+      <td>${escAttr(v.recruiter_username || '—')}</td>
+    </tr>
+  `).join('');
+}
+document.getElementById('vacStatusFilter').addEventListener('change', loadVacancies);
+
+document.getElementById('btnAddVacancyDirect').onclick = async () => {
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('vacTitle').value = '';
+  document.getElementById('vacDepartment').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  document.getElementById('vacHiringManager').innerHTML = '<option value="">— не вказано —</option>' + window._employeesCache.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
+  document.getElementById('vacRecruiterUsername').value = '';
+  document.getElementById('vacPriority').value = '';
+  document.getElementById('vacancyDirectOverlay').classList.add('open');
+};
+
+document.getElementById('btnSaveVacancyDirect').onclick = async () => {
+  const title = document.getElementById('vacTitle').value.trim();
+  const department_id = document.getElementById('vacDepartment').value;
+  if (!title || !department_id) { showToast('Назва і департамент обов’язкові'); return; }
+  const body = {
+    title, department_id,
+    hiring_manager_employee_id: document.getElementById('vacHiringManager').value || null,
+    recruiter_username: document.getElementById('vacRecruiterUsername').value.trim(),
+    priority: document.getElementById('vacPriority').value
+  };
+  const resp = await apiFetch('/api/vacancies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('vacancyDirectOverlay');
+  showToast('Вакансію створено');
+  loadVacancies();
+};
+
+let currentVacancyId = null;
+
+async function openVacancyDetail(id) {
+  currentVacancyId = id;
+  document.getElementById('viewRecruitment').style.display = 'none';
+  document.getElementById('viewVacancyDetail').style.display = '';
+  await renderVacancyDetail();
+}
+
+async function renderVacancyDetail() {
+  const resp = await apiFetch('/api/vacancies/' + currentVacancyId);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити вакансію'); return; }
+  const v = data.vacancy;
+  document.getElementById('vacancyDetailHeader').innerHTML = `
+    <div style="font-size:20px; font-weight:700;">${escAttr(v.title)}</div>
+    <div style="color:var(--muted); font-size:13px;">${escAttr(v.department_name)} ${vacStatusTag(v.status)} ${v.priority ? '· ' + escAttr(v.priority) : ''} ${v.recruiter_username ? '· рекрутер: ' + escAttr(v.recruiter_username) : ''}</div>
+  `;
+  const body = document.getElementById('vacApplicationsBody');
+  const empty = document.getElementById('vacApplicationsEmpty');
+  if (!v.applications.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = v.applications.map((a) => `
+    <tr class="clickable" onclick='openApplicationDetail(${a.id}, { type: "vacancy", id: ${currentVacancyId} })'>
+      <td>${escAttr(a.candidate_name)}</td>
+      <td>${escAttr(a.candidate_phone || '—')}</td>
+      <td>${escAttr(a.stage)}</td>
+      <td>${appStatusTag(a.status)}</td>
+      <td>${new Date(a.applied_date).toLocaleDateString('uk-UA')}</td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('btnAddApplicationToVacancy').onclick = async () => {
+  const resp = await apiFetch('/api/candidates');
+  const data = await resp.json();
+  const candidates = data.ok ? data.candidates : [];
+  document.getElementById('appAddCandidateSelect').innerHTML = '<option value="">— обери кандидата —</option>' + candidates.map((c) => `<option value="${c.id}">${escAttr(c.full_name)}${c.phone ? ' · ' + escAttr(c.phone) : ''}</option>`).join('');
+  document.getElementById('appAddNewName').value = '';
+  document.getElementById('appAddNewPhone').value = '';
+  document.getElementById('appAddNewEmail').value = '';
+  document.getElementById('addApplicationOverlay').classList.add('open');
+};
+
+document.getElementById('btnConfirmAddApplication').onclick = async () => {
+  let candidateId = document.getElementById('appAddCandidateSelect').value;
+  if (!candidateId) {
+    const full_name = document.getElementById('appAddNewName').value.trim();
+    if (!full_name) { showToast('Обери кандидата або введи ПІБ нового'); return; }
+    const body = {
+      full_name,
+      phone: document.getElementById('appAddNewPhone').value.trim(),
+      personal_email: document.getElementById('appAddNewEmail').value.trim()
+    };
+    const cResp = await apiFetch('/api/candidates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const cData = await cResp.json();
+    if (!cData.ok) { showToast(cData.error || 'Не вдалося створити кандидата'); return; }
+    candidateId = cData.candidate.id;
+    if (cData.duplicate) showToast('Знайдено кандидата з таким телефоном/email — додаємо його');
+  }
+  const resp = await apiFetch('/api/applications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidate_id: candidateId, vacancy_id: currentVacancyId }) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося додати'); return; }
+  closeOverlay('addApplicationOverlay');
+  showToast('Кандидата додано');
+  renderVacancyDetail();
+};
+
+// -- Candidates --
+
+async function loadCandidates() {
+  const search = document.getElementById('candSearch').value.trim();
+  const resp = await apiFetch('/api/candidates?' + new URLSearchParams({ search }));
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  const body = document.getElementById('candTableBody');
+  const empty = document.getElementById('candEmpty');
+  if (!data.candidates.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = data.candidates.map((c) => `
+    <tr class="clickable" onclick="openCandidateDetail(${c.id})">
+      <td>${escAttr(c.full_name)}</td>
+      <td>${escAttr(c.phone || '—')}</td>
+      <td>${escAttr(c.personal_email || '—')}</td>
+      <td>${escAttr(c.source || '—')}</td>
+      <td>${c.active_applications_count}</td>
+    </tr>
+  `).join('');
+}
+document.getElementById('candSearch').addEventListener('input', () => {
+  clearTimeout(window._candSearchTimer);
+  window._candSearchTimer = setTimeout(loadCandidates, 250);
+});
+
+document.getElementById('btnAddCandidate').onclick = () => {
+  document.getElementById('candModalTitle').textContent = 'Новий кандидат';
+  document.getElementById('candId').value = '';
+  document.getElementById('candFullName').value = '';
+  document.getElementById('candPhone').value = '';
+  document.getElementById('candEmail').value = '';
+  document.getElementById('candCurrentJobTitle').value = '';
+  document.getElementById('candDesiredRole').value = '';
+  document.getElementById('candDesiredSalary').value = '';
+  document.getElementById('candSource').value = '';
+  document.getElementById('candResumeUrl').value = '';
+  document.getElementById('candNotes').value = '';
+  document.getElementById('candidateOverlay').classList.add('open');
+};
+
+async function openCandidateEdit(id) {
+  const resp = await apiFetch('/api/candidates/' + id);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити'); return; }
+  const c = data.candidate;
+  document.getElementById('candModalTitle').textContent = 'Редагувати кандидата';
+  document.getElementById('candId').value = c.id;
+  document.getElementById('candFullName').value = c.full_name;
+  document.getElementById('candPhone').value = c.phone || '';
+  document.getElementById('candEmail').value = c.personal_email || '';
+  document.getElementById('candCurrentJobTitle').value = c.current_job_title || '';
+  document.getElementById('candDesiredRole').value = c.desired_role || '';
+  document.getElementById('candDesiredSalary').value = c.desired_salary || '';
+  document.getElementById('candSource').value = c.source || '';
+  document.getElementById('candResumeUrl').value = c.resume_url || '';
+  document.getElementById('candNotes').value = c.notes || '';
+  document.getElementById('candidateOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveCandidate').onclick = async () => {
+  const full_name = document.getElementById('candFullName').value.trim();
+  if (!full_name) { showToast('ПІБ обов’язкове'); return; }
+  const id = document.getElementById('candId').value;
+  const recruitFields = {
+    current_job_title: document.getElementById('candCurrentJobTitle').value.trim(),
+    desired_role: document.getElementById('candDesiredRole').value.trim(),
+    desired_salary: document.getElementById('candDesiredSalary').value.trim(),
+    source: document.getElementById('candSource').value,
+    resume_url: document.getElementById('candResumeUrl').value.trim(),
+    notes: document.getElementById('candNotes').value.trim()
+  };
+  if (id) {
+    const personalBody = {
+      full_name,
+      phone: document.getElementById('candPhone').value.trim(),
+      personal_email: document.getElementById('candEmail').value.trim()
+    };
+    await apiFetch('/api/candidates/' + id + '/personal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(personalBody) });
+    const resp = await apiFetch('/api/candidates/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(recruitFields) });
+    const data = await resp.json();
+    if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+    closeOverlay('candidateOverlay');
+    showToast('Збережено');
+    if (currentCandidateId === Number(id)) renderCandidateDetail();
+    loadCandidates();
+  } else {
+    const body = { full_name,
+      phone: document.getElementById('candPhone').value.trim(),
+      personal_email: document.getElementById('candEmail').value.trim(),
+      ...recruitFields
+    };
+    const resp = await apiFetch('/api/candidates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await resp.json();
+    if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+    closeOverlay('candidateOverlay');
+    showToast(data.duplicate ? 'Кандидат з таким телефоном/email вже існує' : 'Кандидата додано');
+    loadCandidates();
+  }
+};
+
+let currentCandidateId = null;
+
+async function openCandidateDetail(id) {
+  currentCandidateId = id;
+  document.getElementById('viewRecruitment').style.display = 'none';
+  document.getElementById('viewCandidateDetail').style.display = '';
+  await renderCandidateDetail();
+}
+
+async function renderCandidateDetail() {
+  const resp = await apiFetch('/api/candidates/' + currentCandidateId);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити'); return; }
+  const c = data.candidate;
+  document.getElementById('candidateDetailHeader').innerHTML = `
+    <div style="font-size:20px; font-weight:700;">${escAttr(c.full_name)}</div>
+    <div style="color:var(--muted); font-size:13px;">${escAttr(c.phone || '—')} · ${escAttr(c.personal_email || '—')}</div>
+  `;
+  document.getElementById('candidateDetailFields').innerHTML = `
+    <div class="fieldItem"><label>Поточна посада</label>${escAttr(c.current_job_title || '—')}</div>
+    <div class="fieldItem"><label>Бажана посада</label>${escAttr(c.desired_role || '—')}</div>
+    <div class="fieldItem"><label>Бажана ЗП</label>${escAttr(c.desired_salary || '—')}</div>
+    <div class="fieldItem"><label>Джерело</label>${escAttr(c.source || '—')}</div>
+    <div class="fieldItem"><label>Резюме</label>${c.resume_url ? '<a href="' + escAttr(c.resume_url) + '" target="_blank" style="color:var(--accent2);">посилання</a>' : '—'}</div>
+    <div class="fieldItem"><label>Нотатки</label>${escAttr(c.notes || '—')}</div>
+  `;
+  const body = document.getElementById('candApplicationsBody');
+  const empty = document.getElementById('candApplicationsEmpty');
+  if (!c.applications.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = c.applications.map((a) => `
+    <tr class="clickable" onclick='openApplicationDetail(${a.id}, { type: "candidate", id: ${currentCandidateId} })'>
+      <td>${escAttr(a.vacancy_title)}</td>
+      <td>${escAttr(a.stage)}</td>
+      <td>${appStatusTag(a.status)}</td>
+      <td>${new Date(a.applied_date).toLocaleDateString('uk-UA')}</td>
+    </tr>
+  `).join('');
+}
+
+// -- Application detail (stage/status, interviews, offers) --
+
+let currentApplicationId = null;
+let applicationReturnTo = null;
+
+async function openApplicationDetail(id, returnTo) {
+  currentApplicationId = id;
+  applicationReturnTo = returnTo;
+  document.getElementById('viewVacancyDetail').style.display = 'none';
+  document.getElementById('viewCandidateDetail').style.display = 'none';
+  document.getElementById('viewApplicationDetail').style.display = '';
+  await renderApplicationDetail();
+}
+
+document.getElementById('btnBackFromApplication').onclick = () => {
+  if (applicationReturnTo && applicationReturnTo.type === 'vacancy') openVacancyDetail(applicationReturnTo.id);
+  else if (applicationReturnTo && applicationReturnTo.type === 'candidate') openCandidateDetail(applicationReturnTo.id);
+  else showTab('recruitment');
+};
+
+async function renderApplicationDetail() {
+  const resp = await apiFetch('/api/applications/' + currentApplicationId);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити заявку'); return; }
+  const a = data.application;
+  window._currentApplication = a;
+  document.getElementById('applicationDetailHeader').innerHTML = `
+    <div style="font-size:20px; font-weight:700;">${escAttr(a.candidate_name)} → ${escAttr(a.vacancy_title)}</div>
+    <div style="color:var(--muted); font-size:13px;">${escAttr(a.candidate_phone || '—')} · ${escAttr(a.candidate_email || '—')} ${appStatusTag(a.status)}</div>
+  `;
+  document.getElementById('appStageSelect').value = a.stage;
+  document.getElementById('appStatusSelect').value = a.status;
+  document.getElementById('appRejectionReason').value = a.rejection_reason || '';
+  document.getElementById('appRejectionComment').value = a.rejection_comment || '';
+  toggleRejectionFields();
+
+  renderApplicationInterviews(a.interviews);
+  renderApplicationOffers(a.offers);
+}
+
+function toggleRejectionFields() {
+  const isRejected = document.getElementById('appStatusSelect').value === 'Rejected';
+  document.getElementById('appRejectionReasonWrap').style.display = isRejected ? '' : 'none';
+  document.getElementById('appRejectionCommentWrap').style.display = isRejected ? '' : 'none';
+}
+document.getElementById('appStatusSelect').addEventListener('change', toggleRejectionFields);
+
+async function saveApplicationStageStatus() {
+  const stage = document.getElementById('appStageSelect').value;
+  const status = document.getElementById('appStatusSelect').value;
+  if (stage !== window._currentApplication.stage) {
+    const r1 = await apiFetch('/api/applications/' + currentApplicationId + '/stage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stage }) });
+    const d1 = await r1.json();
+    if (!d1.ok) { showToast(d1.error || 'Не вдалося змінити етап'); return; }
+  }
+  if (status !== window._currentApplication.status) {
+    const body = { status };
+    if (status === 'Rejected') {
+      body.rejection_reason = document.getElementById('appRejectionReason').value;
+      body.rejection_comment = document.getElementById('appRejectionComment').value.trim();
+      if (!body.rejection_reason) { showToast('Вкажи причину відмови'); return; }
+    }
+    const r2 = await apiFetch('/api/applications/' + currentApplicationId + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d2 = await r2.json();
+    if (!d2.ok) { showToast(d2.error || 'Не вдалося змінити статус'); return; }
+  }
+  showToast('Збережено');
+  renderApplicationDetail();
+}
+
+function renderApplicationInterviews(interviews) {
+  document.getElementById('applicationInterviews').innerHTML = interviews.length ? interviews.map((iv) => `
+    <div class="historyCard">
+      <div class="historyTitle">${escAttr(iv.interview_type || "Інтерв'ю")} ${ivStatusTag(iv.status)}</div>
+      <div class="historyMeta">${iv.scheduled_at ? new Date(iv.scheduled_at).toLocaleString('uk-UA') : 'дата не призначена'}${iv.participants ? ' · ' + escAttr(iv.participants) : ''}</div>
+      ${iv.notes ? '<div class="historyMeta">' + escAttr(iv.notes) + '</div>' : ''}
+      ${iv.decision ? '<div class="historyMeta">Рішення: ' + escAttr(iv.decision) + '</div>' : ''}
+      <div style="margin-top:6px;"><button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="editInterview(${iv.id})">✎ Оновити</button></div>
+    </div>
+  `).join('') : "<p style=\"color:var(--muted);\">Ще немає інтерв'ю.</p>";
+}
+
+function openAddInterview() {
+  document.getElementById('ivType').value = window._dict.interviewTypes[0] || '';
+  document.getElementById('ivScheduledAt').value = '';
+  document.getElementById('ivParticipants').value = '';
+  document.getElementById('ivNotes').value = '';
+  document.getElementById('interviewOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveInterview').onclick = async () => {
+  const body = {
+    interview_type: document.getElementById('ivType').value,
+    scheduled_at: document.getElementById('ivScheduledAt').value || null,
+    participants: document.getElementById('ivParticipants').value.trim(),
+    notes: document.getElementById('ivNotes').value.trim()
+  };
+  const resp = await apiFetch('/api/applications/' + currentApplicationId + '/interviews', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('interviewOverlay');
+  showToast("Інтерв'ю додано");
+  renderApplicationDetail();
+};
+
+function editInterview(id) {
+  const status = prompt('Статус (' + window._dict.interviewStatuses.join(', ') + '):', 'Completed');
+  if (!status) return;
+  if (!window._dict.interviewStatuses.includes(status)) { showToast('Невідомий статус'); return; }
+  const decision = prompt('Рішення (короткий текст, необов’язково):', '') || '';
+  apiFetch('/api/interviews/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status, decision }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      showToast('Оновлено');
+      renderApplicationDetail();
+    });
+}
+
+function renderApplicationOffers(offers) {
+  document.getElementById('applicationOffers').innerHTML = offers.length ? offers.map((o) => `
+    <div class="historyCard ${o.status === 'Accepted' ? 'current' : ''}">
+      <div class="historyTitle">${fmt(o.fixed_salary)} ${escAttr(o.currency)} ${offerStatusTag(o.status)}</div>
+      <div class="historyMeta">${o.start_date ? 'старт: ' + new Date(o.start_date).toLocaleDateString('uk-UA') : 'дата старту не вказана'}${o.acceptance_deadline ? ' · дедлайн: ' + new Date(o.acceptance_deadline).toLocaleDateString('uk-UA') : ''}</div>
+      ${o.bonus_formula ? '<div class="historyMeta">Бонус: ' + escAttr(o.bonus_formula) + '</div>' : ''}
+      ${o.employee_id ? '<div class="historyMeta">Створено співробітника #' + o.employee_id + '</div>' : ''}
+      <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${offerActionButtons(o)}</div>
+    </div>
+  `).join('') : '<p style="color:var(--muted);">Ще немає офера.</p>';
+}
+
+function offerActionButtons(o) {
+  if (o.status === 'Draft') {
+    return `<button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="editOffer(${o.id})">✎ Редагувати</button>
+      <button style="font-size:11px; padding:4px 8px;" onclick="setOfferStatus(${o.id}, 'Sent')">Надіслати</button>
+      <button class="bad" style="font-size:11px; padding:4px 8px;" onclick="setOfferStatus(${o.id}, 'Withdrawn')">Відкликати</button>`;
+  }
+  if (o.status === 'Sent') {
+    return `<button style="font-size:11px; padding:4px 8px;" onclick="setOfferStatus(${o.id}, 'Accepted')">Прийнято</button>
+      <button class="bad" style="font-size:11px; padding:4px 8px;" onclick="setOfferStatus(${o.id}, 'Declined')">Відхилено кандидатом</button>
+      <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="setOfferStatus(${o.id}, 'Expired')">Термін минув</button>`;
+  }
+  return '';
+}
+
+function openAddOffer() {
+  document.getElementById('offerModalTitle').textContent = 'Новий офер';
+  document.getElementById('offerId').value = '';
+  document.getElementById('offerSalary').value = '';
+  document.getElementById('offerCurrency').value = 'UAH';
+  document.getElementById('offerStartDate').value = '';
+  document.getElementById('offerBonusFormula').value = '';
+  document.getElementById('offerKpiBonus').value = '';
+  document.getElementById('offerProbationGoals').value = '';
+  document.getElementById('offerAcceptanceDeadline').value = '';
+  document.getElementById('offerOverlay').classList.add('open');
+}
+
+function editOffer(id) {
+  const offer = (window._currentApplication.offers || []).find((o) => o.id === id);
+  if (!offer) return;
+  document.getElementById('offerModalTitle').textContent = 'Редагувати офер';
+  document.getElementById('offerId').value = offer.id;
+  document.getElementById('offerSalary').value = offer.fixed_salary || '';
+  document.getElementById('offerCurrency').value = offer.currency || 'UAH';
+  document.getElementById('offerStartDate').value = offer.start_date ? offer.start_date.slice(0, 10) : '';
+  document.getElementById('offerBonusFormula').value = offer.bonus_formula || '';
+  document.getElementById('offerKpiBonus').value = offer.kpi_bonus || '';
+  document.getElementById('offerProbationGoals').value = offer.probation_goals || '';
+  document.getElementById('offerAcceptanceDeadline').value = offer.acceptance_deadline ? offer.acceptance_deadline.slice(0, 10) : '';
+  document.getElementById('offerOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveOffer').onclick = async () => {
+  const id = document.getElementById('offerId').value;
+  const body = {
+    fixed_salary: document.getElementById('offerSalary').value || null,
+    currency: document.getElementById('offerCurrency').value.trim() || 'UAH',
+    start_date: document.getElementById('offerStartDate').value || null,
+    bonus_formula: document.getElementById('offerBonusFormula').value.trim(),
+    kpi_bonus: document.getElementById('offerKpiBonus').value.trim(),
+    probation_goals: document.getElementById('offerProbationGoals').value.trim(),
+    acceptance_deadline: document.getElementById('offerAcceptanceDeadline').value || null
+  };
+  const url = id ? '/api/offers/' + id : '/api/applications/' + currentApplicationId + '/offers';
+  const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('offerOverlay');
+  showToast('Збережено');
+  renderApplicationDetail();
+};
+
+function setOfferStatus(id, status) {
+  apiFetch('/api/offers/' + id + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+      showToast(status === 'Accepted' ? 'Офер прийнято — створено Future Employee' : 'Статус оновлено');
+      renderApplicationDetail();
+    });
+}
 
 initApp();
 </script>
