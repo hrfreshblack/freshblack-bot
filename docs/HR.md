@@ -26,10 +26,15 @@
   - **Бібліотека шаблонів задач** (вкладка "Адаптація") — компанія в цілому, або конкретний департамент/посада, з етапом (Day 1/Week 1 → 14 → 30 → 60 → 90 днів) і дедлайном як зсув у днях від дати старту.
   - При **Offer Accepted** (і кнопкою "Згенерувати з шаблонів" у профілі співробітника) підходящі шаблони перетворюються на особисті задачі співробітника — ідемпотентно, шаблон не плодить задачу вдруге.
   - Вкладка **Onboarding** у Employee Master Card: preboarding-дані (локація, HR-контакт, документи, план першого дня, editable текст welcome-листа з генератором чорновика), **Probation control** (тривалість/ціль/дата завершення рахується автоматично, рішення Passed/Extended/Failed з обов'язковою причиною і новою датою при Extended), і самі задачі адаптації згруповані за етапом зі статусами Not Started/In Progress/Waiting/Completed/Skipped(з причиною) і обчисленим Overdue.
+- **Performance: 1:1, Review, OKR, KPI, PDP** (ТЗ розділ 25) — четвертий зріз:
+  - Вкладка **Performance** у Employee Master Card: зустрічі **1:1** (спільні нотатки, які бачить співробітник, окремо від приватних нотаток керівника/HR — розділення приватності з ТЗ; action items з відповідальним і дедлайном), **Performance Review** (period-based, історія зберігається — goals/results, компетенції, фідбек керівника, самооцінка, коментар HR, фінальний результат), **Development Plan (PDP)** (мета/навичка/дія/навчальний матеріал/критерій успіху зі статусами).
+  - Вкладка **OKR / KPI** у Employee Master Card — особисті OKR і KPI співробітника; окрема верхньорівнева вкладка **"OKR"** — objectives рівня компанії/департаменту і бібліотека **KPI-шаблонів за посадою** (KPI співробітника можна створити з шаблону — копіюються назва/метрика/ціль/вага, або вручну).
+  - OKR: Objective → Key Results з прогресом (авто-розрахунок % від start/target/current), Confidence (On Track/At Risk/Off Track), чек-іни з історією значень.
+  - KPI: ціль/факт/вага/period, автоматичний achievement % (факт/ціль).
 
 ## Чого свідомо ще немає (наступні кроки з великого ТЗ)
 
-Resume parsing/OCR, AI-аналіз і AI-мэтчинг кандидатів, формальні scorecard-шаблони для інтерв'ю, публікація вакансій на Work.ua/Robota.ua/Jooble, інтеграції з Google Calendar/Gmail/Telegram/Viber, генератор документів у PDF, Knowledge Base, Performance/1:1/OKR/KPI, Surveys/Engagement, HR Operations (відсутності), Offboarding workflow, повноцінна RBAC-матриця (зараз лише HRD з повним доступом — інші ролі з ТЗ п.4 ще не розмежовані по полях), Time & Attendance, AI Assistant, графічний Chart View оргструктури.
+Resume parsing/OCR, AI-аналіз і AI-мэтчинг кандидатів, формальні scorecard-шаблони для інтерв'ю, публікація вакансій на Work.ua/Robota.ua/Jooble, інтеграції з Google Calendar/Gmail/Telegram/Viber, генератор документів у PDF, Knowledge Base, Surveys/Engagement, HR Operations (відсутності), Offboarding workflow, повноцінна RBAC-матриця (зараз лише HRD з повним доступом — інші ролі з ТЗ п.4 ще не розмежовані по полях), Time & Attendance, AI Assistant, графічний Chart View оргструктури.
 
 ## Доступ
 

@@ -41,6 +41,17 @@ const ONBOARDING_TASK_STATUSES = ['Not Started', 'In Progress', 'Waiting', 'Comp
 const ONBOARDING_TEMPLATE_SCOPES = ['Company', 'Department', 'Position'];
 const PROBATION_DECISIONS = ['Passed', 'Extended', 'Failed'];
 
+// Performance / 1:1 / OKR / KPI / PDP (ТЗ розділ 25)
+const ONE_ON_ONE_STATUSES = ['Planned', 'Completed', 'Cancelled'];
+const ACTION_ITEM_STATUSES = ['Open', 'Done'];
+const PERFORMANCE_REVIEW_STATUSES = ['Draft', 'In Progress', 'Completed'];
+const OKR_OWNER_TYPES = ['Company', 'Department', 'Individual'];
+const OKR_OBJECTIVE_STATUSES = ['Draft', 'Active', 'Completed', 'Cancelled'];
+const OKR_CONFIDENCE_LEVELS = ['On Track', 'At Risk', 'Off Track'];
+const KPI_SOURCES = ['Manual', 'System'];
+const KPI_STATUSES = ['Active', 'Completed', 'Cancelled'];
+const PDP_ITEM_STATUSES = ['Not Started', 'In Progress', 'Completed', 'Cancelled'];
+
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hr_accounts (
@@ -381,6 +392,153 @@ async function initSchema() {
       welcome_letter_text TEXT NOT NULL DEFAULT '',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- ==================== Performance / 1:1 / OKR / KPI / PDP (ТЗ 25) ====================
+
+    -- 1:1 (ТЗ 25.1) — shared_notes бачить і співробітник, private_notes
+    -- лишається лише керівнику/HR (розділення приватності з ТЗ).
+    CREATE TABLE IF NOT EXISTS hr_one_on_ones (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      manager_employee_id INTEGER REFERENCES hr_employees(id),
+      meeting_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      cadence TEXT NOT NULL DEFAULT '',
+      shared_notes TEXT NOT NULL DEFAULT '',
+      private_notes TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Planned',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_1on1_employee ON hr_one_on_ones(employee_id);
+
+    CREATE TABLE IF NOT EXISTS hr_one_on_one_actions (
+      id SERIAL PRIMARY KEY,
+      one_on_one_id INTEGER NOT NULL REFERENCES hr_one_on_ones(id),
+      title TEXT NOT NULL,
+      owner_username TEXT NOT NULL DEFAULT '',
+      due_date DATE,
+      status TEXT NOT NULL DEFAULT 'Open',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_1on1_actions_meeting ON hr_one_on_one_actions(one_on_one_id);
+
+    -- Performance Review (ТЗ 25.2) — кожен період окремий запис, історія
+    -- зберігається (не перезаписується).
+    CREATE TABLE IF NOT EXISTS hr_performance_reviews (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      period_label TEXT NOT NULL DEFAULT '',
+      period_start DATE,
+      period_end DATE,
+      goals_results TEXT NOT NULL DEFAULT '',
+      competencies_notes TEXT NOT NULL DEFAULT '',
+      manager_feedback TEXT NOT NULL DEFAULT '',
+      employee_self_review TEXT NOT NULL DEFAULT '',
+      hr_comments TEXT NOT NULL DEFAULT '',
+      final_outcome TEXT NOT NULL DEFAULT '',
+      development_actions TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Draft',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_perf_reviews_employee ON hr_performance_reviews(employee_id);
+
+    -- OKR (ТЗ 25.3) — Objective може бути Company/Department/Individual;
+    -- parent_objective_id дозволяє roll-up вирівнювання.
+    CREATE TABLE IF NOT EXISTS hr_okr_objectives (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      owner_type TEXT NOT NULL DEFAULT 'Individual',
+      owner_department_id INTEGER REFERENCES hr_departments(id),
+      owner_employee_id INTEGER REFERENCES hr_employees(id),
+      parent_objective_id INTEGER REFERENCES hr_okr_objectives(id),
+      period TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Draft',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_okr_owner ON hr_okr_objectives(owner_type, owner_department_id, owner_employee_id);
+
+    CREATE TABLE IF NOT EXISTS hr_okr_key_results (
+      id SERIAL PRIMARY KEY,
+      objective_id INTEGER NOT NULL REFERENCES hr_okr_objectives(id),
+      title TEXT NOT NULL,
+      metric_unit TEXT NOT NULL DEFAULT '',
+      start_value NUMERIC NOT NULL DEFAULT 0,
+      target_value NUMERIC NOT NULL DEFAULT 0,
+      current_value NUMERIC NOT NULL DEFAULT 0,
+      confidence TEXT NOT NULL DEFAULT 'On Track',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_okr_kr_objective ON hr_okr_key_results(objective_id);
+
+    CREATE TABLE IF NOT EXISTS hr_okr_checkins (
+      id SERIAL PRIMARY KEY,
+      key_result_id INTEGER NOT NULL REFERENCES hr_okr_key_results(id),
+      value NUMERIC NOT NULL,
+      comment TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_okr_checkins_kr ON hr_okr_checkins(key_result_id);
+
+    -- KPI (ТЗ 25.4) — шаблони по посаді + фактичні KPI співробітника,
+    -- ізольовано скопійовані (не reference), щоб зміна шаблону не ламала
+    -- вже призначені KPI.
+    CREATE TABLE IF NOT EXISTS hr_kpi_templates (
+      id SERIAL PRIMARY KEY,
+      position_id INTEGER NOT NULL REFERENCES hr_positions(id),
+      name TEXT NOT NULL,
+      metric TEXT NOT NULL DEFAULT '',
+      target NUMERIC,
+      weight NUMERIC,
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_kpi_templates_position ON hr_kpi_templates(position_id);
+
+    CREATE TABLE IF NOT EXISTS hr_kpis (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      template_id INTEGER REFERENCES hr_kpi_templates(id),
+      name TEXT NOT NULL,
+      metric TEXT NOT NULL DEFAULT '',
+      target NUMERIC,
+      weight NUMERIC,
+      period TEXT NOT NULL DEFAULT '',
+      actual NUMERIC,
+      source TEXT NOT NULL DEFAULT 'Manual',
+      comment TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Active',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_kpis_employee ON hr_kpis(employee_id);
+
+    -- Development Plan / PDP (ТЗ 25.5)
+    CREATE TABLE IF NOT EXISTS hr_development_plan_items (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      goal TEXT NOT NULL,
+      skill_competency TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL DEFAULT '',
+      learning_item TEXT NOT NULL DEFAULT '',
+      owner_username TEXT NOT NULL DEFAULT '',
+      due_date DATE,
+      success_criteria TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Not Started',
+      review_date DATE,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_pdp_employee ON hr_development_plan_items(employee_id);
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -1719,6 +1877,337 @@ async function recordProbationDecision(employeeId, { decision, reason, new_end_d
   return rows[0];
 }
 
+// ---------------------------------------------------------------------
+// Performance — 1:1
+// ---------------------------------------------------------------------
+
+async function listOneOnOnes(employeeId) {
+  const { rows } = await pool.query(`
+    SELECT o.*, per.full_name AS manager_name
+    FROM hr_one_on_ones o
+    LEFT JOIN hr_employees mgr ON mgr.id = o.manager_employee_id
+    LEFT JOIN hr_persons per ON per.id = mgr.person_id
+    WHERE o.employee_id = $1
+    ORDER BY o.meeting_date DESC, o.id DESC
+  `, [employeeId]);
+  const withActions = [];
+  for (const row of rows) {
+    const { rows: actions } = await pool.query('SELECT * FROM hr_one_on_one_actions WHERE one_on_one_id = $1 ORDER BY id', [row.id]);
+    withActions.push({ ...row, actions });
+  }
+  return withActions;
+}
+
+async function createOneOnOne({ employee_id, manager_employee_id, meeting_date, cadence, shared_notes, private_notes, status }, createdBy) {
+  if (status && !ONE_ON_ONE_STATUSES.includes(status)) throw new Error(`Unknown 1:1 status: ${status}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_one_on_ones (employee_id, manager_employee_id, meeting_date, cadence, shared_notes, private_notes, status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [employee_id, manager_employee_id || null, meeting_date || new Date().toISOString().slice(0, 10), cadence || '',
+      shared_notes || '', private_notes || '', status || 'Planned', createdBy || '']
+  );
+  return rows[0];
+}
+
+async function updateOneOnOne(id, { meeting_date, cadence, shared_notes, private_notes, status }) {
+  if (status && !ONE_ON_ONE_STATUSES.includes(status)) throw new Error(`Unknown 1:1 status: ${status}`);
+  const { rows } = await pool.query(
+    `UPDATE hr_one_on_ones SET
+       meeting_date = COALESCE($2, meeting_date),
+       cadence = COALESCE($3, cadence),
+       shared_notes = COALESCE($4, shared_notes),
+       private_notes = COALESCE($5, private_notes),
+       status = COALESCE($6, status),
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, meeting_date ?? null, cadence ?? null, shared_notes ?? null, private_notes ?? null, status ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function addOneOnOneAction({ one_on_one_id, title, owner_username, due_date }) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_one_on_one_actions (one_on_one_id, title, owner_username, due_date) VALUES ($1,$2,$3,$4) RETURNING *`,
+    [one_on_one_id, title, owner_username || '', due_date || null]
+  );
+  return rows[0];
+}
+
+async function updateOneOnOneAction(id, { status }) {
+  if (status && !ACTION_ITEM_STATUSES.includes(status)) throw new Error(`Unknown action item status: ${status}`);
+  const { rows } = await pool.query(
+    `UPDATE hr_one_on_one_actions SET status = COALESCE($2, status) WHERE id = $1 RETURNING *`,
+    [id, status ?? null]
+  );
+  return rows[0] || null;
+}
+
+// ---------------------------------------------------------------------
+// Performance Review
+// ---------------------------------------------------------------------
+
+async function listPerformanceReviews(employeeId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM hr_performance_reviews WHERE employee_id = $1 ORDER BY COALESCE(period_start, created_at::date) DESC, id DESC`,
+    [employeeId]
+  );
+  return rows;
+}
+
+async function createPerformanceReview({ employee_id, period_label, period_start, period_end, goals_results, competencies_notes,
+  manager_feedback, employee_self_review, hr_comments, final_outcome, development_actions, status }, createdBy) {
+  if (status && !PERFORMANCE_REVIEW_STATUSES.includes(status)) throw new Error(`Unknown review status: ${status}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_performance_reviews (employee_id, period_label, period_start, period_end, goals_results, competencies_notes,
+       manager_feedback, employee_self_review, hr_comments, final_outcome, development_actions, status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [employee_id, period_label || '', period_start || null, period_end || null, goals_results || '', competencies_notes || '',
+      manager_feedback || '', employee_self_review || '', hr_comments || '', final_outcome || '', development_actions || '',
+      status || 'Draft', createdBy || '']
+  );
+  await writeAudit({ actor: createdBy, action: 'create', entity_type: 'performance_review', entity_id: rows[0].id, new_value: { period_label } });
+  return rows[0];
+}
+
+async function updatePerformanceReview(id, fields) {
+  if (fields.status && !PERFORMANCE_REVIEW_STATUSES.includes(fields.status)) throw new Error(`Unknown review status: ${fields.status}`);
+  const cols = ['period_label', 'period_start', 'period_end', 'goals_results', 'competencies_notes', 'manager_feedback',
+    'employee_self_review', 'hr_comments', 'final_outcome', 'development_actions', 'status'].filter((c) => fields[c] !== undefined);
+  if (!cols.length) {
+    const { rows } = await pool.query('SELECT * FROM hr_performance_reviews WHERE id = $1', [id]);
+    return rows[0] || null;
+  }
+  const setClause = cols.map((c, i) => `${c} = $${i + 2}`).join(', ');
+  const { rows } = await pool.query(
+    `UPDATE hr_performance_reviews SET ${setClause}, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, ...cols.map((c) => fields[c])]
+  );
+  return rows[0] || null;
+}
+
+// ---------------------------------------------------------------------
+// OKR
+// ---------------------------------------------------------------------
+
+function withKeyResultProgress(kr) {
+  const span = Number(kr.target_value) - Number(kr.start_value);
+  const progress_pct = span !== 0 ? Math.round(((Number(kr.current_value) - Number(kr.start_value)) / span) * 1000) / 10 : null;
+  return { ...kr, progress_pct };
+}
+
+async function listObjectives({ owner_type = '', owner_department_id = null, owner_employee_id = null, period = '' } = {}) {
+  const conditions = [];
+  const params = [];
+  if (owner_type) { params.push(owner_type); conditions.push(`o.owner_type = $${params.length}`); }
+  if (owner_department_id) { params.push(owner_department_id); conditions.push(`o.owner_department_id = $${params.length}`); }
+  if (owner_employee_id) { params.push(owner_employee_id); conditions.push(`o.owner_employee_id = $${params.length}`); }
+  if (period) { params.push(period); conditions.push(`o.period = $${params.length}`); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(`
+    SELECT o.*, d.name AS department_name, per.full_name AS employee_name
+    FROM hr_okr_objectives o
+    LEFT JOIN hr_departments d ON d.id = o.owner_department_id
+    LEFT JOIN hr_employees emp ON emp.id = o.owner_employee_id
+    LEFT JOIN hr_persons per ON per.id = emp.person_id
+    ${where}
+    ORDER BY o.period DESC, o.created_at DESC
+  `, params);
+  return rows;
+}
+
+async function getObjective(id) {
+  const { rows } = await pool.query(`
+    SELECT o.*, d.name AS department_name, per.full_name AS employee_name
+    FROM hr_okr_objectives o
+    LEFT JOIN hr_departments d ON d.id = o.owner_department_id
+    LEFT JOIN hr_employees emp ON emp.id = o.owner_employee_id
+    LEFT JOIN hr_persons per ON per.id = emp.person_id
+    WHERE o.id = $1
+  `, [id]);
+  if (!rows[0]) return null;
+  const { rows: krs } = await pool.query('SELECT * FROM hr_okr_key_results WHERE objective_id = $1 ORDER BY id', [id]);
+  const keyResults = [];
+  for (const kr of krs) {
+    const { rows: checkins } = await pool.query('SELECT * FROM hr_okr_checkins WHERE key_result_id = $1 ORDER BY created_at DESC', [kr.id]);
+    keyResults.push({ ...withKeyResultProgress(kr), checkins });
+  }
+  return { ...rows[0], key_results: keyResults };
+}
+
+async function createObjective({ title, description, owner_type, owner_department_id, owner_employee_id, parent_objective_id, period }, createdBy) {
+  if (!OKR_OWNER_TYPES.includes(owner_type)) throw new Error(`Unknown OKR owner type: ${owner_type}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_okr_objectives (title, description, owner_type, owner_department_id, owner_employee_id, parent_objective_id, period, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [title, description || '', owner_type, owner_type === 'Department' ? owner_department_id || null : null,
+      owner_type === 'Individual' ? owner_employee_id || null : null, parent_objective_id || null, period || '', createdBy || '']
+  );
+  return rows[0];
+}
+
+async function updateObjectiveStatus(id, status) {
+  if (!OKR_OBJECTIVE_STATUSES.includes(status)) throw new Error(`Unknown objective status: ${status}`);
+  const { rows } = await pool.query(
+    `UPDATE hr_okr_objectives SET status = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, status]
+  );
+  return rows[0] || null;
+}
+
+async function createKeyResult({ objective_id, title, metric_unit, start_value, target_value, current_value }) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_okr_key_results (objective_id, title, metric_unit, start_value, target_value, current_value)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [objective_id, title, metric_unit || '', start_value ?? 0, target_value ?? 0, current_value ?? (start_value ?? 0)]
+  );
+  return withKeyResultProgress(rows[0]);
+}
+
+async function addOkrCheckin({ key_result_id, value, comment }, createdBy) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: checkinRows } = await client.query(
+      `INSERT INTO hr_okr_checkins (key_result_id, value, comment, created_by) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [key_result_id, value, comment || '', createdBy || '']
+    );
+    const { rows: krRows } = await client.query(
+      `UPDATE hr_okr_key_results SET current_value = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+      [key_result_id, value]
+    );
+    await client.query('COMMIT');
+    return { checkin: checkinRows[0], key_result: withKeyResultProgress(krRows[0]) };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateKeyResultConfidence(id, confidence) {
+  if (!OKR_CONFIDENCE_LEVELS.includes(confidence)) throw new Error(`Unknown confidence level: ${confidence}`);
+  const { rows } = await pool.query(
+    `UPDATE hr_okr_key_results SET confidence = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, confidence]
+  );
+  return rows[0] ? withKeyResultProgress(rows[0]) : null;
+}
+
+// ---------------------------------------------------------------------
+// KPI
+// ---------------------------------------------------------------------
+
+async function listKpiTemplates({ position_id = null } = {}) {
+  const conditions = ['t.active = true'];
+  const params = [];
+  if (position_id) { params.push(position_id); conditions.push(`t.position_id = $${params.length}`); }
+  const { rows } = await pool.query(`
+    SELECT t.*, p.title AS position_title
+    FROM hr_kpi_templates t JOIN hr_positions p ON p.id = t.position_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY p.title, t.name
+  `, params);
+  return rows;
+}
+
+async function createKpiTemplate({ position_id, name, metric, target, weight }) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_kpi_templates (position_id, name, metric, target, weight) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [position_id, name, metric || '', target ?? null, weight ?? null]
+  );
+  return rows[0];
+}
+
+async function updateKpiTemplate(id, { name, metric, target, weight, active }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_kpi_templates SET
+       name = COALESCE($2, name), metric = COALESCE($3, metric), target = COALESCE($4, target),
+       weight = COALESCE($5, weight), active = COALESCE($6, active)
+     WHERE id = $1 RETURNING *`,
+    [id, name ?? null, metric ?? null, target ?? null, weight ?? null, active ?? null]
+  );
+  return rows[0] || null;
+}
+
+function withKpiAchievement(kpi) {
+  const achievement_pct = (kpi.target && Number(kpi.target) !== 0 && kpi.actual != null)
+    ? Math.round((Number(kpi.actual) / Number(kpi.target)) * 1000) / 10
+    : null;
+  return { ...kpi, achievement_pct };
+}
+
+async function listKpisForEmployee(employeeId) {
+  const { rows } = await pool.query('SELECT * FROM hr_kpis WHERE employee_id = $1 ORDER BY created_at DESC', [employeeId]);
+  return rows.map(withKpiAchievement);
+}
+
+async function createKpiForEmployee({ employee_id, template_id, name, metric, target, weight, period, source }, createdBy) {
+  let base = { name, metric, target, weight };
+  if (template_id) {
+    const { rows: tRows } = await pool.query('SELECT * FROM hr_kpi_templates WHERE id = $1', [template_id]);
+    if (tRows[0]) {
+      base = {
+        name: name || tRows[0].name,
+        metric: metric || tRows[0].metric,
+        target: target ?? tRows[0].target,
+        weight: weight ?? tRows[0].weight
+      };
+    }
+  }
+  if (source && !KPI_SOURCES.includes(source)) throw new Error(`Unknown KPI source: ${source}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_kpis (employee_id, template_id, name, metric, target, weight, period, source, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [employee_id, template_id || null, base.name, base.metric || '', base.target ?? null, base.weight ?? null,
+      period || '', source || 'Manual', createdBy || '']
+  );
+  return withKpiAchievement(rows[0]);
+}
+
+async function updateKpi(id, { actual, comment, status }) {
+  if (status && !KPI_STATUSES.includes(status)) throw new Error(`Unknown KPI status: ${status}`);
+  const { rows } = await pool.query(
+    `UPDATE hr_kpis SET
+       actual = COALESCE($2, actual), comment = COALESCE($3, comment), status = COALESCE($4, status), updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, actual ?? null, comment ?? null, status ?? null]
+  );
+  return rows[0] ? withKpiAchievement(rows[0]) : null;
+}
+
+// ---------------------------------------------------------------------
+// Development Plan / PDP
+// ---------------------------------------------------------------------
+
+async function listDevelopmentPlanItems(employeeId) {
+  const { rows } = await pool.query('SELECT * FROM hr_development_plan_items WHERE employee_id = $1 ORDER BY due_date NULLS LAST, id DESC', [employeeId]);
+  return rows;
+}
+
+async function createDevelopmentPlanItem({ employee_id, goal, skill_competency, action, learning_item, owner_username, due_date, success_criteria, review_date }, createdBy) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_development_plan_items (employee_id, goal, skill_competency, action, learning_item, owner_username, due_date, success_criteria, review_date, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    [employee_id, goal, skill_competency || '', action || '', learning_item || '', owner_username || '', due_date || null,
+      success_criteria || '', review_date || null, createdBy || '']
+  );
+  return rows[0];
+}
+
+async function updateDevelopmentPlanItem(id, { status, action, learning_item, due_date, success_criteria, review_date }) {
+  if (status && !PDP_ITEM_STATUSES.includes(status)) throw new Error(`Unknown PDP item status: ${status}`);
+  const { rows } = await pool.query(
+    `UPDATE hr_development_plan_items SET
+       status = COALESCE($2, status), action = COALESCE($3, action), learning_item = COALESCE($4, learning_item),
+       due_date = COALESCE($5, due_date), success_criteria = COALESCE($6, success_criteria), review_date = COALESCE($7, review_date),
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, status ?? null, action ?? null, learning_item ?? null, due_date ?? null, success_criteria ?? null, review_date ?? null]
+  );
+  return rows[0] || null;
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -1800,5 +2289,38 @@ export default {
   upsertPreboardingInfo,
   buildWelcomeLetterText,
   setProbation,
-  recordProbationDecision
+  recordProbationDecision,
+  ONE_ON_ONE_STATUSES,
+  ACTION_ITEM_STATUSES,
+  PERFORMANCE_REVIEW_STATUSES,
+  OKR_OWNER_TYPES,
+  OKR_OBJECTIVE_STATUSES,
+  OKR_CONFIDENCE_LEVELS,
+  KPI_SOURCES,
+  KPI_STATUSES,
+  PDP_ITEM_STATUSES,
+  listOneOnOnes,
+  createOneOnOne,
+  updateOneOnOne,
+  addOneOnOneAction,
+  updateOneOnOneAction,
+  listPerformanceReviews,
+  createPerformanceReview,
+  updatePerformanceReview,
+  listObjectives,
+  getObjective,
+  createObjective,
+  updateObjectiveStatus,
+  createKeyResult,
+  addOkrCheckin,
+  updateKeyResultConfidence,
+  listKpiTemplates,
+  createKpiTemplate,
+  updateKpiTemplate,
+  listKpisForEmployee,
+  createKpiForEmployee,
+  updateKpi,
+  listDevelopmentPlanItems,
+  createDevelopmentPlanItem,
+  updateDevelopmentPlanItem
 };

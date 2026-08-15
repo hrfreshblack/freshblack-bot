@@ -166,7 +166,16 @@ app.get('/api/dictionaries', (req, res) => {
     onboardingMilestones: db.ONBOARDING_MILESTONES,
     onboardingTaskStatuses: db.ONBOARDING_TASK_STATUSES,
     onboardingTemplateScopes: db.ONBOARDING_TEMPLATE_SCOPES,
-    probationDecisions: db.PROBATION_DECISIONS
+    probationDecisions: db.PROBATION_DECISIONS,
+    oneOnOneStatuses: db.ONE_ON_ONE_STATUSES,
+    actionItemStatuses: db.ACTION_ITEM_STATUSES,
+    performanceReviewStatuses: db.PERFORMANCE_REVIEW_STATUSES,
+    okrOwnerTypes: db.OKR_OWNER_TYPES,
+    okrObjectiveStatuses: db.OKR_OBJECTIVE_STATUSES,
+    okrConfidenceLevels: db.OKR_CONFIDENCE_LEVELS,
+    kpiSources: db.KPI_SOURCES,
+    kpiStatuses: db.KPI_STATUSES,
+    pdpItemStatuses: db.PDP_ITEM_STATUSES
   });
 });
 
@@ -913,6 +922,326 @@ app.post('/api/employees/:id/probation-decision', requireRole(), async (req, res
   } catch (error) {
     console.error('POST /api/employees/:id/probation-decision ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти рішення' });
+  }
+});
+
+// ---- Performance: 1:1 ----
+
+app.get('/api/employees/:id/one-on-ones', async (req, res) => {
+  try {
+    const meetings = await db.listOneOnOnes(Number(req.params.id));
+    res.json({ ok: true, meetings });
+  } catch (error) {
+    console.error('GET /api/employees/:id/one-on-ones ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати 1:1' });
+  }
+});
+
+app.post('/api/employees/:id/one-on-ones', requireRole(), async (req, res) => {
+  try {
+    const meeting = await db.createOneOnOne({ ...(req.body || {}), employee_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, meeting });
+  } catch (error) {
+    console.error('POST /api/employees/:id/one-on-ones ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/one-on-ones/:id', requireRole(), async (req, res) => {
+  try {
+    const meeting = await db.updateOneOnOne(Number(req.params.id), req.body || {});
+    if (!meeting) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, meeting });
+  } catch (error) {
+    console.error('POST /api/one-on-ones/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.post('/api/one-on-ones/:id/actions', requireRole(), async (req, res) => {
+  try {
+    const action = await db.addOneOnOneAction({ ...(req.body || {}), one_on_one_id: Number(req.params.id) });
+    res.json({ ok: true, action });
+  } catch (error) {
+    console.error('POST /api/one-on-ones/:id/actions ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/one-on-one-actions/:id', requireRole(), async (req, res) => {
+  try {
+    const action = await db.updateOneOnOneAction(Number(req.params.id), req.body || {});
+    if (!action) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, action });
+  } catch (error) {
+    console.error('POST /api/one-on-one-actions/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+// ---- Performance Review ----
+
+app.get('/api/employees/:id/performance-reviews', async (req, res) => {
+  try {
+    const reviews = await db.listPerformanceReviews(Number(req.params.id));
+    res.json({ ok: true, reviews });
+  } catch (error) {
+    console.error('GET /api/employees/:id/performance-reviews ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати ревʼю' });
+  }
+});
+
+app.post('/api/employees/:id/performance-reviews', requireRole(), async (req, res) => {
+  try {
+    const review = await db.createPerformanceReview({ ...(req.body || {}), employee_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, review });
+  } catch (error) {
+    console.error('POST /api/employees/:id/performance-reviews ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/performance-reviews/:id', requireRole(), async (req, res) => {
+  try {
+    const review = await db.updatePerformanceReview(Number(req.params.id), req.body || {});
+    if (!review) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, review });
+  } catch (error) {
+    console.error('POST /api/performance-reviews/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+// ---- OKR ----
+
+app.get('/api/okr-objectives', async (req, res) => {
+  try {
+    const { owner_type, period } = req.query;
+    const owner_department_id = req.query.owner_department_id ? Number(req.query.owner_department_id) : null;
+    const owner_employee_id = req.query.owner_employee_id ? Number(req.query.owner_employee_id) : null;
+    const objectives = await db.listObjectives({ owner_type: owner_type || '', owner_department_id, owner_employee_id, period: period || '' });
+    res.json({ ok: true, objectives });
+  } catch (error) {
+    console.error('GET /api/okr-objectives ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати OKR' });
+  }
+});
+
+app.get('/api/okr-objectives/:id', async (req, res) => {
+  try {
+    const objective = await db.getObjective(Number(req.params.id));
+    if (!objective) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, objective });
+  } catch (error) {
+    console.error('GET /api/okr-objectives/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.post('/api/okr-objectives', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title || !body.owner_type) {
+      res.status(400).json({ ok: false, error: 'Назва і тип власника обов’язкові' });
+      return;
+    }
+    const objective = await db.createObjective(body, req.account.username);
+    res.json({ ok: true, objective });
+  } catch (error) {
+    console.error('POST /api/okr-objectives ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/okr-objectives/:id/status', requireRole(), async (req, res) => {
+  try {
+    const objective = await db.updateObjectiveStatus(Number(req.params.id), (req.body || {}).status);
+    if (!objective) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, objective });
+  } catch (error) {
+    console.error('POST /api/okr-objectives/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+app.post('/api/okr-objectives/:id/key-results', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title) {
+      res.status(400).json({ ok: false, error: 'Назва обов’язкова' });
+      return;
+    }
+    const keyResult = await db.createKeyResult({ ...body, objective_id: Number(req.params.id) });
+    res.json({ ok: true, keyResult });
+  } catch (error) {
+    console.error('POST /api/okr-objectives/:id/key-results ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/okr-key-results/:id/checkins', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.value === undefined || body.value === null || body.value === '') {
+      res.status(400).json({ ok: false, error: 'Значення обов’язкове' });
+      return;
+    }
+    const result = await db.addOkrCheckin({ ...body, key_result_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('POST /api/okr-key-results/:id/checkins ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.post('/api/okr-key-results/:id/confidence', requireRole(), async (req, res) => {
+  try {
+    const keyResult = await db.updateKeyResultConfidence(Number(req.params.id), (req.body || {}).confidence);
+    if (!keyResult) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, keyResult });
+  } catch (error) {
+    console.error('POST /api/okr-key-results/:id/confidence ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+// ---- KPI ----
+
+app.get('/api/kpi-templates', async (req, res) => {
+  try {
+    const position_id = req.query.position_id ? Number(req.query.position_id) : null;
+    const templates = await db.listKpiTemplates({ position_id });
+    res.json({ ok: true, templates });
+  } catch (error) {
+    console.error('GET /api/kpi-templates ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати шаблони KPI' });
+  }
+});
+
+app.post('/api/kpi-templates', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.position_id || !body.name) {
+      res.status(400).json({ ok: false, error: 'Посада і назва обов’язкові' });
+      return;
+    }
+    const template = await db.createKpiTemplate(body);
+    res.json({ ok: true, template });
+  } catch (error) {
+    console.error('POST /api/kpi-templates ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/kpi-templates/:id', requireRole(), async (req, res) => {
+  try {
+    const template = await db.updateKpiTemplate(Number(req.params.id), req.body || {});
+    if (!template) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, template });
+  } catch (error) {
+    console.error('POST /api/kpi-templates/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+app.get('/api/employees/:id/kpis', async (req, res) => {
+  try {
+    const kpis = await db.listKpisForEmployee(Number(req.params.id));
+    res.json({ ok: true, kpis });
+  } catch (error) {
+    console.error('GET /api/employees/:id/kpis ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати KPI' });
+  }
+});
+
+app.post('/api/employees/:id/kpis', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.template_id && !body.name) {
+      res.status(400).json({ ok: false, error: 'Обери шаблон або вкажи назву' });
+      return;
+    }
+    const kpi = await db.createKpiForEmployee({ ...body, employee_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, kpi });
+  } catch (error) {
+    console.error('POST /api/employees/:id/kpis ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/kpis/:id', requireRole(), async (req, res) => {
+  try {
+    const kpi = await db.updateKpi(Number(req.params.id), req.body || {});
+    if (!kpi) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, kpi });
+  } catch (error) {
+    console.error('POST /api/kpis/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+// ---- Development Plan / PDP ----
+
+app.get('/api/employees/:id/development-plan', async (req, res) => {
+  try {
+    const items = await db.listDevelopmentPlanItems(Number(req.params.id));
+    res.json({ ok: true, items });
+  } catch (error) {
+    console.error('GET /api/employees/:id/development-plan ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.post('/api/employees/:id/development-plan', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.goal) {
+      res.status(400).json({ ok: false, error: 'Мета обов’язкова' });
+      return;
+    }
+    const item = await db.createDevelopmentPlanItem({ ...body, employee_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, item });
+  } catch (error) {
+    console.error('POST /api/employees/:id/development-plan ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/development-plan/:id', requireRole(), async (req, res) => {
+  try {
+    const item = await db.updateDevelopmentPlanItem(Number(req.params.id), req.body || {});
+    if (!item) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, item });
+  } catch (error) {
+    console.error('POST /api/development-plan/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
   }
 });
 

@@ -158,6 +158,7 @@
     <button id="tabOrg" onclick="showTab('org')">Оргструктура</button>
     <button id="tabRecruitment" onclick="showTab('recruitment')">Рекрутинг</button>
     <button id="tabOnboardingTemplates" onclick="showTab('onboardingTemplates')">Адаптація</button>
+    <button id="tabOkr" onclick="showTab('okr')">OKR</button>
   </nav>
 </header>
 
@@ -188,6 +189,8 @@
       <button onclick="showProfileTab('employment')">Employment</button>
       <button onclick="showProfileTab('compensation')">Compensation</button>
       <button onclick="showProfileTab('onboarding')">Onboarding</button>
+      <button onclick="showProfileTab('performance')">Performance</button>
+      <button onclick="showProfileTab('okr')">OKR / KPI</button>
       <button onclick="showProfileTab('changes')">Changes</button>
     </div>
     <div class="profilePanel active" id="profileOverview"></div>
@@ -195,6 +198,8 @@
     <div class="profilePanel" id="profileEmployment"></div>
     <div class="profilePanel" id="profileCompensation"></div>
     <div class="profilePanel" id="profileOnboarding"></div>
+    <div class="profilePanel" id="profilePerformance"></div>
+    <div class="profilePanel" id="profileOkr"></div>
     <div class="profilePanel" id="profileChanges"></div>
   </div>
 
@@ -298,6 +303,24 @@
     <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Бібліотека задач адаптації — компанія в цілому, або конкретний департамент/посада. При прийнятті офера (і кнопкою "Згенерувати з шаблонів" у профілі співробітника) підходящі шаблони перетворюються на особисті задачі співробітника.</p>
     <div class="tableWrap"><table><thead><tr><th>Етап</th><th>Назва</th><th>Область</th><th>Дедлайн (днів від старту)</th><th>Відповідальний</th><th></th></tr></thead><tbody id="obtTemplatesBody"></tbody></table></div>
     <div class="empty" id="obtTemplatesEmpty" style="display:none;">Шаблонів ще немає.</div>
+  </div>
+
+  <div id="viewOkr" style="display:none;">
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:0 0 8px;">Objectives (компанія / департаменти)</h3>
+    <div class="viewToolbar">
+      <select id="okrPeriodFilter"><option value="">— усі періоди —</option></select>
+      <button id="btnAddOkrObjective">+ Objective</button>
+    </div>
+    <div id="okrObjectivesList"></div>
+    <div class="empty" id="okrObjectivesEmpty" style="display:none;">Objectives ще немає.</div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:28px 0 8px;">Шаблони KPI за посадою</h3>
+    <div class="viewToolbar">
+      <select id="kpiTplFilterPosition"><option value="">— усі посади —</option></select>
+      <button class="secondary" id="btnAddKpiTemplate">+ Шаблон KPI</button>
+    </div>
+    <div class="tableWrap"><table><thead><tr><th>Посада</th><th>Назва</th><th>Метрика</th><th>Ціль</th><th>Вага</th></tr></thead><tbody id="kpiTplBody"></tbody></table></div>
+    <div class="empty" id="kpiTplEmpty" style="display:none;">Шаблонів KPI ще немає.</div>
   </div>
 
 </main>
@@ -594,6 +617,143 @@
   </div>
 </div>
 
+<!-- Модалка: 1:1 -->
+<div class="overlay" id="oneOnOneOverlay">
+  <div class="modal" style="max-width: 560px;">
+    <h2>Нова зустріч 1:1</h2>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Дата</label><input type="date" id="oooDate"></div>
+      <div class="fieldItem"><label>Керівник</label><select id="oooManager"><option value="">— не вказано —</option></select></div>
+      <div class="fieldItem"><label>Каденція</label><input type="text" id="oooCadence" placeholder="weekly / biweekly / monthly"></div>
+      <div class="fieldItem"><label>Статус</label><select id="oooStatus"></select></div>
+    </div>
+    <div class="field"><label>Спільні нотатки (бачить співробітник)</label><textarea id="oooSharedNotes" rows="3"></textarea></div>
+    <div class="field"><label>Приватні нотатки (лише керівник/HR)</label><textarea id="oooPrivateNotes" rows="3"></textarea></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('oneOnOneOverlay')">Скасувати</button>
+      <button id="btnSaveOneOnOne">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: Performance Review -->
+<div class="overlay" id="performanceReviewOverlay">
+  <div class="modal" style="max-width: 620px;">
+    <h2>Новий Performance Review</h2>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Період (текст)</label><input type="text" id="prPeriodLabel" placeholder="напр. 2026 H1"></div>
+      <div class="fieldItem"><label>Статус</label><select id="prStatus"></select></div>
+      <div class="fieldItem"><label>З</label><input type="date" id="prPeriodStart"></div>
+      <div class="fieldItem"><label>По</label><input type="date" id="prPeriodEnd"></div>
+    </div>
+    <div class="field"><label>Цілі / результати</label><textarea id="prGoalsResults" rows="2"></textarea></div>
+    <div class="field"><label>Компетенції</label><textarea id="prCompetencies" rows="2"></textarea></div>
+    <div class="field"><label>Фідбек керівника</label><textarea id="prManagerFeedback" rows="2"></textarea></div>
+    <div class="field"><label>Самооцінка співробітника</label><textarea id="prSelfReview" rows="2"></textarea></div>
+    <div class="field"><label>Коментар HR</label><textarea id="prHrComments" rows="2"></textarea></div>
+    <div class="field"><label>Фінальний результат</label><input type="text" id="prFinalOutcome"></div>
+    <div class="field"><label>Дії з розвитку</label><textarea id="prDevActions" rows="2"></textarea></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('performanceReviewOverlay')">Скасувати</button>
+      <button id="btnSavePerformanceReview">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: PDP item -->
+<div class="overlay" id="pdpItemOverlay">
+  <div class="modal">
+    <h2>Нова ціль розвитку</h2>
+    <div class="field"><label>Мета</label><input type="text" id="pdpGoal"></div>
+    <div class="field"><label>Навичка / компетенція</label><input type="text" id="pdpSkill"></div>
+    <div class="field"><label>Дія</label><input type="text" id="pdpAction"></div>
+    <div class="field"><label>Навчальний матеріал</label><input type="text" id="pdpLearningItem"></div>
+    <div class="field"><label>Відповідальний</label><input type="text" id="pdpOwner"></div>
+    <div class="field"><label>Дедлайн</label><input type="date" id="pdpDueDate"></div>
+    <div class="field"><label>Критерій успіху</label><input type="text" id="pdpSuccessCriteria"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('pdpItemOverlay')">Скасувати</button>
+      <button id="btnSavePdpItem">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: OKR Objective -->
+<div class="overlay" id="okrObjectiveOverlay">
+  <div class="modal">
+    <h2>Новий Objective</h2>
+    <div class="field" id="okrOwnerTypeWrap"><label>Власник</label>
+      <select id="okrOwnerType">
+        <option value="Company">Компанія</option>
+        <option value="Department">Департамент</option>
+        <option value="Individual">Співробітник</option>
+      </select>
+    </div>
+    <div class="field" id="okrOwnerDeptWrap" style="display:none;"><label>Департамент</label><select id="okrOwnerDept"></select></div>
+    <div class="field"><label>Назва</label><input type="text" id="okrTitle"></div>
+    <div class="field"><label>Опис</label><textarea id="okrDescription" rows="2"></textarea></div>
+    <div class="field"><label>Період</label><input type="text" id="okrPeriod" placeholder="напр. Q3 2026"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('okrObjectiveOverlay')">Скасувати</button>
+      <button id="btnSaveOkrObjective">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: Key Result -->
+<div class="overlay" id="keyResultOverlay">
+  <div class="modal">
+    <h2>Новий Key Result</h2>
+    <div class="field"><label>Назва</label><input type="text" id="krTitle"></div>
+    <div class="field"><label>Одиниця</label><input type="text" id="krMetricUnit" placeholder="%, шт, грн…"></div>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Старт</label><input type="number" id="krStartValue" value="0" step="any"></div>
+      <div class="fieldItem"><label>Ціль</label><input type="number" id="krTargetValue" value="100" step="any"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('keyResultOverlay')">Скасувати</button>
+      <button id="btnSaveKeyResult">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: KPI співробітника -->
+<div class="overlay" id="kpiOverlay">
+  <div class="modal">
+    <h2>Новий KPI</h2>
+    <div class="field"><label>Шаблон (за посадою)</label><select id="kpiTemplateSelect"><option value="">— вручну —</option></select></div>
+    <div class="field"><label>Назва</label><input type="text" id="kpiName"></div>
+    <div class="field"><label>Метрика</label><input type="text" id="kpiMetric"></div>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Ціль</label><input type="number" id="kpiTarget" step="any"></div>
+      <div class="fieldItem"><label>Вага</label><input type="number" id="kpiWeight" step="any"></div>
+    </div>
+    <div class="field"><label>Період</label><input type="text" id="kpiPeriod" placeholder="напр. Q3 2026"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('kpiOverlay')">Скасувати</button>
+      <button id="btnSaveKpi">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: KPI шаблон -->
+<div class="overlay" id="kpiTemplateOverlay">
+  <div class="modal">
+    <h2>Новий шаблон KPI</h2>
+    <div class="field"><label>Посада</label><select id="kpiTplPosition"></select></div>
+    <div class="field"><label>Назва</label><input type="text" id="kpiTplName"></div>
+    <div class="field"><label>Метрика</label><input type="text" id="kpiTplMetric"></div>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Ціль</label><input type="number" id="kpiTplTarget" step="any"></div>
+      <div class="fieldItem"><label>Вага</label><input type="number" id="kpiTplWeight" step="any"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('kpiTemplateOverlay')">Скасувати</button>
+      <button id="btnSaveKpiTemplate">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -710,11 +870,14 @@ async function loadDictionaries() {
   document.getElementById('appStatusSelect').innerHTML = data.applicationStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
   document.getElementById('appRejectionReason').innerHTML = [...data.rejectionReasonsCompany, ...data.rejectionReasonsCandidate].map((s) => `<option value="${s}">${s}</option>`).join('');
   document.getElementById('ivType').innerHTML = data.interviewTypes.map((s) => `<option value="${s}">${s}</option>`).join('');
+
+  document.getElementById('oooStatus').innerHTML = data.oneOnOneStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('prStatus').innerHTML = data.performanceReviewStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
 }
 
 // ---- Tabs ----
 
-const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates'];
+const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr'];
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
@@ -726,16 +889,19 @@ function showTab(tab) {
   document.getElementById('viewCandidateDetail').style.display = 'none';
   document.getElementById('viewApplicationDetail').style.display = 'none';
   document.getElementById('viewOnboardingTemplates').style.display = tab === 'onboardingTemplates' ? '' : 'none';
+  document.getElementById('viewOkr').style.display = tab === 'okr' ? '' : 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
   document.getElementById('tabRecruitment').classList.toggle('active', tab === 'recruitment');
   document.getElementById('tabOnboardingTemplates').classList.toggle('active', tab === 'onboardingTemplates');
+  document.getElementById('tabOkr').classList.toggle('active', tab === 'okr');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'people') loadPeople();
   if (tab === 'org') loadOrg();
   if (tab === 'recruitment') showRecruitmentSubTab(window._recruitmentSubTab || 'requests');
   if (tab === 'onboardingTemplates') loadOnboardingTemplates();
+  if (tab === 'okr') loadOkrView();
 }
 
 // ---- Dashboard ----
@@ -913,11 +1079,13 @@ async function renderEmployeeProfile() {
   renderEmploymentTab(e);
   renderCompensationTab(e);
   renderOnboardingTab(e);
+  renderPerformanceTab(e);
+  renderOkrKpiTab(e);
   renderChangesTab(e);
 }
 
 function showProfileTab(tab) {
-  ['overview', 'personal', 'employment', 'compensation', 'onboarding', 'changes'].forEach((t) => {
+  ['overview', 'personal', 'employment', 'compensation', 'onboarding', 'performance', 'okr', 'changes'].forEach((t) => {
     document.getElementById('profile' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
   });
   document.querySelectorAll('.profileTabs button').forEach((b) => b.classList.remove('active'));
@@ -1414,6 +1582,528 @@ document.getElementById('btnSaveOnboardingTemplate').onclick = async () => {
   showToast('Шаблон додано');
   loadOnboardingTemplates();
 };
+
+// ---- Performance: 1:1 / Review / PDP ----
+
+function oneOnOneStatusTag(status) {
+  const cls = status === 'Completed' ? 'ok' : status === 'Cancelled' ? 'bad' : 'warn';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+function performanceReviewStatusTag(status) {
+  const cls = status === 'Completed' ? 'ok' : status === 'In Progress' ? 'warn' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+function pdpStatusTag(status) {
+  const cls = status === 'Completed' ? 'ok' : status === 'Cancelled' ? 'bad' : status === 'In Progress' ? 'warn' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+function okrObjectiveStatusTag(status) {
+  const cls = status === 'Active' ? 'ok' : status === 'Completed' ? 'accent' : status === 'Cancelled' ? 'bad' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+function confidenceTag(confidence) {
+  const cls = confidence === 'On Track' ? 'ok' : confidence === 'At Risk' ? 'warn' : 'bad';
+  return `<span class="tag ${cls}">${confidence}</span>`;
+}
+function kpiStatusTag(status) {
+  const cls = status === 'Active' ? 'ok' : status === 'Completed' ? 'accent' : 'bad';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+
+async function renderPerformanceTab(e) {
+  const panel = document.getElementById('profilePerformance');
+  const [oooResp, prResp, pdpResp] = await Promise.all([
+    apiFetch('/api/employees/' + e.id + '/one-on-ones'),
+    apiFetch('/api/employees/' + e.id + '/performance-reviews'),
+    apiFetch('/api/employees/' + e.id + '/development-plan')
+  ]);
+  const oooData = await oooResp.json();
+  const prData = await prResp.json();
+  const pdpData = await pdpResp.json();
+  const meetings = oooData.ok ? oooData.meetings : [];
+  const reviews = prData.ok ? prData.reviews : [];
+  const pdpItems = pdpData.ok ? pdpData.items : [];
+
+  panel.innerHTML = `
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:0 0 8px;">1:1 зустрічі</h3>
+    <button class="secondary" onclick="openAddOneOnOne()">+ 1:1</button>
+    <div style="margin-top:12px;">
+      ${meetings.map((m) => `
+        <div class="historyCard">
+          <div class="historyTitle">${new Date(m.meeting_date).toLocaleDateString('uk-UA')} ${oneOnOneStatusTag(m.status)} ${m.manager_name ? '· ' + escAttr(m.manager_name) : ''}</div>
+          ${m.cadence ? '<div class="historyMeta">Каденція: ' + escAttr(m.cadence) + '</div>' : ''}
+          ${m.shared_notes ? '<div class="historyMeta">' + escAttr(m.shared_notes) + '</div>' : ''}
+          ${m.private_notes ? '<div class="historyMeta">🔒 ' + escAttr(m.private_notes) + '</div>' : ''}
+          ${m.actions.length ? '<div class="historyMeta">Дії: ' + m.actions.map((a) => escAttr(a.title) + (a.status === 'Done' ? ' ✓' : '')).join(', ') + '</div>' : ''}
+          <div style="margin-top:6px; display:flex; gap:6px;">
+            <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="markOneOnOneCompleted(${m.id})">Завершити</button>
+            <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="addActionToOneOnOne(${m.id})">+ Дія</button>
+          </div>
+        </div>
+      `).join('') || '<p style="color:var(--muted);">Ще немає зустрічей 1:1.</p>'}
+    </div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Performance Review</h3>
+    <button class="secondary" onclick="openAddPerformanceReview()">+ Review</button>
+    <div style="margin-top:12px;">
+      ${reviews.map((r) => `
+        <div class="historyCard">
+          <div class="historyTitle">${escAttr(r.period_label || 'Без назви періоду')} ${performanceReviewStatusTag(r.status)}</div>
+          ${r.final_outcome ? '<div class="historyMeta">Результат: ' + escAttr(r.final_outcome) + '</div>' : ''}
+          ${r.manager_feedback ? '<div class="historyMeta">Фідбек керівника: ' + escAttr(r.manager_feedback) + '</div>' : ''}
+        </div>
+      `).join('') || '<p style="color:var(--muted);">Ще немає review.</p>'}
+    </div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Development Plan (PDP)</h3>
+    <button class="secondary" onclick="openAddPdpItem()">+ Ціль розвитку</button>
+    <div style="margin-top:12px;">
+      ${pdpItems.map((p) => `
+        <div class="historyCard">
+          <div class="historyTitle">${escAttr(p.goal)} ${pdpStatusTag(p.status)}</div>
+          ${p.skill_competency ? '<div class="historyMeta">Навичка: ' + escAttr(p.skill_competency) + '</div>' : ''}
+          ${p.action ? '<div class="historyMeta">Дія: ' + escAttr(p.action) + '</div>' : ''}
+          ${p.due_date ? '<div class="historyMeta">Дедлайн: ' + new Date(p.due_date).toLocaleDateString('uk-UA') + '</div>' : ''}
+          <div style="margin-top:6px;"><button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="quickUpdatePdpItem(${p.id})">✎ Оновити статус</button></div>
+        </div>
+      `).join('') || '<p style="color:var(--muted);">Ще немає цілей розвитку.</p>'}
+    </div>
+  `;
+}
+
+async function openAddOneOnOne() {
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('oooDate').value = isoDate(new Date());
+  document.getElementById('oooManager').innerHTML = '<option value="">— не вказано —</option>' + (window._employeesCache || []).map((emp) => `<option value="${emp.id}">${escAttr(emp.full_name)}</option>`).join('');
+  document.getElementById('oooCadence').value = '';
+  document.getElementById('oooStatus').value = 'Planned';
+  document.getElementById('oooSharedNotes').value = '';
+  document.getElementById('oooPrivateNotes').value = '';
+  document.getElementById('oneOnOneOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveOneOnOne').onclick = async () => {
+  const body = {
+    meeting_date: document.getElementById('oooDate').value || isoDate(new Date()),
+    manager_employee_id: document.getElementById('oooManager').value || null,
+    cadence: document.getElementById('oooCadence').value.trim(),
+    status: document.getElementById('oooStatus').value,
+    shared_notes: document.getElementById('oooSharedNotes').value.trim(),
+    private_notes: document.getElementById('oooPrivateNotes').value.trim()
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/one-on-ones', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('oneOnOneOverlay');
+  showToast('Збережено');
+  renderEmployeeProfile();
+};
+
+function markOneOnOneCompleted(id) {
+  apiFetch('/api/one-on-ones/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'Completed' }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      showToast('Позначено як завершену');
+      renderEmployeeProfile();
+    });
+}
+
+function addActionToOneOnOne(id) {
+  const title = prompt('Дія (короткий опис):', '');
+  if (!title) return;
+  const owner_username = prompt('Відповідальний (username, необов’язково):', '') || '';
+  const due_date = prompt('Дедлайн (YYYY-MM-DD, необов’язково):', '') || null;
+  apiFetch('/api/one-on-ones/' + id + '/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, owner_username, due_date }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося додати'); return; }
+      showToast('Дію додано');
+      renderEmployeeProfile();
+    });
+}
+
+function openAddPerformanceReview() {
+  document.getElementById('prPeriodLabel').value = '';
+  document.getElementById('prStatus').value = 'Draft';
+  document.getElementById('prPeriodStart').value = '';
+  document.getElementById('prPeriodEnd').value = '';
+  document.getElementById('prGoalsResults').value = '';
+  document.getElementById('prCompetencies').value = '';
+  document.getElementById('prManagerFeedback').value = '';
+  document.getElementById('prSelfReview').value = '';
+  document.getElementById('prHrComments').value = '';
+  document.getElementById('prFinalOutcome').value = '';
+  document.getElementById('prDevActions').value = '';
+  document.getElementById('performanceReviewOverlay').classList.add('open');
+}
+
+document.getElementById('btnSavePerformanceReview').onclick = async () => {
+  const body = {
+    period_label: document.getElementById('prPeriodLabel').value.trim(),
+    status: document.getElementById('prStatus').value,
+    period_start: document.getElementById('prPeriodStart').value || null,
+    period_end: document.getElementById('prPeriodEnd').value || null,
+    goals_results: document.getElementById('prGoalsResults').value.trim(),
+    competencies_notes: document.getElementById('prCompetencies').value.trim(),
+    manager_feedback: document.getElementById('prManagerFeedback').value.trim(),
+    employee_self_review: document.getElementById('prSelfReview').value.trim(),
+    hr_comments: document.getElementById('prHrComments').value.trim(),
+    final_outcome: document.getElementById('prFinalOutcome').value.trim(),
+    development_actions: document.getElementById('prDevActions').value.trim()
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/performance-reviews', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('performanceReviewOverlay');
+  showToast('Збережено');
+  renderEmployeeProfile();
+};
+
+function openAddPdpItem() {
+  document.getElementById('pdpGoal').value = '';
+  document.getElementById('pdpSkill').value = '';
+  document.getElementById('pdpAction').value = '';
+  document.getElementById('pdpLearningItem').value = '';
+  document.getElementById('pdpOwner').value = '';
+  document.getElementById('pdpDueDate').value = '';
+  document.getElementById('pdpSuccessCriteria').value = '';
+  document.getElementById('pdpItemOverlay').classList.add('open');
+}
+
+document.getElementById('btnSavePdpItem').onclick = async () => {
+  const goal = document.getElementById('pdpGoal').value.trim();
+  if (!goal) { showToast('Мета обов’язкова'); return; }
+  const body = {
+    goal,
+    skill_competency: document.getElementById('pdpSkill').value.trim(),
+    action: document.getElementById('pdpAction').value.trim(),
+    learning_item: document.getElementById('pdpLearningItem').value.trim(),
+    owner_username: document.getElementById('pdpOwner').value.trim(),
+    due_date: document.getElementById('pdpDueDate').value || null,
+    success_criteria: document.getElementById('pdpSuccessCriteria').value.trim()
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/development-plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('pdpItemOverlay');
+  showToast('Збережено');
+  renderEmployeeProfile();
+};
+
+function quickUpdatePdpItem(id) {
+  const status = prompt('Статус (' + window._dict.pdpItemStatuses.join(', ') + '):', 'In Progress');
+  if (!status) return;
+  if (!window._dict.pdpItemStatuses.includes(status)) { showToast('Невідомий статус'); return; }
+  apiFetch('/api/development-plan/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      showToast('Оновлено');
+      renderEmployeeProfile();
+    });
+}
+
+// ---- OKR / KPI ----
+
+async function renderObjectivesList(objectives, containerId) {
+  const container = document.getElementById(containerId);
+  if (!objectives.length) { container.innerHTML = '<p style="color:var(--muted);">Objectives ще немає.</p>'; return; }
+  container.innerHTML = '<p style="color:var(--muted);">Завантаження…</p>';
+  const details = await Promise.all(objectives.map((o) => apiFetch('/api/okr-objectives/' + o.id).then((r) => r.json())));
+  container.innerHTML = details.filter((d) => d.ok).map(({ objective: o }) => `
+    <div class="historyCard ${o.status === 'Active' ? 'current' : ''}">
+      <div class="historyTitle">${escAttr(o.title)} ${okrObjectiveStatusTag(o.status)}</div>
+      <div class="historyMeta">${o.owner_type === 'Company' ? 'Компанія' : o.owner_type === 'Department' ? escAttr(o.department_name || '') : escAttr(o.employee_name || '')}${o.period ? ' · ' + escAttr(o.period) : ''}</div>
+      ${o.description ? '<div class="historyMeta">' + escAttr(o.description) + '</div>' : ''}
+      <div style="margin:8px 0;">
+        ${o.key_results.map((kr) => `
+          <div style="border-top:1px solid var(--border); padding:6px 0;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+              <div><b>${escAttr(kr.title)}</b> ${confidenceTag(kr.confidence)}</div>
+              <div style="font-size:12px; color:var(--muted);">${kr.current_value}/${kr.target_value} ${escAttr(kr.metric_unit || '')}${kr.progress_pct != null ? ' · ' + kr.progress_pct + '%' : ''}</div>
+            </div>
+            <div style="margin-top:4px; display:flex; gap:6px;">
+              <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="addOkrCheckinPrompt(${kr.id})">Чек-ін</button>
+              <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="updateConfidencePrompt(${kr.id})">Confidence</button>
+            </div>
+          </div>
+        `).join('') || '<p style="color:var(--muted); font-size:12px;">Ще немає Key Results.</p>'}
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="openAddKeyResult(${o.id})">+ Key Result</button>
+        ${o.status !== 'Completed' && o.status !== 'Cancelled' ? `<button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="setObjectiveStatus(${o.id}, 'Completed')">Завершити</button>` : ''}
+        ${o.status === 'Draft' ? `<button style="font-size:11px; padding:4px 8px;" onclick="setObjectiveStatus(${o.id}, 'Active')">Активувати</button>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function refreshCurrentOkrView() {
+  if (document.getElementById('viewOkr').style.display !== 'none') { loadOkrView(); return; }
+  if (document.getElementById('viewEmployeeProfile').style.display !== 'none') { renderEmployeeProfile(); return; }
+}
+
+async function renderOkrKpiTab(e) {
+  const panel = document.getElementById('profileOkr');
+  const [objResp, kpiResp] = await Promise.all([
+    apiFetch('/api/okr-objectives?' + new URLSearchParams({ owner_type: 'Individual', owner_employee_id: e.id })),
+    apiFetch('/api/employees/' + e.id + '/kpis')
+  ]);
+  const objData = await objResp.json();
+  const kpiData = await kpiResp.json();
+  const objectives = objData.ok ? objData.objectives : [];
+  const kpis = kpiData.ok ? kpiData.kpis : [];
+
+  panel.innerHTML = `
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:0 0 8px;">Особисті OKR</h3>
+    <button class="secondary" onclick="openAddIndividualObjective()">+ Objective</button>
+    <div id="employeeObjectivesList" style="margin-top:12px;"></div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">KPI</h3>
+    <button class="secondary" onclick="openAddKpiForEmployee()">+ KPI</button>
+    <div style="margin-top:12px;">
+      ${kpis.map((k) => `
+        <div class="historyCard">
+          <div class="historyTitle">${escAttr(k.name)} ${kpiStatusTag(k.status)}</div>
+          <div class="historyMeta">${escAttr(k.metric || '')}${k.period ? ' · ' + escAttr(k.period) : ''}${k.weight != null ? ' · вага ' + k.weight : ''}</div>
+          <div class="historyMeta">Ціль: ${k.target ?? '—'} · Факт: ${k.actual ?? '—'}${k.achievement_pct != null ? ' · ' + k.achievement_pct + '%' : ''}</div>
+          ${k.comment ? '<div class="historyMeta">' + escAttr(k.comment) + '</div>' : ''}
+          <div style="margin-top:6px;"><button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="quickUpdateKpi(${k.id})">✎ Оновити факт</button></div>
+        </div>
+      `).join('') || '<p style="color:var(--muted);">Ще немає KPI.</p>'}
+    </div>
+  `;
+
+  await renderObjectivesList(objectives, 'employeeObjectivesList');
+}
+
+function openAddIndividualObjective() {
+  window._pendingObjectiveContext = { owner_type: 'Individual', owner_employee_id: currentEmployeeId };
+  document.getElementById('okrOwnerTypeWrap').style.display = 'none';
+  document.getElementById('okrOwnerDeptWrap').style.display = 'none';
+  document.getElementById('okrTitle').value = '';
+  document.getElementById('okrDescription').value = '';
+  document.getElementById('okrPeriod').value = '';
+  document.getElementById('okrObjectiveOverlay').classList.add('open');
+}
+
+document.getElementById('btnAddOkrObjective').onclick = async () => {
+  window._pendingObjectiveContext = null;
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('okrOwnerTypeWrap').style.display = '';
+  document.getElementById('okrOwnerType').innerHTML = '<option value="Company">Компанія</option><option value="Department">Департамент</option>';
+  document.getElementById('okrOwnerType').value = 'Company';
+  document.getElementById('okrOwnerDept').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  document.getElementById('okrOwnerDeptWrap').style.display = 'none';
+  document.getElementById('okrTitle').value = '';
+  document.getElementById('okrDescription').value = '';
+  document.getElementById('okrPeriod').value = '';
+  document.getElementById('okrObjectiveOverlay').classList.add('open');
+};
+
+document.getElementById('okrOwnerType').addEventListener('change', () => {
+  document.getElementById('okrOwnerDeptWrap').style.display = document.getElementById('okrOwnerType').value === 'Department' ? '' : 'none';
+});
+
+document.getElementById('btnSaveOkrObjective').onclick = async () => {
+  const title = document.getElementById('okrTitle').value.trim();
+  if (!title) { showToast('Назва обов’язкова'); return; }
+  const body = window._pendingObjectiveContext
+    ? { ...window._pendingObjectiveContext, title, description: document.getElementById('okrDescription').value.trim(), period: document.getElementById('okrPeriod').value.trim() }
+    : {
+        owner_type: document.getElementById('okrOwnerType').value,
+        owner_department_id: document.getElementById('okrOwnerDept').value || null,
+        title,
+        description: document.getElementById('okrDescription').value.trim(),
+        period: document.getElementById('okrPeriod').value.trim()
+      };
+  const resp = await apiFetch('/api/okr-objectives', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('okrObjectiveOverlay');
+  showToast('Objective створено');
+  refreshCurrentOkrView();
+};
+
+function openAddKeyResult(objectiveId) {
+  window._pendingKrObjectiveId = objectiveId;
+  document.getElementById('krTitle').value = '';
+  document.getElementById('krMetricUnit').value = '';
+  document.getElementById('krStartValue').value = 0;
+  document.getElementById('krTargetValue').value = 100;
+  document.getElementById('keyResultOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveKeyResult').onclick = async () => {
+  const title = document.getElementById('krTitle').value.trim();
+  if (!title) { showToast('Назва обов’язкова'); return; }
+  const body = {
+    title,
+    metric_unit: document.getElementById('krMetricUnit').value.trim(),
+    start_value: document.getElementById('krStartValue').value || 0,
+    target_value: document.getElementById('krTargetValue').value || 0
+  };
+  const resp = await apiFetch('/api/okr-objectives/' + window._pendingKrObjectiveId + '/key-results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('keyResultOverlay');
+  showToast('Key Result додано');
+  refreshCurrentOkrView();
+};
+
+function addOkrCheckinPrompt(krId) {
+  const value = prompt('Нове значення:', '');
+  if (value === null || value === '') return;
+  const comment = prompt('Коментар (необов’язково):', '') || '';
+  apiFetch('/api/okr-key-results/' + krId + '/checkins', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value, comment }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+      showToast('Чек-ін додано');
+      refreshCurrentOkrView();
+    });
+}
+
+function updateConfidencePrompt(krId) {
+  const confidence = prompt('Confidence (' + window._dict.okrConfidenceLevels.join(', ') + '):', 'On Track');
+  if (!confidence) return;
+  if (!window._dict.okrConfidenceLevels.includes(confidence)) { showToast('Невідоме значення'); return; }
+  apiFetch('/api/okr-key-results/' + krId + '/confidence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confidence }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      showToast('Оновлено');
+      refreshCurrentOkrView();
+    });
+}
+
+function setObjectiveStatus(id, status) {
+  apiFetch('/api/okr-objectives/' + id + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      showToast('Статус оновлено');
+      refreshCurrentOkrView();
+    });
+}
+
+async function loadOkrView() {
+  await ensureRecruitmentRefsLoaded();
+  const resp = await apiFetch('/api/okr-objectives');
+  const data = await resp.json();
+  const all = data.ok ? data.objectives.filter((o) => o.owner_type !== 'Individual') : [];
+  const periods = [...new Set(all.map((o) => o.period).filter(Boolean))];
+  const currentFilter = document.getElementById('okrPeriodFilter').value;
+  document.getElementById('okrPeriodFilter').innerHTML = '<option value="">— усі періоди —</option>' + periods.map((p) => `<option value="${p}" ${p === currentFilter ? 'selected' : ''}>${escAttr(p)}</option>`).join('');
+  const filtered = currentFilter ? all.filter((o) => o.period === currentFilter) : all;
+  const empty = document.getElementById('okrObjectivesEmpty');
+  if (!filtered.length) { document.getElementById('okrObjectivesList').innerHTML = ''; empty.style.display = 'block'; }
+  else { empty.style.display = 'none'; await renderObjectivesList(filtered, 'okrObjectivesList'); }
+
+  loadKpiTemplatesView();
+}
+document.getElementById('okrPeriodFilter').addEventListener('change', loadOkrView);
+
+async function loadKpiTemplatesView() {
+  if (document.getElementById('kpiTplFilterPosition').options.length <= 1) {
+    const posResp = await apiFetch('/api/positions');
+    const posData = await posResp.json();
+    window._positionsCache = posData.ok ? posData.positions : [];
+    document.getElementById('kpiTplFilterPosition').innerHTML = '<option value="">— усі посади —</option>' + window._positionsCache.map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
+  }
+  const position_id = document.getElementById('kpiTplFilterPosition').value;
+  const params = new URLSearchParams();
+  if (position_id) params.set('position_id', position_id);
+  const resp = await apiFetch('/api/kpi-templates?' + params.toString());
+  const data = await resp.json();
+  const body = document.getElementById('kpiTplBody');
+  const empty = document.getElementById('kpiTplEmpty');
+  const templates = data.ok ? data.templates : [];
+  if (!templates.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = templates.map((t) => `
+    <tr>
+      <td>${escAttr(t.position_title)}</td>
+      <td>${escAttr(t.name)}</td>
+      <td>${escAttr(t.metric || '—')}</td>
+      <td>${t.target ?? '—'}</td>
+      <td>${t.weight ?? '—'}</td>
+    </tr>
+  `).join('');
+}
+document.getElementById('kpiTplFilterPosition').addEventListener('change', loadKpiTemplatesView);
+
+document.getElementById('btnAddKpiTemplate').onclick = async () => {
+  const posResp = await apiFetch('/api/positions');
+  const posData = await posResp.json();
+  document.getElementById('kpiTplPosition').innerHTML = (posData.ok ? posData.positions : []).map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
+  document.getElementById('kpiTplName').value = '';
+  document.getElementById('kpiTplMetric').value = '';
+  document.getElementById('kpiTplTarget').value = '';
+  document.getElementById('kpiTplWeight').value = '';
+  document.getElementById('kpiTemplateOverlay').classList.add('open');
+};
+
+document.getElementById('btnSaveKpiTemplate').onclick = async () => {
+  const name = document.getElementById('kpiTplName').value.trim();
+  if (!name) { showToast('Назва обов’язкова'); return; }
+  const body = {
+    position_id: document.getElementById('kpiTplPosition').value,
+    name,
+    metric: document.getElementById('kpiTplMetric').value.trim(),
+    target: document.getElementById('kpiTplTarget').value || null,
+    weight: document.getElementById('kpiTplWeight').value || null
+  };
+  const resp = await apiFetch('/api/kpi-templates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('kpiTemplateOverlay');
+  showToast('Шаблон KPI додано');
+  loadKpiTemplatesView();
+};
+
+async function openAddKpiForEmployee() {
+  const positionId = window._currentEmployee?.current_period?.position_id || '';
+  const params = new URLSearchParams();
+  if (positionId) params.set('position_id', positionId);
+  const resp = await apiFetch('/api/kpi-templates?' + params.toString());
+  const data = await resp.json();
+  const templates = data.ok ? data.templates : [];
+  document.getElementById('kpiTemplateSelect').innerHTML = '<option value="">— вручну —</option>' + templates.map((t) => `<option value="${t.id}">${escAttr(t.name)}${t.metric ? ' (' + escAttr(t.metric) + ')' : ''}</option>`).join('');
+  document.getElementById('kpiName').value = '';
+  document.getElementById('kpiMetric').value = '';
+  document.getElementById('kpiTarget').value = '';
+  document.getElementById('kpiWeight').value = '';
+  document.getElementById('kpiPeriod').value = '';
+  document.getElementById('kpiOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveKpi').onclick = async () => {
+  const template_id = document.getElementById('kpiTemplateSelect').value || null;
+  const name = document.getElementById('kpiName').value.trim();
+  if (!template_id && !name) { showToast('Обери шаблон або вкажи назву'); return; }
+  const body = {
+    template_id,
+    name,
+    metric: document.getElementById('kpiMetric').value.trim(),
+    target: document.getElementById('kpiTarget').value || null,
+    weight: document.getElementById('kpiWeight').value || null,
+    period: document.getElementById('kpiPeriod').value.trim()
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/kpis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('kpiOverlay');
+  showToast('KPI додано');
+  renderEmployeeProfile();
+};
+
+function quickUpdateKpi(id) {
+  const actual = prompt('Фактичне значення:', '');
+  if (actual === null || actual === '') return;
+  const comment = prompt('Коментар (необов’язково):', '') || '';
+  apiFetch('/api/kpis/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actual, comment }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      showToast('Оновлено');
+      renderEmployeeProfile();
+    });
+}
 
 async function renderChangesTab(e) {
   const resp = await apiFetch('/api/audit-log?entity_type=employee&entity_id=' + e.id);
