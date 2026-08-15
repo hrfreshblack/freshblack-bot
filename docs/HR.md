@@ -22,10 +22,14 @@
   - **Заявка кандидата на вакансію** (Application) — етап (New Candidate → Screening → Interview → Test Task → Reference Check → Offer → Hired), статус (Active/Rejected/Withdrawn/Hired) з обов'язковою причиною відмови.
   - **Інтерв'ю** — тип/дата/учасники/нотатки/рішення, без формального scorecard-шаблону (ТЗ п.16 — наступний крок).
   - **Офер** — оклад/бонус/дата старту/дедлайн, статуси Draft → Sent (валідація: не відправити без окладу і дати старту) → Accepted/Declined/Expired/Withdrawn. **Accepted автоматично створює Future Employee рівно один раз** (ТЗ п.37 idempotent) — той самий персональний профіль кандидата, без дублювання; вакансія позначається Filled, заявка — Hired.
+- **Preboarding + Onboarding/Adaptation 14/30/60/90 + Probation control** (ТЗ розділи 20, 23, 23.1) — третій зріз:
+  - **Бібліотека шаблонів задач** (вкладка "Адаптація") — компанія в цілому, або конкретний департамент/посада, з етапом (Day 1/Week 1 → 14 → 30 → 60 → 90 днів) і дедлайном як зсув у днях від дати старту.
+  - При **Offer Accepted** (і кнопкою "Згенерувати з шаблонів" у профілі співробітника) підходящі шаблони перетворюються на особисті задачі співробітника — ідемпотентно, шаблон не плодить задачу вдруге.
+  - Вкладка **Onboarding** у Employee Master Card: preboarding-дані (локація, HR-контакт, документи, план першого дня, editable текст welcome-листа з генератором чорновика), **Probation control** (тривалість/ціль/дата завершення рахується автоматично, рішення Passed/Extended/Failed з обов'язковою причиною і новою датою при Extended), і самі задачі адаптації згруповані за етапом зі статусами Not Started/In Progress/Waiting/Completed/Skipped(з причиною) і обчисленим Overdue.
 
 ## Чого свідомо ще немає (наступні кроки з великого ТЗ)
 
-Resume parsing/OCR, AI-аналіз і AI-мэтчинг кандидатів, формальні scorecard-шаблони для інтерв'ю, публікація вакансій на Work.ua/Robota.ua/Jooble, інтеграції з Google Calendar/Gmail/Telegram/Viber, генератор документів (офер/welcome-лист у PDF), Preboarding/Onboarding 14/30/60/90, Knowledge Base, Performance/1:1/OKR/KPI, Surveys/Engagement, Offboarding workflow, повноцінна RBAC-матриця (зараз лише HRD з повним доступом — інші ролі з ТЗ п.4 ще не розмежовані по полях), Time & Attendance, AI Assistant, графічний Chart View оргструктури.
+Resume parsing/OCR, AI-аналіз і AI-мэтчинг кандидатів, формальні scorecard-шаблони для інтерв'ю, публікація вакансій на Work.ua/Robota.ua/Jooble, інтеграції з Google Calendar/Gmail/Telegram/Viber, генератор документів у PDF, Knowledge Base, Performance/1:1/OKR/KPI, Surveys/Engagement, HR Operations (відсутності), Offboarding workflow, повноцінна RBAC-матриця (зараз лише HRD з повним доступом — інші ролі з ТЗ п.4 ще не розмежовані по полях), Time & Attendance, AI Assistant, графічний Chart View оргструктури.
 
 ## Доступ
 
