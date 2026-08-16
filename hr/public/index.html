@@ -161,6 +161,7 @@
     <button id="tabOkr" onclick="showTab('okr')">OKR</button>
     <button id="tabKnowledge" onclick="showTab('knowledge')">Знання</button>
     <button id="tabSurveys" onclick="showTab('surveys')">Опитування</button>
+    <button id="tabAbsences" onclick="showTab('absences')">Відсутності</button>
   </nav>
 </header>
 
@@ -194,6 +195,7 @@
       <button onclick="showProfileTab('performance')">Performance</button>
       <button onclick="showProfileTab('okr')">OKR / KPI</button>
       <button onclick="showProfileTab('learning')">Learning</button>
+      <button onclick="showProfileTab('absences')">Відсутності</button>
       <button onclick="showProfileTab('changes')">Changes</button>
     </div>
     <div class="profilePanel active" id="profileOverview"></div>
@@ -204,6 +206,7 @@
     <div class="profilePanel" id="profilePerformance"></div>
     <div class="profilePanel" id="profileOkr"></div>
     <div class="profilePanel" id="profileLearning"></div>
+    <div class="profilePanel" id="profileAbsences"></div>
     <div class="profilePanel" id="profileChanges"></div>
   </div>
 
@@ -378,6 +381,18 @@
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Результати</h3>
     <div id="surveyResultsPanel"></div>
+  </div>
+
+  <div id="viewAbsences" style="display:none;">
+    <div class="viewToolbar">
+      <select id="absDeptFilter"><option value="">— усі департаменти —</option></select>
+      <select id="absStatusFilter"><option value="">— усі статуси —</option></select>
+      <input type="date" id="absFromFilter">
+      <input type="date" id="absToFilter">
+      <button id="btnAddAbsence">+ Відсутність</button>
+    </div>
+    <div class="tableWrap"><table><thead><tr><th>Співробітник</th><th>Департамент</th><th>Тип</th><th>З</th><th>По</th><th>Робочих днів</th><th>Статус</th></tr></thead><tbody id="absencesBody"></tbody></table></div>
+    <div class="empty" id="absencesEmpty" style="display:none;">Відсутностей ще немає.</div>
   </div>
 
 </main>
@@ -935,6 +950,25 @@
   </div>
 </div>
 
+<!-- Модалка: нова відсутність -->
+<div class="overlay" id="absenceOverlay">
+  <div class="modal">
+    <h2>Нова відсутність</h2>
+    <div class="field" id="absEmployeeWrap"><label>Співробітник</label><select id="absEmployee"></select></div>
+    <div class="field"><label>Тип</label><select id="absType"></select></div>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>З</label><input type="date" id="absStartDate"></div>
+      <div class="fieldItem"><label>По</label><input type="date" id="absEndDate"></div>
+    </div>
+    <div class="field"><label>Коментар</label><input type="text" id="absComment"></div>
+    <div class="field"><label>Документ (URL)</label><input type="text" id="absDocumentUrl"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('absenceOverlay')">Скасувати</button>
+      <button id="btnSaveAbsence">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -1063,11 +1097,14 @@ async function loadDictionaries() {
   document.getElementById('surveyTypeFilter').innerHTML = '<option value="">— усі типи —</option>' + data.surveyTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
   document.getElementById('surveyStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.surveyStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
   document.getElementById('sqType').innerHTML = data.surveyQuestionTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
+
+  document.getElementById('absType').innerHTML = data.absenceTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
+  document.getElementById('absStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.absenceStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
 }
 
 // ---- Tabs ----
 
-const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr', 'tabKnowledge', 'tabSurveys'];
+const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr', 'tabKnowledge', 'tabSurveys', 'tabAbsences'];
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
@@ -1083,6 +1120,7 @@ function showTab(tab) {
   document.getElementById('viewKnowledge').style.display = tab === 'knowledge' ? '' : 'none';
   document.getElementById('viewSurveys').style.display = tab === 'surveys' ? '' : 'none';
   document.getElementById('viewSurveyDetail').style.display = 'none';
+  document.getElementById('viewAbsences').style.display = tab === 'absences' ? '' : 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
@@ -1091,6 +1129,7 @@ function showTab(tab) {
   document.getElementById('tabOkr').classList.toggle('active', tab === 'okr');
   document.getElementById('tabKnowledge').classList.toggle('active', tab === 'knowledge');
   document.getElementById('tabSurveys').classList.toggle('active', tab === 'surveys');
+  document.getElementById('tabAbsences').classList.toggle('active', tab === 'absences');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'people') loadPeople();
   if (tab === 'org') loadOrg();
@@ -1099,6 +1138,7 @@ function showTab(tab) {
   if (tab === 'okr') loadOkrView();
   if (tab === 'knowledge') showKnowledgeSubTab(window._knowledgeSubTab || 'articles');
   if (tab === 'surveys') loadSurveys();
+  if (tab === 'absences') loadAbsencesView();
 }
 
 // ---- Dashboard ----
@@ -1279,11 +1319,12 @@ async function renderEmployeeProfile() {
   renderPerformanceTab(e);
   renderOkrKpiTab(e);
   renderLearningTab(e);
+  renderAbsencesTab(e);
   renderChangesTab(e);
 }
 
 function showProfileTab(tab) {
-  ['overview', 'personal', 'employment', 'compensation', 'onboarding', 'performance', 'okr', 'learning', 'changes'].forEach((t) => {
+  ['overview', 'personal', 'employment', 'compensation', 'onboarding', 'performance', 'okr', 'learning', 'absences', 'changes'].forEach((t) => {
     document.getElementById('profile' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
   });
   document.querySelectorAll('.profileTabs button').forEach((b) => b.classList.remove('active'));
@@ -2862,6 +2903,124 @@ document.getElementById('btnSaveSurveyResponse').onclick = async () => {
   showToast('Відповідь збережено');
   renderSurveyDetail();
 };
+
+// ---- HR Operations: absences ----
+
+function absenceStatusTag(status) {
+  const cls = status === 'Approved' ? 'ok' : (status === 'Rejected' || status === 'Cancelled') ? 'bad' : 'warn';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+
+async function renderAbsencesTab(e) {
+  const panel = document.getElementById('profileAbsences');
+  const resp = await apiFetch('/api/absences?' + new URLSearchParams({ employee_id: e.id }));
+  const data = await resp.json();
+  const absences = data.ok ? data.absences : [];
+  panel.innerHTML = `
+    <button class="secondary" onclick="openAddAbsence(${e.id})">+ Відсутність</button>
+    <div style="margin-top:12px;">
+      ${absences.map((a) => `
+        <div class="historyCard">
+          <div class="historyTitle">${escAttr(a.type)} ${absenceStatusTag(a.status)}</div>
+          <div class="historyMeta">${new Date(a.start_date).toLocaleDateString('uk-UA')} — ${new Date(a.end_date).toLocaleDateString('uk-UA')} · ${a.workdays} робочих днів</div>
+          ${a.comment ? '<div class="historyMeta">' + escAttr(a.comment) + '</div>' : ''}
+          ${a.status === 'Requested'
+            ? '<div style="margin-top:6px; display:flex; gap:6px;"><button style="font-size:11px; padding:4px 8px;" onclick="setAbsenceStatus(' + a.id + ', \'Approved\')">Погодити</button><button class="bad" style="font-size:11px; padding:4px 8px;" onclick="setAbsenceStatus(' + a.id + ', \'Rejected\')">Відхилити</button></div>'
+            : a.status === 'Approved' ? '<div style="margin-top:6px;"><button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="setAbsenceStatus(' + a.id + ', \'Cancelled\')">Скасувати</button></div>' : ''}
+        </div>
+      `).join('') || '<p style="color:var(--muted);">Ще немає відсутностей.</p>'}
+    </div>
+  `;
+}
+
+async function openAddAbsence(presetEmployeeId) {
+  if (presetEmployeeId) {
+    document.getElementById('absEmployeeWrap').style.display = 'none';
+    window._pendingAbsenceEmployeeId = presetEmployeeId;
+  } else {
+    await ensureRecruitmentRefsLoaded();
+    document.getElementById('absEmployeeWrap').style.display = '';
+    document.getElementById('absEmployee').innerHTML = window._employeesCache.map((emp) => `<option value="${emp.id}">${escAttr(emp.full_name)}</option>`).join('');
+    window._pendingAbsenceEmployeeId = null;
+  }
+  document.getElementById('absType').value = (window._dict.absenceTypes && window._dict.absenceTypes[0]) || 'Vacation';
+  document.getElementById('absStartDate').value = isoDate(new Date());
+  document.getElementById('absEndDate').value = isoDate(new Date());
+  document.getElementById('absComment').value = '';
+  document.getElementById('absDocumentUrl').value = '';
+  document.getElementById('absenceOverlay').classList.add('open');
+}
+
+document.getElementById('btnAddAbsence').onclick = () => openAddAbsence(null);
+
+document.getElementById('btnSaveAbsence').onclick = async () => {
+  const employee_id = window._pendingAbsenceEmployeeId || document.getElementById('absEmployee').value;
+  if (!employee_id) { showToast('Обери співробітника'); return; }
+  const body = {
+    employee_id,
+    type: document.getElementById('absType').value,
+    start_date: document.getElementById('absStartDate').value,
+    end_date: document.getElementById('absEndDate').value,
+    comment: document.getElementById('absComment').value.trim(),
+    document_url: document.getElementById('absDocumentUrl').value.trim()
+  };
+  if (!body.start_date || !body.end_date) { showToast('Вкажи дати'); return; }
+  const resp = await apiFetch('/api/absences', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('absenceOverlay');
+  showToast('Створено');
+  if (document.getElementById('viewAbsences').style.display !== 'none') loadAbsencesView();
+  if (document.getElementById('viewEmployeeProfile').style.display !== 'none') renderEmployeeProfile();
+};
+
+function setAbsenceStatus(id, status) {
+  apiFetch('/api/absences/' + id + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+      showToast('Статус змінено');
+      if (document.getElementById('viewAbsences').style.display !== 'none') loadAbsencesView();
+      if (document.getElementById('viewEmployeeProfile').style.display !== 'none') renderEmployeeProfile();
+    });
+}
+
+async function loadAbsencesView() {
+  await ensureRecruitmentRefsLoaded();
+  if (document.getElementById('absDeptFilter').options.length <= 1) {
+    document.getElementById('absDeptFilter').innerHTML = '<option value="">— усі департаменти —</option>' + window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  }
+  const department_id = document.getElementById('absDeptFilter').value;
+  const status = document.getElementById('absStatusFilter').value;
+  const from = document.getElementById('absFromFilter').value;
+  const to = document.getElementById('absToFilter').value;
+  const params = new URLSearchParams();
+  if (department_id) params.set('department_id', department_id);
+  if (status) params.set('status', status);
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  const resp = await apiFetch('/api/absences?' + params.toString());
+  const data = await resp.json();
+  const body = document.getElementById('absencesBody');
+  const empty = document.getElementById('absencesEmpty');
+  const absences = data.ok ? data.absences : [];
+  if (!absences.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = absences.map((a) => `
+    <tr>
+      <td>${escAttr(a.employee_name)}</td>
+      <td>${escAttr(a.department_name || '—')}</td>
+      <td>${escAttr(a.type)}</td>
+      <td>${new Date(a.start_date).toLocaleDateString('uk-UA')}</td>
+      <td>${new Date(a.end_date).toLocaleDateString('uk-UA')}</td>
+      <td>${a.workdays}</td>
+      <td>${absenceStatusTag(a.status)}</td>
+    </tr>
+  `).join('');
+}
+document.getElementById('absDeptFilter').addEventListener('change', loadAbsencesView);
+document.getElementById('absStatusFilter').addEventListener('change', loadAbsencesView);
+document.getElementById('absFromFilter').addEventListener('change', loadAbsencesView);
+document.getElementById('absToFilter').addEventListener('change', loadAbsencesView);
 
 async function renderChangesTab(e) {
   const resp = await apiFetch('/api/audit-log?entity_type=employee&entity_id=' + e.id);

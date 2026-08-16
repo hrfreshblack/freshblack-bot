@@ -184,7 +184,9 @@ app.get('/api/dictionaries', (req, res) => {
     learningAssignmentStatuses: db.LEARNING_ASSIGNMENT_STATUSES,
     surveyTypes: db.SURVEY_TYPES,
     surveyStatuses: db.SURVEY_STATUSES,
-    surveyQuestionTypes: db.SURVEY_QUESTION_TYPES
+    surveyQuestionTypes: db.SURVEY_QUESTION_TYPES,
+    absenceTypes: db.ABSENCE_TYPES,
+    absenceStatuses: db.ABSENCE_STATUSES
   });
 });
 
@@ -1612,6 +1614,65 @@ app.post('/api/surveys/:id/responses', requireRole(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/surveys/:id/responses ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти відповідь' });
+  }
+});
+
+// ---- HR Operations: absences ----
+
+app.get('/api/absences', async (req, res) => {
+  try {
+    const { status, from, to } = req.query;
+    const employee_id = req.query.employee_id ? Number(req.query.employee_id) : null;
+    const department_id = req.query.department_id ? Number(req.query.department_id) : null;
+    const absences = await db.listAbsences({ employee_id, department_id, status: status || '', from: from || '', to: to || '' });
+    res.json({ ok: true, absences });
+  } catch (error) {
+    console.error('GET /api/absences ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати відсутності' });
+  }
+});
+
+app.post('/api/absences', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.employee_id || !body.type || !body.start_date || !body.end_date) {
+      res.status(400).json({ ok: false, error: 'Співробітник, тип і дати обов’язкові' });
+      return;
+    }
+    const absence = await db.createAbsence(body, req.account.username);
+    res.json({ ok: true, absence });
+  } catch (error) {
+    console.error('POST /api/absences ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/absences/:id/status', requireRole(), async (req, res) => {
+  try {
+    const { status, approver_username } = req.body || {};
+    const absence = await db.updateAbsenceStatus(Number(req.params.id), status, approver_username, req.account.username);
+    if (!absence) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, absence });
+  } catch (error) {
+    console.error('POST /api/absences/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+app.post('/api/absences/:id', requireRole(), async (req, res) => {
+  try {
+    const absence = await db.updateAbsence(Number(req.params.id), req.body || {});
+    if (!absence) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, absence });
+  } catch (error) {
+    console.error('POST /api/absences/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
   }
 });
 
