@@ -65,6 +65,10 @@ const SURVEY_TYPES = ['eNPS', 'Pulse', 'Adaptation', 'Exit', 'Custom'];
 const SURVEY_STATUSES = ['Draft', 'Active', 'Closed'];
 const SURVEY_QUESTION_TYPES = ['Scale', 'NPS', 'Single Select', 'Multi Select', 'Text'];
 
+// HR Operations: absences (ТЗ розділ 27)
+const ABSENCE_TYPES = ['Vacation', 'Sick Leave', 'Unpaid Leave', 'Business Trip', 'Remote', 'Other'];
+const ABSENCE_STATUSES = ['Requested', 'Approved', 'Rejected', 'Cancelled'];
+
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hr_accounts (
@@ -707,6 +711,26 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_survey_answers_response ON hr_survey_answers(response_id);
+
+    -- ==================== HR Operations: absences (ТЗ 27) ====================
+
+    CREATE TABLE IF NOT EXISTS hr_absences (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      type TEXT NOT NULL DEFAULT 'Vacation',
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      workdays INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'Requested',
+      comment TEXT NOT NULL DEFAULT '',
+      document_url TEXT NOT NULL DEFAULT '',
+      approver_username TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_absences_employee ON hr_absences(employee_id);
+    CREATE INDEX IF NOT EXISTS idx_hr_absences_dates ON hr_absences(start_date, end_date);
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -2828,6 +2852,76 @@ async function getSurveyResults(surveyId) {
   };
 }
 
+// ---------------------------------------------------------------------
+// HR Operations: absences
+// ---------------------------------------------------------------------
+
+function countWorkdays(startDate, endDate) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  let count = 0;
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) count++;
+  }
+  return count;
+}
+
+async function listAbsences({ employee_id = null, department_id = null, status = '', from = '', to = '' } = {}) {
+  const conditions = [];
+  const params = [];
+  if (employee_id) { params.push(employee_id); conditions.push(`a.employee_id = $${params.length}`); }
+  if (status) { params.push(status); conditions.push(`a.status = $${params.length}`); }
+  if (from) { params.push(from); conditions.push(`a.end_date >= $${params.length}`); }
+  if (to) { params.push(to); conditions.push(`a.start_date <= $${params.length}`); }
+  if (department_id) { params.push(department_id); conditions.push(`ep.department_id = $${params.length}`); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(`
+    SELECT a.*, per.full_name AS employee_name, dep.name AS department_name
+    FROM hr_absences a
+    JOIN hr_employees emp ON emp.id = a.employee_id
+    JOIN hr_persons per ON per.id = emp.person_id
+    LEFT JOIN hr_employment_periods ep ON ep.employee_id = a.employee_id AND ep.end_date IS NULL
+    LEFT JOIN hr_departments dep ON dep.id = ep.department_id
+    ${where}
+    ORDER BY a.start_date DESC
+  `, params);
+  return rows;
+}
+
+async function createAbsence({ employee_id, type, start_date, end_date, comment, document_url }, createdBy) {
+  if (!ABSENCE_TYPES.includes(type)) throw new Error(`Unknown absence type: ${type}`);
+  if (new Date(end_date) < new Date(start_date)) throw new Error('Дата завершення не може бути раніше дати початку');
+  const workdays = countWorkdays(start_date, end_date);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_absences (employee_id, type, start_date, end_date, workdays, comment, document_url, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [employee_id, type, start_date, end_date, workdays, comment || '', document_url || '', createdBy || '']
+  );
+  await writeAudit({ actor: createdBy, action: 'create', entity_type: 'absence', entity_id: rows[0].id, new_value: { type, start_date, end_date } });
+  return rows[0];
+}
+
+async function updateAbsenceStatus(id, status, approver_username, actor) {
+  if (!ABSENCE_STATUSES.includes(status)) throw new Error(`Unknown absence status: ${status}`);
+  const { rows: before } = await pool.query('SELECT status FROM hr_absences WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_absences SET status = $2, approver_username = COALESCE($3, approver_username), updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, status, approver_username ?? null]
+  );
+  await writeAudit({ actor, action: 'status_change', entity_type: 'absence', entity_id: id, old_value: { status: before[0].status }, new_value: { status } });
+  return rows[0];
+}
+
+async function updateAbsence(id, { comment, document_url }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_absences SET comment = COALESCE($2, comment), document_url = COALESCE($3, document_url), updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, comment ?? null, document_url ?? null]
+  );
+  return rows[0] || null;
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -2978,5 +3072,11 @@ export default {
   inviteEmployees,
   inviteAllActiveEmployees,
   submitSurveyResponse,
-  getSurveyResults
+  getSurveyResults,
+  ABSENCE_TYPES,
+  ABSENCE_STATUSES,
+  listAbsences,
+  createAbsence,
+  updateAbsenceStatus,
+  updateAbsence
 };
