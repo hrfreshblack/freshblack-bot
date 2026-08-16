@@ -74,6 +74,15 @@
   .kpiCard .kpiValue { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .kpiCard .kpiLabel { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
+  .breakdownGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 4px; }
+  .breakdownCard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .breakdownCard .breakdownTitle { font-size: 12px; font-weight: 700; margin-bottom: 10px; color: var(--text); }
+  .metricBarRow { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12px; }
+  .metricBarLabel { width: 90px; flex-shrink: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .metricBarTrack { flex: 1; background: rgba(255,255,255,0.06); border-radius: 4px; height: 10px; overflow: hidden; }
+  .metricBarFill { background: var(--accent); height: 100%; border-radius: 4px; }
+  .metricBarValue { width: 28px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
   .cardsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
   .personCard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer; }
   .personCard:hover { border-color: var(--accent); }
@@ -170,7 +179,16 @@
 
   <div id="viewDashboard" style="display:none;">
     <div class="kpiRow" id="dashboardKpis"></div>
-    <p style="color: var(--muted); font-size: 12px;">Перший зріз HR CRM: Employee Master Data + Organization Structure. Recruitment, Onboarding, Performance, Compensation-аналітика та інші модулі з ТЗ — наступні кроки.</p>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Найм</h3>
+    <div class="kpiRow" id="dashboardRecruitmentKpis"></div>
+    <div class="breakdownGrid" id="dashboardFunnel"></div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Персонал</h3>
+    <div class="kpiRow" id="dashboardPeopleKpis"></div>
+    <div class="breakdownGrid" id="dashboardBreakdowns"></div>
+
+    <p style="color: var(--muted); font-size: 12px; margin-top: 20px;">Це базові HR-метрики зі стандартними формулами (наведи курсор на ⓘ, щоб побачити, як саме рахується) — не повноцінна аналітика з ТЗ розділу 29, яку свідомо відкладено до стабілізації даних.</p>
   </div>
 
   <div id="viewPeople" style="display:none;">
@@ -1251,10 +1269,39 @@ function showTab(tab) {
 
 // ---- Dashboard ----
 
+function kpiCardHtml(value, label, formula) {
+  return `<div class="kpiCard"><div class="kpiValue">${value}</div><div class="kpiLabel">${escAttr(label)}${formula ? ' <span class="ⓘ" title="' + escAttr(formula) + '">ⓘ</span>' : ''}</div></div>`;
+}
+
+function breakdownCardHtml(title, formula, dataObj, opts = {}) {
+  const entries = Object.entries(dataObj);
+  const total = entries.reduce((s, [, v]) => s + v, 0);
+  const maxVal = Math.max(1, ...entries.map(([, v]) => v));
+  const rows = entries.map(([label, value]) => {
+    const pct = opts.scaleByMax ? (value / maxVal) * 100 : (total > 0 ? (value / total) * 100 : 0);
+    return `
+      <div class="metricBarRow">
+        <div class="metricBarLabel" title="${escAttr(label)}">${escAttr(label)}</div>
+        <div class="metricBarTrack"><div class="metricBarFill" style="width:${pct}%;"></div></div>
+        <div class="metricBarValue">${value}</div>
+      </div>
+    `;
+  }).join('');
+  return `
+    <div class="breakdownCard">
+      <div class="breakdownTitle">${escAttr(title)} ${formula ? '<span class="ⓘ" title="' + escAttr(formula) + '">ⓘ</span>' : ''}</div>
+      ${rows || '<p style="color:var(--muted); font-size:12px;">Немає даних.</p>'}
+    </div>
+  `;
+}
+
 async function loadDashboard() {
-  const [empResp, orgResp] = await Promise.all([apiFetch('/api/employees'), apiFetch('/api/org-tree')]);
+  const [empResp, orgResp, metricsResp] = await Promise.all([
+    apiFetch('/api/employees'), apiFetch('/api/org-tree'), apiFetch('/api/dashboard/metrics')
+  ]);
   const empData = await empResp.json();
   const orgData = await orgResp.json();
+  const metricsData = await metricsResp.json();
   if (!empData.ok || !orgData.ok) return;
 
   const employees = empData.employees;
@@ -1263,13 +1310,60 @@ async function loadDashboard() {
   const vacant = orgData.positions.filter((p) => p.status === 'Vacant' || p.status === 'Recruitment Active');
   const departments = orgData.departments.length;
 
-  document.getElementById('dashboardKpis').innerHTML = `
-    <div class="kpiCard"><div class="kpiValue">${active.length}</div><div class="kpiLabel">Active headcount</div></div>
-    <div class="kpiCard"><div class="kpiValue">${probation.length}</div><div class="kpiLabel">На випробувальному</div></div>
-    <div class="kpiCard"><div class="kpiValue">${vacant.length}</div><div class="kpiLabel">Вакантні посади</div></div>
-    <div class="kpiCard"><div class="kpiValue">${departments}</div><div class="kpiLabel">Департаментів</div></div>
-    <div class="kpiCard"><div class="kpiValue">${employees.length}</div><div class="kpiLabel">Усього в системі</div></div>
-  `;
+  document.getElementById('dashboardKpis').innerHTML = [
+    kpiCardHtml(active.length, 'Active headcount', 'Співробітники зі статусом Active, Probation або Part-time.'),
+    kpiCardHtml(probation.length, 'На випробувальному', 'Співробітники зі статусом Probation.'),
+    kpiCardHtml(vacant.length, 'Вакантні посади', 'Посади зі статусом Vacant або Recruitment Active.'),
+    kpiCardHtml(departments, 'Департаментів', ''),
+    kpiCardHtml(employees.length, 'Усього в системі', 'Усі картки, включно з Future Employee та Former Employee.')
+  ].join('');
+
+  if (!metricsData.ok) return;
+  const m = metricsData.metrics;
+
+  document.getElementById('dashboardRecruitmentKpis').innerHTML = [
+    kpiCardHtml(
+      m.timeToFillDays != null ? m.timeToFillDays + ' дн.' : '—',
+      'Час закриття вакансії (Time to Fill)',
+      'Середня кількість днів від створення вакансії до переходу в статус Filled. Рахується по вже закритих вакансіях (' + m.filledVacanciesCount + ' шт.).'
+    ),
+    kpiCardHtml(
+      Object.values(m.funnel).reduce((s, v) => s + v, 0),
+      'Активних заявок у воронці',
+      'Сума заявок кандидатів (Application) зі статусом Active по всіх етапах.'
+    )
+  ].join('');
+
+  document.getElementById('dashboardFunnel').innerHTML = breakdownCardHtml(
+    'Воронка найму',
+    'Кількість активних заявок кандидатів на кожному етапі: New Candidate → Screening → Interview → Test Task → Reference Check → Offer → Hired.',
+    m.funnel, { scaleByMax: true }
+  );
+
+  document.getElementById('dashboardPeopleKpis').innerHTML = [
+    kpiCardHtml(
+      m.turnoverRatePct != null ? m.turnoverRatePct + '%' : '—',
+      'Плинність кадрів за 12 міс',
+      'Плинність = (звільнення за 12 міс / середній headcount за 12 міс) × 100%. Середній headcount = (headcount зараз + headcount 12 міс тому) / 2. Звільнень за період: ' + m.separations12mo + '.'
+    ),
+    kpiCardHtml(
+      m.avgTenureMonths != null ? m.avgTenureMonths + ' міс.' : '—',
+      'Середній стаж',
+      'Середнє значення (сьогодні − дата початку поточного періоду працевлаштування) серед активних співробітників.'
+    ),
+    kpiCardHtml(
+      m.probationPassRatePct != null ? m.probationPassRatePct + '%' : '—',
+      '% пройшли випробувальний',
+      '% Passed = Passed / (Passed + Failed) × 100%, серед усіх із зафіксованим рішенням. Extended у формулу не входить, рахується окремо.'
+    )
+  ].join('');
+
+  document.getElementById('dashboardBreakdowns').innerHTML = [
+    breakdownCardHtml('Плинність за типом (12 міс)', "Voluntary — з ініціативи співробітника/за згодою сторін. Involuntary — з ініціативи компанії/закінчення контракту. Probation — не пройшов випробувальний термін.", m.turnoverBreakdown),
+    breakdownCardHtml('Стать (активні)', 'Розподіл активних співробітників за полем Gender у Personal.', m.genderBreakdown),
+    breakdownCardHtml('Стаж (активні)', 'Розподіл активних співробітників за стажем: <3міс, 3-6міс, 6-12міс, 1-2р, 2-3р, 3+р.', m.tenureBuckets),
+    breakdownCardHtml('Випробувальний термін (усього)', 'Кількість зафіксованих рішень по кожному типу за весь час.', m.probationCounts)
+  ].join('');
 }
 
 // ---- People (Employees) ----
