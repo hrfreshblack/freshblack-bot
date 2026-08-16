@@ -9,7 +9,17 @@ import { signSsoToken, verifySsoToken } from './sso.js';
 const resumeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 function uploadSingleFile(req, res) {
   return new Promise((resolve, reject) => {
-    resumeUpload.single('file')(req, res, (err) => { if (err) reject(err); else resolve(); });
+    resumeUpload.single('file')(req, res, (err) => {
+      if (err) { reject(err); return; }
+      // Busboy (усередині multer) декодує заголовок Content-Disposition як
+      // latin1 за замовчуванням — браузер же шле саме UTF-8 байти імені
+      // файлу без RFC 5987-екранування, тож кирилиця приходить "кракозябрами"
+      // (класичний double-encoding). Перекодовуємо назад у UTF-8.
+      if (req.file) {
+        req.file.originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+      }
+      resolve();
+    });
   });
 }
 
