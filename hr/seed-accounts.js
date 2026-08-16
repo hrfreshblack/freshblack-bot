@@ -8,5 +8,11 @@ export default [
     "role": "HRD",
     "display_name": "Тетяна Своволя",
     "password_hash": "$2b$10$4csz/YEZ6OMzsVP692hgtO1B5j6yA.YPSv.RJ6wHytQT9KU2usw0O"
+  },
+  {
+    "username": "anastasia",
+    "role": "Recruiter",
+    "display_name": "Анастасія",
+    "password_hash": "$2b$10$jNYJYRLuRmEnqcU1t8hpgudha94cmDtIvqrkvvqeZpAmDWTUP4Ln6"
   }
 ];

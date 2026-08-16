@@ -3309,6 +3309,130 @@ async function getResumeFile(resumeId) {
   return rows[0] || null;
 }
 
+// ---------------------------------------------------------------------
+// Dashboard metrics — базові HR-метрики зі стандартними формулами
+// (навмисно без повноцінної аналітики/фільтрів з ТЗ розділу 29, яку
+// ТЗ прямо каже відкласти до стабілізації даних — це саме "основні
+// метрики" на прохання користувача, з формулами для навчання команди).
+// ---------------------------------------------------------------------
+
+const ACTIVE_EMPLOYEE_STATUSES = ['Active', 'Probation', 'Part-time'];
+
+async function countHeadcountAsOf(date) {
+  const { rows } = await pool.query(`
+    SELECT COUNT(DISTINCT e.id)::int AS count
+    FROM hr_employees e
+    JOIN hr_employment_periods ep ON ep.employee_id = e.id
+    WHERE ep.start_date <= $1 AND (ep.end_date IS NULL OR ep.end_date >= $1)
+  `, [date]);
+  return rows[0].count;
+}
+
+async function getDashboardMetrics() {
+  const now = new Date();
+  const twelveMonthsAgo = new Date(now);
+  twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+  const twelveMonthsAgoStr = twelveMonthsAgo.toISOString().slice(0, 10);
+
+  const { rows: activeRows } = await pool.query(
+    `SELECT e.id, e.status, per.gender, ep.start_date
+     FROM hr_employees e
+     JOIN hr_persons per ON per.id = e.person_id
+     LEFT JOIN hr_employment_periods ep ON ep.employee_id = e.id AND ep.end_date IS NULL
+     WHERE e.status = ANY($1) AND e.active = true`,
+    [ACTIVE_EMPLOYEE_STATUSES]
+  );
+  const headcountNow = activeRows.length;
+  const probationCount = activeRows.filter((r) => r.status === 'Probation').length;
+
+  // Плинність кадрів (Turnover Rate) за останні 12 місяців:
+  // (звільнення за період / середній headcount за період) × 100.
+  // Середній headcount = (headcount зараз + headcount 12 міс тому) / 2.
+  const headcount12moAgo = await countHeadcountAsOf(twelveMonthsAgoStr);
+  const { rows: separationRows } = await pool.query(
+    `SELECT initiation_type FROM hr_offboarding_cases WHERE status = 'Completed' AND completed_at >= $1`,
+    [twelveMonthsAgo.toISOString()]
+  );
+  const separations12mo = separationRows.length;
+  const avgHeadcount = (headcountNow + headcount12moAgo) / 2;
+  const turnoverRatePct = avgHeadcount > 0 ? Math.round((separations12mo / avgHeadcount) * 1000) / 10 : null;
+  const turnoverBreakdown = { Voluntary: 0, Involuntary: 0, Probation: 0, Other: 0 };
+  separationRows.forEach((r) => { turnoverBreakdown[turnoverClassification(r.initiation_type)]++; });
+
+  // Середній стаж серед активних співробітників, у місяцях.
+  const tenureDaysList = activeRows.filter((r) => r.start_date).map((r) => (now - new Date(r.start_date)) / 86400000);
+  const avgTenureMonths = tenureDaysList.length ? Math.round((tenureDaysList.reduce((s, d) => s + d, 0) / tenureDaysList.length / 30.44) * 10) / 10 : null;
+
+  // Розподіл за стажем (ТЗ 21.2): <3м, 3-6м, 6-12м, 1-2р, 2-3р, 3+р.
+  const tenureBuckets = { '<3 міс': 0, '3-6 міс': 0, '6-12 міс': 0, '1-2 роки': 0, '2-3 роки': 0, '3+ роки': 0 };
+  tenureDaysList.forEach((days) => {
+    const months = days / 30.44;
+    if (months < 3) tenureBuckets['<3 міс']++;
+    else if (months < 6) tenureBuckets['3-6 міс']++;
+    else if (months < 12) tenureBuckets['6-12 міс']++;
+    else if (months < 24) tenureBuckets['1-2 роки']++;
+    else if (months < 36) tenureBuckets['2-3 роки']++;
+    else tenureBuckets['3+ роки']++;
+  });
+
+  // Гендерний розподіл (ТЗ 21.2).
+  const genderBreakdown = { Female: 0, Male: 0, 'Не вказано': 0 };
+  activeRows.forEach((r) => {
+    if (r.gender === 'Female') genderBreakdown.Female++;
+    else if (r.gender === 'Male') genderBreakdown.Male++;
+    else genderBreakdown['Не вказано']++;
+  });
+
+  // Vacant positions + департаменти (ті самі, що вже були на дашборді).
+  const { rows: posRows } = await pool.query(`SELECT status FROM hr_positions WHERE active = true`);
+  const vacantPositions = posRows.filter((p) => p.status === 'Vacant' || p.status === 'Recruitment Active').length;
+  const { rows: deptCountRows } = await pool.query(`SELECT COUNT(*)::int AS count FROM hr_departments WHERE active = true`);
+
+  // Час закриття вакансії (Time to Fill) — середня к-сть днів від
+  // створення вакансії до переходу в статус Filled.
+  const { rows: filledVacancies } = await pool.query(
+    `SELECT EXTRACT(EPOCH FROM (updated_at - created_at)) / 86400 AS days FROM hr_vacancies WHERE status = 'Filled'`
+  );
+  const timeToFillDays = filledVacancies.length
+    ? Math.round((filledVacancies.reduce((s, r) => s + Number(r.days), 0) / filledVacancies.length) * 10) / 10
+    : null;
+
+  // Воронка найму — активні заявки кандидатів по етапах.
+  const { rows: funnelRows } = await pool.query(
+    `SELECT stage, COUNT(*)::int AS count FROM hr_applications WHERE status = 'Active' GROUP BY stage`
+  );
+  const funnel = {};
+  APPLICATION_STAGES.forEach((s) => { funnel[s] = 0; });
+  funnelRows.forEach((r) => { funnel[r.stage] = r.count; });
+
+  // % проходження випробувального терміну = Passed / (Passed + Failed).
+  const { rows: probationRows } = await pool.query(
+    `SELECT probation_decision, COUNT(*)::int AS count FROM hr_employees WHERE probation_decision != '' GROUP BY probation_decision`
+  );
+  const probationCounts = { Passed: 0, Extended: 0, Failed: 0 };
+  probationRows.forEach((r) => { probationCounts[r.probation_decision] = r.count; });
+  const probationDenominator = probationCounts.Passed + probationCounts.Failed;
+  const probationPassRatePct = probationDenominator > 0 ? Math.round((probationCounts.Passed / probationDenominator) * 1000) / 10 : null;
+
+  return {
+    headcountNow,
+    probationCount,
+    vacantPositions,
+    departmentsCount: deptCountRows[0].count,
+    turnoverRatePct,
+    turnoverBreakdown,
+    separations12mo,
+    avgTenureMonths,
+    tenureBuckets,
+    genderBreakdown,
+    timeToFillDays,
+    filledVacanciesCount: filledVacancies.length,
+    funnel,
+    probationCounts,
+    probationPassRatePct
+  };
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -3484,5 +3608,6 @@ export default {
   uploadResumeAndMatchCandidate,
   addResumeToCandidate,
   listResumesForCandidate,
-  getResumeFile
+  getResumeFile,
+  getDashboardMetrics
 };
