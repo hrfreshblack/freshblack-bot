@@ -252,6 +252,7 @@
       <div class="viewToolbar">
         <select id="vrStatusFilter"><option value="">— усі статуси —</option></select>
         <button id="btnAddVacancyRequest">+ Заявка на вакансію</button>
+        <button class="secondary" id="btnUploadVacancyRequest">+ Заявка з файлу</button>
       </div>
       <div class="tableWrap"><table><thead><tr><th>Посада</th><th>Департамент</th><th>К-сть</th><th>Пріоритет</th><th>Статус</th><th>Дата</th></tr></thead><tbody id="vrTableBody"></tbody></table></div>
       <div class="empty" id="vrEmpty" style="display:none;">Заявок ще немає.</div>
@@ -1120,6 +1121,20 @@
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('bulkResumeOverlay')">Закрити</button>
       <button id="btnStartBulkResumeUpload">Завантажити</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: створити заявку на вакансію з файлу -->
+<div class="overlay" id="vrUploadOverlay">
+  <div class="modal" style="max-width: 480px;">
+    <h2>Заявка на вакансію з файлу</h2>
+    <p style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;">PDF, DOCX або TXT. Система спробує розпізнати поля за підписами в тексті (напр. "Посада: ...") — чернетку завжди можна доправити вручну. Департамент обирається вручну, бо в тексті його не завжди можна однозначно впізнати.</p>
+    <div class="field"><label>Департамент</label><select id="vrUploadDepartment"></select></div>
+    <div class="field"><input type="file" id="vrUploadFile" accept=".pdf,.docx,.doc,.txt"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('vrUploadOverlay')">Скасувати</button>
+      <button id="btnStartVrUpload">Створити</button>
     </div>
   </div>
 </div>
@@ -3881,6 +3896,29 @@ document.getElementById('btnAddVacancyRequest').onclick = async () => {
   document.getElementById('vrStatusActions').style.display = 'none';
   document.getElementById('vrAttachmentsSection').style.display = 'none';
   document.getElementById('vacancyRequestOverlay').classList.add('open');
+};
+
+document.getElementById('btnUploadVacancyRequest').onclick = async () => {
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('vrUploadDepartment').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  document.getElementById('vrUploadFile').value = '';
+  document.getElementById('vrUploadOverlay').classList.add('open');
+};
+
+document.getElementById('btnStartVrUpload').onclick = async () => {
+  const file = document.getElementById('vrUploadFile').files[0];
+  if (!file) { showToast('Обери файл'); return; }
+  const department_id = document.getElementById('vrUploadDepartment').value;
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('department_id', department_id);
+  const resp = await apiFetch('/api/vacancy-requests/upload', { method: 'POST', body: formData });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити заявку з файлу'); return; }
+  closeOverlay('vrUploadOverlay');
+  showToast('Чернетку створено з файлу — перевір поля');
+  loadVacancyRequests();
+  await openVacancyRequest(data.request.id);
 };
 
 async function renderVacancyRequestAttachments(id) {

@@ -1398,6 +1398,97 @@ async function getVacancyRequest(id) {
 
 const VACANCY_REQUEST_NULLABLE_FIELDS = new Set(['hiring_manager_employee_id', 'desired_start_date']);
 
+// Без AI — та сама евристика, що й для резюме (ТЗ п.11): шукаємо в тексті
+// рядок "Label: значення" (label — один із відомих варіантів написання
+// поля), якщо значення порожнє — беремо наступний непорожній рядок. Завжди
+// можна доправити вручну в модалці після імпорту, це лише чернетка.
+const VACANCY_REQUEST_FIELD_LABELS = {
+  position_title: ['посада', 'назва посади'],
+  quantity: ['кількість', 'к-сть', 'кількість вакансій'],
+  priority: ['пріоритет'],
+  desired_start_date: ['бажана дата старту', 'дата старту', 'дата початку'],
+  request_reason: ['причина заявки', 'причина'],
+  responsibilities: ["обов'язки", 'обов’язки', 'обовязки'],
+  ideal_candidate_portrait: ['портрет ідеального кандидата', 'портрет кандидата'],
+  skills_professional: ['професійні навички'],
+  skills_technical: ['технічні навички'],
+  skills_additional: ['додаткові навички'],
+  product_knowledge: ['знання продукту'],
+  personal_qualities_required: ["обов'язкові особисті якості", 'особисті якості обов’язкові', 'особисті якості (обов\'язкові)'],
+  personal_qualities_desired: ['бажані особисті якості', 'особисті якості бажані', 'особисті якості (бажані)'],
+  compensation_trial: ['оплата на стажуванні', 'оплата стажування'],
+  compensation_probation: ['оплата на випробувальному'],
+  compensation_after_probation: ['оплата після випробувального'],
+  compensation_bonus_formula: ['формула бонусу', 'бонус'],
+  probation_goals: ['цілі випробувального'],
+  career_growth: ["кар'єрний ріст", 'кар’єрний ріст', 'кар\'єрне зростання'],
+  notes: ['нотатки', 'примітки']
+};
+
+const PRIORITY_ALIASES = {
+  низький: 'Low', low: 'Low',
+  середній: 'Medium', medium: 'Medium',
+  високий: 'High', high: 'High',
+  терміново: 'Urgent', термінові: 'Urgent', urgent: 'Urgent', критично: 'Urgent'
+};
+
+function parseVacancyRequestFieldsFromText(text) {
+  const lines = text.split('\n').map((l) => l.trim());
+  const found = {};
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const m = line.match(/^([^:—-]{2,40})[:—-]\s*(.*)$/);
+    if (!m) continue;
+    const rawLabel = m[1].trim().toLowerCase();
+    let value = m[2].trim();
+    for (const [field, labels] of Object.entries(VACANCY_REQUEST_FIELD_LABELS)) {
+      if (found[field]) continue;
+      if (!labels.includes(rawLabel)) continue;
+      if (!value) {
+        const next = lines.slice(i + 1).find(Boolean);
+        value = next || '';
+      }
+      if (value) found[field] = value;
+      break;
+    }
+  }
+  if (found.quantity) {
+    const n = parseInt(found.quantity, 10);
+    found.quantity = Number.isFinite(n) && n > 0 ? n : 1;
+  }
+  if (found.priority) {
+    found.priority = PRIORITY_ALIASES[found.priority.toLowerCase()] || '';
+    if (!found.priority) delete found.priority;
+  }
+  if (found.desired_start_date) {
+    const ddmmyyyy = found.desired_start_date.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);
+    if (ddmmyyyy) {
+      found.desired_start_date = `${ddmmyyyy[3]}-${ddmmyyyy[2].padStart(2, '0')}-${ddmmyyyy[1].padStart(2, '0')}`;
+    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(found.desired_start_date)) {
+      delete found.desired_start_date;
+    }
+  }
+  return found;
+}
+
+// Файл (docx/pdf/txt) -> чернетка заявки на вакансію (Draft), сам файл
+// одразу прикріплюється до неї. Департамент — обов'язкове поле в схемі
+// (NOT NULL FK), тому не намагаємось вгадати його з тексту (заголовки типу
+// "Відділ продажів" неоднозначні) — його обирає користувач у формі
+// завантаження, як і при ручному створенні заявки.
+async function createVacancyRequestFromFile({ buffer, filename, mimeType, department_id }, uploadedBy) {
+  if (!department_id) throw new Error('Департамент обов’язковий');
+  const { text } = await extractResumeText(buffer, mimeType, filename);
+  const parsed = parseVacancyRequestFieldsFromText(text);
+  if (!parsed.position_title) {
+    parsed.position_title = filename.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+  }
+  const request = await createVacancyRequest({ ...parsed, department_id }, uploadedBy);
+  const attachment = await addVacancyRequestAttachment(request.id, { buffer, filename, mimeType }, uploadedBy);
+  return { request, attachment, parsedFields: Object.keys(parsed) };
+}
+
 async function createVacancyRequest(fields, created_by) {
   const cols = VACANCY_REQUEST_FIELDS;
   const values = cols.map((c) => {
@@ -3785,6 +3876,7 @@ export default {
   listVacancyRequests,
   getVacancyRequest,
   createVacancyRequest,
+  createVacancyRequestFromFile,
   updateVacancyRequest,
   updateVacancyRequestStatus,
   convertVacancyRequestToVacancy,
