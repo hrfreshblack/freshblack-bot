@@ -10,13 +10,14 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL
 });
 
-// HRD = повний доступ до всього (аналог "адмін" у ERP виробництва). Інші
-// ролі з ТЗ (Recruiter, Hiring Manager, Department Manager, Mentor/Buddy,
-// Financial Manager, Custom Role) стосуються модулів Release 1, яких у
-// цьому першому зрізі (Employee Master Data + Org Structure) ще немає —
-// поле role лишається розширюваним, але реально розмежовує права поки
-// лише HRD/не-HRD.
-const ACCOUNT_ROLES = ['HRD', 'Manager', 'Employee'];
+// HRD = повний доступ до всього (аналог "адмін" у ERP виробництва).
+// Recruiter — перша реально розмежована роль з ТЗ п.4: Vacancy Requests,
+// Vacancies, Candidates, Interviews, Offers, Preboarding — без
+// Compensation і приватних HR-нотаток. Решта ролей з ТЗ (Hiring Manager,
+// Department Manager, Mentor/Buddy, Financial Manager, Custom Role)
+// стосуються модулів, яких ще нема (employee self-service портал) —
+// поле лишається розширюваним.
+const ACCOUNT_ROLES = ['HRD', 'Recruiter', 'Manager', 'Employee'];
 const SESSION_IDLE_MINUTES = 60;
 
 const EMPLOYEE_STATUSES = [

@@ -447,7 +447,7 @@ app.get('/api/vacancy-requests/:id', async (req, res) => {
   }
 });
 
-app.post('/api/vacancy-requests', requireRole(), async (req, res) => {
+app.post('/api/vacancy-requests', requireRole('Recruiter'), async (req, res) => {
   try {
     const body = req.body || {};
     if (!body.position_title || !body.department_id) {
@@ -462,7 +462,7 @@ app.post('/api/vacancy-requests', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/vacancy-requests/:id', requireRole(), async (req, res) => {
+app.post('/api/vacancy-requests/:id', requireRole('Recruiter'), async (req, res) => {
   try {
     const request = await db.updateVacancyRequest(Number(req.params.id), req.body || {});
     if (!request) {
@@ -476,7 +476,7 @@ app.post('/api/vacancy-requests/:id', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/vacancy-requests/:id/status', requireRole(), async (req, res) => {
+app.post('/api/vacancy-requests/:id/status', requireRole('Recruiter'), async (req, res) => {
   try {
     const { status, status_note } = req.body || {};
     const request = await db.updateVacancyRequestStatus(Number(req.params.id), status, status_note, req.account.username);
@@ -491,7 +491,7 @@ app.post('/api/vacancy-requests/:id/status', requireRole(), async (req, res) => 
   }
 });
 
-app.post('/api/vacancy-requests/:id/convert', requireRole(), async (req, res) => {
+app.post('/api/vacancy-requests/:id/convert', requireRole('Recruiter'), async (req, res) => {
   try {
     const { position_id, recruiter_username, target_date, priority } = req.body || {};
     const vacancy = await db.convertVacancyRequestToVacancy(Number(req.params.id), { position_id, recruiter_username, target_date, priority }, req.account.username);
@@ -529,7 +529,7 @@ app.get('/api/vacancies/:id', async (req, res) => {
   }
 });
 
-app.post('/api/vacancies', requireRole(), async (req, res) => {
+app.post('/api/vacancies', requireRole('Recruiter'), async (req, res) => {
   try {
     const body = req.body || {};
     if (!body.title || !body.department_id) {
@@ -544,7 +544,7 @@ app.post('/api/vacancies', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/vacancies/:id', requireRole(), async (req, res) => {
+app.post('/api/vacancies/:id', requireRole('Recruiter'), async (req, res) => {
   try {
     const vacancy = await db.updateVacancy(Number(req.params.id), req.body || {});
     if (!vacancy) {
@@ -558,7 +558,7 @@ app.post('/api/vacancies/:id', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/vacancies/:id/status', requireRole(), async (req, res) => {
+app.post('/api/vacancies/:id/status', requireRole('Recruiter'), async (req, res) => {
   try {
     const { status } = req.body || {};
     const vacancy = await db.updateVacancyStatus(Number(req.params.id), status, req.account.username);
@@ -600,7 +600,7 @@ app.get('/api/candidates/:id', async (req, res) => {
   }
 });
 
-app.post('/api/candidates', requireRole(), async (req, res) => {
+app.post('/api/candidates', requireRole('Recruiter'), async (req, res) => {
   try {
     const body = req.body || {};
     if (!body.full_name || !String(body.full_name).trim()) {
@@ -615,7 +615,7 @@ app.post('/api/candidates', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/candidates/upload-resume', requireRole(), async (req, res) => {
+app.post('/api/candidates/upload-resume', requireRole('Recruiter'), async (req, res) => {
   try {
     await uploadSingleFile(req, res);
     if (!req.file) {
@@ -634,7 +634,7 @@ app.post('/api/candidates/upload-resume', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/candidates/:id', requireRole(), async (req, res) => {
+app.post('/api/candidates/:id', requireRole('Recruiter'), async (req, res) => {
   try {
     const candidate = await db.updateCandidateFields(Number(req.params.id), req.body || {});
     if (!candidate) {
@@ -648,7 +648,7 @@ app.post('/api/candidates/:id', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/candidates/:id/personal', requireRole(), async (req, res) => {
+app.post('/api/candidates/:id/personal', requireRole('Recruiter'), async (req, res) => {
   try {
     const candidate = await db.getCandidate(Number(req.params.id));
     if (!candidate) {
@@ -679,7 +679,7 @@ app.get('/api/applications/:id', async (req, res) => {
   }
 });
 
-app.post('/api/applications', requireRole(), async (req, res) => {
+app.post('/api/applications', requireRole('Recruiter'), async (req, res) => {
   try {
     const { candidate_id, vacancy_id, applied_date } = req.body || {};
     if (!candidate_id || !vacancy_id) {
@@ -694,7 +694,7 @@ app.post('/api/applications', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/applications/:id/stage', requireRole(), async (req, res) => {
+app.post('/api/applications/:id/stage', requireRole('Recruiter'), async (req, res) => {
   try {
     const { stage } = req.body || {};
     const application = await db.updateApplicationStage(Number(req.params.id), stage, req.account.username);
@@ -709,7 +709,7 @@ app.post('/api/applications/:id/stage', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/applications/:id/status', requireRole(), async (req, res) => {
+app.post('/api/applications/:id/status', requireRole('Recruiter'), async (req, res) => {
   try {
     const application = await db.updateApplicationStatus(Number(req.params.id), req.body || {}, req.account.username);
     if (!application) {
@@ -725,7 +725,7 @@ app.post('/api/applications/:id/status', requireRole(), async (req, res) => {
 
 // ---- Recruitment / ATS: Interviews ----
 
-app.post('/api/applications/:id/interviews', requireRole(), async (req, res) => {
+app.post('/api/applications/:id/interviews', requireRole('Recruiter'), async (req, res) => {
   try {
     const interview = await db.createInterview({ ...(req.body || {}), application_id: Number(req.params.id) }, req.account.username);
     res.json({ ok: true, interview });
@@ -735,7 +735,7 @@ app.post('/api/applications/:id/interviews', requireRole(), async (req, res) => 
   }
 });
 
-app.post('/api/interviews/:id', requireRole(), async (req, res) => {
+app.post('/api/interviews/:id', requireRole('Recruiter'), async (req, res) => {
   try {
     const interview = await db.updateInterview(Number(req.params.id), req.body || {});
     if (!interview) {
@@ -751,7 +751,7 @@ app.post('/api/interviews/:id', requireRole(), async (req, res) => {
 
 // ---- Recruitment / ATS: Offers ----
 
-app.post('/api/applications/:id/offers', requireRole(), async (req, res) => {
+app.post('/api/applications/:id/offers', requireRole('Recruiter'), async (req, res) => {
   try {
     const offer = await db.createOffer({ ...(req.body || {}), application_id: Number(req.params.id) }, req.account.username);
     res.json({ ok: true, offer });
@@ -761,7 +761,7 @@ app.post('/api/applications/:id/offers', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/offers/:id', requireRole(), async (req, res) => {
+app.post('/api/offers/:id', requireRole('Recruiter'), async (req, res) => {
   try {
     const offer = await db.updateOffer(Number(req.params.id), req.body || {});
     if (!offer) {
@@ -775,7 +775,7 @@ app.post('/api/offers/:id', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/offers/:id/status', requireRole(), async (req, res) => {
+app.post('/api/offers/:id/status', requireRole('Recruiter'), async (req, res) => {
   try {
     const { status, approved_by } = req.body || {};
     const offer = await db.updateOfferStatus(Number(req.params.id), status, req.account.username, approved_by);
@@ -906,7 +906,7 @@ app.get('/api/employees/:id/preboarding', async (req, res) => {
   }
 });
 
-app.post('/api/employees/:id/preboarding', requireRole(), async (req, res) => {
+app.post('/api/employees/:id/preboarding', requireRole('Recruiter'), async (req, res) => {
   try {
     const info = await db.upsertPreboardingInfo(Number(req.params.id), req.body || {});
     res.json({ ok: true, info });
@@ -1843,7 +1843,7 @@ app.post('/api/offboarding-cases/:id/close', requireRole(), async (req, res) => 
 
 // ---- Resume upload & parsing (ТЗ п.11) ----
 
-app.post('/api/candidates/:id/resumes', requireRole(), async (req, res) => {
+app.post('/api/candidates/:id/resumes', requireRole('Recruiter'), async (req, res) => {
   try {
     await uploadSingleFile(req, res);
     if (!req.file) {
