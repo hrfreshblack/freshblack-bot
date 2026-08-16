@@ -160,6 +160,7 @@
     <button id="tabOnboardingTemplates" onclick="showTab('onboardingTemplates')">Адаптація</button>
     <button id="tabOkr" onclick="showTab('okr')">OKR</button>
     <button id="tabKnowledge" onclick="showTab('knowledge')">Знання</button>
+    <button id="tabSurveys" onclick="showTab('surveys')">Опитування</button>
   </nav>
 </header>
 
@@ -349,6 +350,34 @@
       <div id="learningPathsList"></div>
       <div class="empty" id="learningPathsEmpty" style="display:none;">Навчальних шляхів ще немає.</div>
     </div>
+  </div>
+
+  <div id="viewSurveys" style="display:none;">
+    <div class="viewToolbar">
+      <select id="surveyTypeFilter"><option value="">— усі типи —</option></select>
+      <select id="surveyStatusFilter"><option value="">— усі статуси —</option></select>
+      <button id="btnAddSurvey">+ Опитування</button>
+    </div>
+    <div class="tableWrap"><table><thead><tr><th>Назва</th><th>Тип</th><th>Статус</th><th>Анонімне</th><th>Відповіді</th></tr></thead><tbody id="surveysBody"></tbody></table></div>
+    <div class="empty" id="surveysEmpty" style="display:none;">Опитувань ще немає.</div>
+  </div>
+
+  <div id="viewSurveyDetail" style="display:none;">
+    <button class="secondary" onclick="showTab('surveys')">← До опитувань</button>
+    <div id="surveyDetailHeader" style="margin:16px 0;"></div>
+    <div class="viewToolbar">
+      <button class="secondary" onclick="setSurveyStatus('Active')">Активувати</button>
+      <button class="secondary" onclick="setSurveyStatus('Closed')">Закрити</button>
+      <button class="secondary" onclick="inviteAllToSurvey()">Запросити всіх активних</button>
+      <button onclick="openRecordResponse()">Записати відповідь</button>
+    </div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Питання</h3>
+    <div id="surveyQuestionsList"></div>
+    <button class="secondary" onclick="openAddSurveyQuestion()">+ Питання</button>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Результати</h3>
+    <div id="surveyResultsPanel"></div>
   </div>
 
 </main>
@@ -863,6 +892,49 @@
   </div>
 </div>
 
+<!-- Модалка: нове опитування -->
+<div class="overlay" id="surveyOverlay">
+  <div class="modal">
+    <h2>Нове опитування</h2>
+    <div class="field"><label>Назва</label><input type="text" id="survTitle"></div>
+    <div class="field"><label>Тип</label><select id="survType"></select></div>
+    <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="survAnonymous" style="width:auto;"> Анонімне</label></div>
+    <div class="field" id="survLinkedEmployeeWrap" style="display:none;"><label>Прив'язаний співробітник</label><select id="survLinkedEmployee"></select></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('surveyOverlay')">Скасувати</button>
+      <button id="btnSaveSurvey">Створити</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: питання опитування -->
+<div class="overlay" id="surveyQuestionOverlay">
+  <div class="modal">
+    <h2>Нове питання</h2>
+    <div class="field"><label>Текст питання</label><input type="text" id="sqText"></div>
+    <div class="field"><label>Тип</label><select id="sqType"></select></div>
+    <div class="field" id="sqOptionsWrap" style="display:none;"><label>Варіанти (через кому)</label><input type="text" id="sqOptions"></div>
+    <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="sqRequired" style="width:auto;" checked> Обов'язкове</label></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('surveyQuestionOverlay')">Скасувати</button>
+      <button id="btnSaveSurveyQuestion">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: записати відповідь -->
+<div class="overlay" id="surveyResponseOverlay">
+  <div class="modal" style="max-width: 560px;">
+    <h2>Записати відповідь</h2>
+    <div class="field"><label>Співробітник</label><select id="srEmployee"></select></div>
+    <div id="srQuestionsForm"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('surveyResponseOverlay')">Скасувати</button>
+      <button id="btnSaveSurveyResponse">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -986,11 +1058,16 @@ async function loadDictionaries() {
   document.getElementById('kbCategory').innerHTML = data.kbCategories.map((c) => `<option value="${c}">${c}</option>`).join('');
   document.getElementById('kbCategoryFilter').innerHTML = '<option value="">— усі категорії —</option>' + data.kbCategories.map((c) => `<option value="${c}">${c}</option>`).join('');
   document.getElementById('lpiType').innerHTML = data.learningItemTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
+
+  document.getElementById('survType').innerHTML = data.surveyTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
+  document.getElementById('surveyTypeFilter').innerHTML = '<option value="">— усі типи —</option>' + data.surveyTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
+  document.getElementById('surveyStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.surveyStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('sqType').innerHTML = data.surveyQuestionTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
 }
 
 // ---- Tabs ----
 
-const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr', 'tabKnowledge'];
+const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr', 'tabKnowledge', 'tabSurveys'];
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
@@ -1004,6 +1081,8 @@ function showTab(tab) {
   document.getElementById('viewOnboardingTemplates').style.display = tab === 'onboardingTemplates' ? '' : 'none';
   document.getElementById('viewOkr').style.display = tab === 'okr' ? '' : 'none';
   document.getElementById('viewKnowledge').style.display = tab === 'knowledge' ? '' : 'none';
+  document.getElementById('viewSurveys').style.display = tab === 'surveys' ? '' : 'none';
+  document.getElementById('viewSurveyDetail').style.display = 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
@@ -1011,6 +1090,7 @@ function showTab(tab) {
   document.getElementById('tabOnboardingTemplates').classList.toggle('active', tab === 'onboardingTemplates');
   document.getElementById('tabOkr').classList.toggle('active', tab === 'okr');
   document.getElementById('tabKnowledge').classList.toggle('active', tab === 'knowledge');
+  document.getElementById('tabSurveys').classList.toggle('active', tab === 'surveys');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'people') loadPeople();
   if (tab === 'org') loadOrg();
@@ -1018,6 +1098,7 @@ function showTab(tab) {
   if (tab === 'onboardingTemplates') loadOnboardingTemplates();
   if (tab === 'okr') loadOkrView();
   if (tab === 'knowledge') showKnowledgeSubTab(window._knowledgeSubTab || 'articles');
+  if (tab === 'surveys') loadSurveys();
 }
 
 // ---- Dashboard ----
@@ -2562,6 +2643,224 @@ document.getElementById('btnSaveLearningPathItem').onclick = async () => {
   closeOverlay('learningPathItemOverlay');
   showToast('Елемент додано');
   loadLearningPaths();
+};
+
+// ---- Surveys & Engagement ----
+
+function surveyStatusTag(status) {
+  const cls = status === 'Active' ? 'ok' : status === 'Closed' ? 'neutral' : 'warn';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+
+async function loadSurveys() {
+  const type = document.getElementById('surveyTypeFilter').value;
+  const status = document.getElementById('surveyStatusFilter').value;
+  const params = new URLSearchParams();
+  if (type) params.set('type', type);
+  if (status) params.set('status', status);
+  const resp = await apiFetch('/api/surveys?' + params.toString());
+  const data = await resp.json();
+  const body = document.getElementById('surveysBody');
+  const empty = document.getElementById('surveysEmpty');
+  const surveys = data.ok ? data.surveys : [];
+  if (!surveys.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = surveys.map((s) => `
+    <tr class="clickable" onclick="openSurveyDetail(${s.id})">
+      <td>${escAttr(s.title)}</td>
+      <td>${escAttr(s.type)}</td>
+      <td>${surveyStatusTag(s.status)}</td>
+      <td>${s.anonymous ? '✓' : '—'}</td>
+      <td>${s.response_count}/${s.invitation_count}</td>
+    </tr>
+  `).join('');
+}
+document.getElementById('surveyTypeFilter').addEventListener('change', loadSurveys);
+document.getElementById('surveyStatusFilter').addEventListener('change', loadSurveys);
+
+document.getElementById('btnAddSurvey').onclick = async () => {
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('survTitle').value = '';
+  document.getElementById('survType').value = 'eNPS';
+  document.getElementById('survAnonymous').checked = false;
+  document.getElementById('survLinkedEmployeeWrap').style.display = 'none';
+  document.getElementById('survLinkedEmployee').innerHTML = window._employeesCache.map((emp) => `<option value="${emp.id}">${escAttr(emp.full_name)}</option>`).join('');
+  document.getElementById('surveyOverlay').classList.add('open');
+};
+
+document.getElementById('survType').addEventListener('change', () => {
+  const type = document.getElementById('survType').value;
+  document.getElementById('survLinkedEmployeeWrap').style.display = (type === 'Adaptation' || type === 'Exit') ? '' : 'none';
+});
+
+document.getElementById('btnSaveSurvey').onclick = async () => {
+  const title = document.getElementById('survTitle').value.trim();
+  if (!title) { showToast('Назва обов’язкова'); return; }
+  const type = document.getElementById('survType').value;
+  const body = {
+    title,
+    type,
+    anonymous: document.getElementById('survAnonymous').checked,
+    linked_employee_id: (type === 'Adaptation' || type === 'Exit') ? document.getElementById('survLinkedEmployee').value || null : null
+  };
+  const resp = await apiFetch('/api/surveys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('surveyOverlay');
+  showToast('Опитування створено');
+  openSurveyDetail(data.survey.id);
+};
+
+let currentSurveyId = null;
+
+async function openSurveyDetail(id) {
+  currentSurveyId = id;
+  document.getElementById('viewSurveys').style.display = 'none';
+  document.getElementById('viewSurveyDetail').style.display = '';
+  await renderSurveyDetail();
+}
+
+async function renderSurveyDetail() {
+  const resp = await apiFetch('/api/surveys/' + currentSurveyId);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити'); return; }
+  const s = data.survey;
+  window._currentSurvey = s;
+
+  document.getElementById('surveyDetailHeader').innerHTML = `
+    <div style="font-size:20px; font-weight:700;">${escAttr(s.title)}</div>
+    <div style="color:var(--muted); font-size:13px;">${escAttr(s.type)} ${surveyStatusTag(s.status)} ${s.anonymous ? '· анонімне' : ''} ${s.linked_employee_name ? '· ' + escAttr(s.linked_employee_name) : ''} · відповіді: ${s.response_count}/${s.invitation_count}</div>
+  `;
+
+  document.getElementById('surveyQuestionsList').innerHTML = s.questions.map((q) => `
+    <div class="historyCard">
+      <div class="historyTitle">${escAttr(q.question_text)} <span class="tag neutral">${q.question_type}</span></div>
+      ${q.options && q.options.length ? '<div class="historyMeta">Варіанти: ' + q.options.map(escAttr).join(', ') + '</div>' : ''}
+    </div>
+  `).join('') || '<p style="color:var(--muted);">Ще немає питань.</p>';
+
+  const resResp = await apiFetch('/api/surveys/' + currentSurveyId + '/results');
+  const resData = await resResp.json();
+  if (resData.ok) renderSurveyResults(resData.results);
+}
+
+function renderSurveyResults(results) {
+  document.getElementById('surveyResultsPanel').innerHTML = `
+    <div class="kpiRow" style="margin: 8px 0 16px;">
+      <div class="kpiCard"><div class="kpiValue">${results.response_count}</div><div class="kpiLabel">Відповідей</div></div>
+      <div class="kpiCard"><div class="kpiValue">${results.response_rate != null ? results.response_rate + '%' : '—'}</div><div class="kpiLabel">Response rate</div></div>
+    </div>
+    ${results.questions.map((q) => `
+      <div class="historyCard">
+        <div class="historyTitle">${escAttr(q.question_text)}</div>
+        <div class="historyMeta">Відповідей: ${q.answer_count}</div>
+        ${q.average != null ? '<div class="historyMeta">Середнє: ' + q.average + (q.nps_score != null ? ' · NPS: ' + q.nps_score : '') + '</div>' : ''}
+        ${q.distribution ? '<div class="historyMeta">' + Object.entries(q.distribution).map(([k, v]) => escAttr(k) + ': ' + v).join(' · ') + '</div>' : ''}
+        ${q.texts ? q.texts.map((t) => {
+          const isString = typeof t === 'string';
+          const text = isString ? t : t.text;
+          const who = isString ? '' : (t.employee_name ? ' — ' + escAttr(t.employee_name) : '');
+          return '<div class="historyMeta">“' + escAttr(text) + '”' + who + '</div>';
+        }).join('') : ''}
+      </div>
+    `).join('')}
+  `;
+}
+
+function setSurveyStatus(status) {
+  apiFetch('/api/surveys/' + currentSurveyId + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+      showToast('Статус змінено');
+      renderSurveyDetail();
+    });
+}
+
+function inviteAllToSurvey() {
+  apiFetch('/api/surveys/' + currentSurveyId + '/invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося запросити'); return; }
+      showToast('Запрошено: ' + data.invitations.length);
+      renderSurveyDetail();
+    });
+}
+
+function openAddSurveyQuestion() {
+  document.getElementById('sqText').value = '';
+  document.getElementById('sqType').value = 'Text';
+  document.getElementById('sqOptionsWrap').style.display = 'none';
+  document.getElementById('sqOptions').value = '';
+  document.getElementById('sqRequired').checked = true;
+  document.getElementById('surveyQuestionOverlay').classList.add('open');
+}
+
+document.getElementById('sqType').addEventListener('change', () => {
+  const type = document.getElementById('sqType').value;
+  document.getElementById('sqOptionsWrap').style.display = (type === 'Single Select' || type === 'Multi Select') ? '' : 'none';
+});
+
+document.getElementById('btnSaveSurveyQuestion').onclick = async () => {
+  const question_text = document.getElementById('sqText').value.trim();
+  if (!question_text) { showToast('Текст питання обов’язковий'); return; }
+  const body = {
+    question_text,
+    question_type: document.getElementById('sqType').value,
+    options: document.getElementById('sqOptions').value.split(',').map((s) => s.trim()).filter(Boolean),
+    required: document.getElementById('sqRequired').checked
+  };
+  const resp = await apiFetch('/api/surveys/' + currentSurveyId + '/questions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося додати'); return; }
+  closeOverlay('surveyQuestionOverlay');
+  showToast('Питання додано');
+  renderSurveyDetail();
+};
+
+async function openRecordResponse() {
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('srEmployee').innerHTML = window._employeesCache.map((emp) => `<option value="${emp.id}">${escAttr(emp.full_name)}</option>`).join('');
+  const s = window._currentSurvey;
+  document.getElementById('srQuestionsForm').innerHTML = s.questions.map((q) => {
+    if (q.question_type === 'Scale' || q.question_type === 'NPS') {
+      return `<div class="field"><label>${escAttr(q.question_text)}</label><input type="number" min="0" max="10" data-qid="${q.id}" data-qtype="${q.question_type}" class="srAnswer"></div>`;
+    }
+    if (q.question_type === 'Single Select') {
+      return `<div class="field"><label>${escAttr(q.question_text)}</label><select data-qid="${q.id}" data-qtype="${q.question_type}" class="srAnswer"><option value="">—</option>${(q.options || []).map((o) => `<option value="${escAttr(o)}">${escAttr(o)}</option>`).join('')}</select></div>`;
+    }
+    if (q.question_type === 'Multi Select') {
+      return `<div class="field"><label>${escAttr(q.question_text)}</label>${(q.options || []).map((o) => `<label style="display:flex; align-items:center; gap:6px; font-weight:400; margin-bottom:4px;"><input type="checkbox" value="${escAttr(o)}" data-qid="${q.id}" data-qtype="${q.question_type}" class="srAnswerMulti" style="width:auto;"> ${escAttr(o)}</label>`).join('')}</div>`;
+    }
+    return `<div class="field"><label>${escAttr(q.question_text)}</label><textarea rows="2" data-qid="${q.id}" data-qtype="${q.question_type}" class="srAnswer"></textarea></div>`;
+  }).join('');
+  document.getElementById('surveyResponseOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveSurveyResponse').onclick = async () => {
+  const employee_id = document.getElementById('srEmployee').value;
+  const answers = [];
+  document.querySelectorAll('.srAnswer').forEach((el) => {
+    const question_id = Number(el.dataset.qid);
+    const qtype = el.dataset.qtype;
+    if (qtype === 'Scale' || qtype === 'NPS') {
+      if (el.value !== '') answers.push({ question_id, answer_value: Number(el.value) });
+    } else if (el.value) {
+      answers.push({ question_id, answer_text: el.value });
+    }
+  });
+  const multiByQuestion = {};
+  document.querySelectorAll('.srAnswerMulti:checked').forEach((el) => {
+    const qid = el.dataset.qid;
+    multiByQuestion[qid] = multiByQuestion[qid] || [];
+    multiByQuestion[qid].push(el.value);
+  });
+  Object.entries(multiByQuestion).forEach(([qid, opts]) => answers.push({ question_id: Number(qid), answer_options: opts }));
+
+  const resp = await apiFetch('/api/surveys/' + currentSurveyId + '/responses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ employee_id, answers }) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('surveyResponseOverlay');
+  showToast('Відповідь збережено');
+  renderSurveyDetail();
 };
 
 async function renderChangesTab(e) {

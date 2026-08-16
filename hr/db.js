@@ -60,6 +60,11 @@ const LEARNING_PATH_SCOPES = ['Department', 'Position'];
 const LEARNING_ITEM_TYPES = ['Article', 'Task', 'Test'];
 const LEARNING_ASSIGNMENT_STATUSES = ['Assigned', 'Started', 'Completed'];
 
+// Surveys & Engagement (ТЗ розділ 26)
+const SURVEY_TYPES = ['eNPS', 'Pulse', 'Adaptation', 'Exit', 'Custom'];
+const SURVEY_STATUSES = ['Draft', 'Active', 'Closed'];
+const SURVEY_QUESTION_TYPES = ['Scale', 'NPS', 'Single Select', 'Multi Select', 'Text'];
+
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hr_accounts (
@@ -637,6 +642,71 @@ async function initSchema() {
       completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (assignment_id, item_id)
     );
+
+    -- ==================== Surveys & Engagement (ТЗ 26) ====================
+
+    -- linked_employee_id — для Adaptation/Exit опитувань, прив'язаних до
+    -- конкретного співробітника (ТЗ 26 "Linked to employee adaptation" /
+    -- "Linked to offboarding"); NULL для company-wide eNPS/Pulse/Custom.
+    CREATE TABLE IF NOT EXISTS hr_surveys (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'Custom',
+      anonymous BOOLEAN NOT NULL DEFAULT false,
+      status TEXT NOT NULL DEFAULT 'Draft',
+      linked_employee_id INTEGER REFERENCES hr_employees(id),
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_surveys_type ON hr_surveys(type);
+
+    CREATE TABLE IF NOT EXISTS hr_survey_questions (
+      id SERIAL PRIMARY KEY,
+      survey_id INTEGER NOT NULL REFERENCES hr_surveys(id),
+      order_index INTEGER NOT NULL DEFAULT 0,
+      question_text TEXT NOT NULL,
+      question_type TEXT NOT NULL DEFAULT 'Text',
+      options JSONB NOT NULL DEFAULT '[]',
+      required BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_survey_questions_survey ON hr_survey_questions(survey_id);
+
+    -- Хто запрошений — основа для response rate (відповіді / запрошення).
+    CREATE TABLE IF NOT EXISTS hr_survey_invitations (
+      id SERIAL PRIMARY KEY,
+      survey_id INTEGER NOT NULL REFERENCES hr_surveys(id),
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      invited_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (survey_id, employee_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_survey_invitations_survey ON hr_survey_invitations(survey_id);
+
+    -- Одна відповідь на опитування на співробітника. employee_id
+    -- зберігається завжди (для response rate), але UI для anonymous
+    -- опитувань не показує, хто саме що відповів (ТЗ 26 "Avoid exposing
+    -- individuals in anonymous surveys").
+    CREATE TABLE IF NOT EXISTS hr_survey_responses (
+      id SERIAL PRIMARY KEY,
+      survey_id INTEGER NOT NULL REFERENCES hr_surveys(id),
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      submitted_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (survey_id, employee_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_survey_responses_survey ON hr_survey_responses(survey_id);
+
+    CREATE TABLE IF NOT EXISTS hr_survey_answers (
+      id SERIAL PRIMARY KEY,
+      response_id INTEGER NOT NULL REFERENCES hr_survey_responses(id),
+      question_id INTEGER NOT NULL REFERENCES hr_survey_questions(id),
+      answer_text TEXT NOT NULL DEFAULT '',
+      answer_value NUMERIC,
+      answer_options JSONB NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_survey_answers_response ON hr_survey_answers(response_id);
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -2577,6 +2647,187 @@ async function completeLearningAssignment(id, { test_result }) {
   return rows[0] || null;
 }
 
+// ---------------------------------------------------------------------
+// Surveys & Engagement
+// ---------------------------------------------------------------------
+
+async function listSurveys({ type = '', status = '' } = {}) {
+  const conditions = [];
+  const params = [];
+  if (type) { params.push(type); conditions.push(`s.type = $${params.length}`); }
+  if (status) { params.push(status); conditions.push(`s.status = $${params.length}`); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(`
+    SELECT s.*, per.full_name AS linked_employee_name,
+      (SELECT COUNT(*)::int FROM hr_survey_invitations i WHERE i.survey_id = s.id) AS invitation_count,
+      (SELECT COUNT(*)::int FROM hr_survey_responses r WHERE r.survey_id = s.id) AS response_count
+    FROM hr_surveys s
+    LEFT JOIN hr_employees emp ON emp.id = s.linked_employee_id
+    LEFT JOIN hr_persons per ON per.id = emp.person_id
+    ${where}
+    ORDER BY s.created_at DESC
+  `, params);
+  return rows;
+}
+
+async function getSurvey(id) {
+  const { rows } = await pool.query(`
+    SELECT s.*, per.full_name AS linked_employee_name,
+      (SELECT COUNT(*)::int FROM hr_survey_invitations i WHERE i.survey_id = s.id) AS invitation_count,
+      (SELECT COUNT(*)::int FROM hr_survey_responses r WHERE r.survey_id = s.id) AS response_count
+    FROM hr_surveys s
+    LEFT JOIN hr_employees emp ON emp.id = s.linked_employee_id
+    LEFT JOIN hr_persons per ON per.id = emp.person_id
+    WHERE s.id = $1
+  `, [id]);
+  if (!rows[0]) return null;
+  const { rows: questions } = await pool.query('SELECT * FROM hr_survey_questions WHERE survey_id = $1 ORDER BY order_index, id', [id]);
+  return { ...rows[0], questions };
+}
+
+async function createSurvey({ title, type, anonymous, linked_employee_id }, createdBy) {
+  if (!SURVEY_TYPES.includes(type)) throw new Error(`Unknown survey type: ${type}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_surveys (title, type, anonymous, linked_employee_id, created_by)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [title, type, !!anonymous, linked_employee_id || null, createdBy || '']
+  );
+  const survey = rows[0];
+
+  // eNPS має фіксовану структуру з ТЗ 26: "0–10 + reason/comments".
+  if (type === 'eNPS') {
+    await addSurveyQuestion({ survey_id: survey.id, question_text: 'Наскільки ймовірно ви порекомендуєте компанію як місце роботи? (0-10)', question_type: 'NPS', required: true });
+    await addSurveyQuestion({ survey_id: survey.id, question_text: 'Чому ви поставили таку оцінку?', question_type: 'Text', required: false });
+  }
+  return survey;
+}
+
+async function updateSurveyStatus(id, status) {
+  if (!SURVEY_STATUSES.includes(status)) throw new Error(`Unknown survey status: ${status}`);
+  const { rows } = await pool.query(
+    `UPDATE hr_surveys SET status = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, status]
+  );
+  return rows[0] || null;
+}
+
+async function addSurveyQuestion({ survey_id, question_text, question_type, options, required }) {
+  if (!SURVEY_QUESTION_TYPES.includes(question_type)) throw new Error(`Unknown question type: ${question_type}`);
+  const { rows: maxRows } = await pool.query('SELECT COALESCE(MAX(order_index), -1) AS max_order FROM hr_survey_questions WHERE survey_id = $1', [survey_id]);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_survey_questions (survey_id, order_index, question_text, question_type, options, required)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [survey_id, maxRows[0].max_order + 1, question_text, question_type, JSON.stringify(options || []), required ?? true]
+  );
+  return rows[0];
+}
+
+async function inviteEmployees(surveyId, employeeIds) {
+  const created = [];
+  for (const employeeId of employeeIds) {
+    const { rows } = await pool.query(
+      `INSERT INTO hr_survey_invitations (survey_id, employee_id) VALUES ($1,$2) ON CONFLICT (survey_id, employee_id) DO NOTHING RETURNING *`,
+      [surveyId, employeeId]
+    );
+    if (rows[0]) created.push(rows[0]);
+  }
+  return created;
+}
+
+async function inviteAllActiveEmployees(surveyId) {
+  const { rows: employees } = await pool.query(`SELECT id FROM hr_employees WHERE active = true AND status IN ('Active', 'Probation', 'Part-time')`);
+  return inviteEmployees(surveyId, employees.map((e) => e.id));
+}
+
+// Одна відповідь на опитування на співробітника — повторна спроба
+// відповісти повертає зрозумілу помилку, а не тихо перезаписує.
+async function submitSurveyResponse({ survey_id, employee_id, answers }, submittedBy) {
+  const { rows: existing } = await pool.query('SELECT id FROM hr_survey_responses WHERE survey_id = $1 AND employee_id = $2', [survey_id, employee_id]);
+  if (existing[0]) throw new Error('Цей співробітник вже відповів на опитування');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: respRows } = await client.query(
+      `INSERT INTO hr_survey_responses (survey_id, employee_id, submitted_by) VALUES ($1,$2,$3) RETURNING *`,
+      [survey_id, employee_id, submittedBy || '']
+    );
+    const response = respRows[0];
+    for (const a of (answers || [])) {
+      await client.query(
+        `INSERT INTO hr_survey_answers (response_id, question_id, answer_text, answer_value, answer_options)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [response.id, a.question_id, a.answer_text || '', a.answer_value ?? null, JSON.stringify(a.answer_options || [])]
+      );
+    }
+    await client.query('COMMIT');
+    return response;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Агрегація по кожному питанню, з повагою до anonymous (не повертаємо
+// respondent name, якщо опитування анонімне — ТЗ 26).
+async function getSurveyResults(surveyId) {
+  const survey = await getSurvey(surveyId);
+  if (!survey) return null;
+
+  const { rows: responses } = await pool.query(`
+    SELECT r.id, r.employee_id, per.full_name
+    FROM hr_survey_responses r
+    JOIN hr_employees emp ON emp.id = r.employee_id
+    JOIN hr_persons per ON per.id = emp.person_id
+    WHERE r.survey_id = $1
+  `, [surveyId]);
+
+  const responseRate = survey.invitation_count ? Math.round((responses.length / survey.invitation_count) * 1000) / 10 : null;
+
+  const questionResults = [];
+  for (const q of survey.questions) {
+    const { rows: answers } = await pool.query(`
+      SELECT a.*, r.employee_id FROM hr_survey_answers a JOIN hr_survey_responses r ON r.id = a.response_id
+      WHERE a.question_id = $1
+    `, [q.id]);
+
+    const result = { question_id: q.id, question_text: q.question_text, question_type: q.question_type, answer_count: answers.length };
+
+    if (q.question_type === 'Scale' || q.question_type === 'NPS') {
+      const values = answers.map((a) => Number(a.answer_value)).filter((v) => !isNaN(v));
+      result.average = values.length ? Math.round((values.reduce((s, v) => s + v, 0) / values.length) * 100) / 100 : null;
+      if (q.question_type === 'NPS' && values.length) {
+        const promoters = values.filter((v) => v >= 9).length;
+        const detractors = values.filter((v) => v <= 6).length;
+        result.nps_score = Math.round(((promoters - detractors) / values.length) * 100);
+      }
+    } else if (q.question_type === 'Single Select' || q.question_type === 'Multi Select') {
+      const distribution = {};
+      answers.forEach((a) => {
+        const opts = q.question_type === 'Single Select' ? [a.answer_text].filter(Boolean) : (a.answer_options || []);
+        opts.forEach((opt) => { distribution[opt] = (distribution[opt] || 0) + 1; });
+      });
+      result.distribution = distribution;
+    } else {
+      result.texts = survey.anonymous
+        ? answers.map((a) => a.answer_text).filter(Boolean)
+        : answers.map((a) => ({ text: a.answer_text, employee_name: responses.find((r) => r.employee_id === a.employee_id)?.full_name || '' })).filter((x) => x.text);
+    }
+
+    questionResults.push(result);
+  }
+
+  return {
+    survey,
+    response_count: responses.length,
+    response_rate: responseRate,
+    respondents: survey.anonymous ? undefined : responses.map((r) => r.full_name),
+    questions: questionResults
+  };
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -2715,5 +2966,17 @@ export default {
   listLearningAssignmentsForEmployee,
   getLearningAssignment,
   markLearningItemComplete,
-  completeLearningAssignment
+  completeLearningAssignment,
+  SURVEY_TYPES,
+  SURVEY_STATUSES,
+  SURVEY_QUESTION_TYPES,
+  listSurveys,
+  getSurvey,
+  createSurvey,
+  updateSurveyStatus,
+  addSurveyQuestion,
+  inviteEmployees,
+  inviteAllActiveEmployees,
+  submitSurveyResponse,
+  getSurveyResults
 };
