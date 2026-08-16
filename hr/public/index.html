@@ -292,6 +292,7 @@
     <div id="candidateDetailHeader" style="margin:16px 0;"></div>
     <div class="fieldGrid" id="candidateDetailFields"></div>
     <button class="secondary" onclick="openCandidateEdit(currentCandidateId)" style="margin-bottom:16px;">✎ Редагувати</button>
+    <button class="bad" onclick="deleteCandidate(currentCandidateId)" style="margin-bottom:16px; margin-left:8px;">✕ Видалити кандидата</button>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Резюме</h3>
     <div id="candidateResumesList"></div>
@@ -4214,6 +4215,16 @@ async function openCandidateDetail(id) {
   document.getElementById('viewRecruitment').style.display = 'none';
   document.getElementById('viewCandidateDetail').style.display = '';
   await renderCandidateDetail();
+}
+
+async function deleteCandidate(id) {
+  if (!confirm('Видалити цього кандидата? Дію не можна скасувати. Якщо на нього вже є заявка на вакансію — видалення буде відхилено.')) return;
+  const resp = await apiFetch('/api/candidates/' + id, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити кандидата'); return; }
+  showToast('Кандидата видалено');
+  showTab('recruitment');
+  showRecruitmentSubTab('candidates');
 }
 
 async function renderCandidateDetail() {

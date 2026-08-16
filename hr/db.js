@@ -1670,6 +1670,23 @@ async function updateCandidateFields(id, { current_job_title, desired_role, desi
   return rows[0] || null;
 }
 
+// Видалення дозволене лише для кандидата без жодної заявки на вакансію —
+// це саме для чистки помилково створених карток (напр. дублікати, зіпсовані
+// bulk-імпортом файли), а не для "стирання історії" реального процесу
+// найму. Якщо хоч одна заявка є — відмовляємо явно, а не тихо каскадимо.
+async function deleteCandidate(id, actor) {
+  const { rows: appRows } = await pool.query('SELECT id FROM hr_applications WHERE candidate_id = $1 LIMIT 1', [id]);
+  if (appRows.length) {
+    throw new Error('Не можна видалити кандидата із заявками на вакансії');
+  }
+  const { rows: candRows } = await pool.query('SELECT id FROM hr_candidates WHERE id = $1', [id]);
+  if (!candRows.length) return false;
+  await pool.query('DELETE FROM hr_candidate_resumes WHERE candidate_id = $1', [id]);
+  await pool.query('DELETE FROM hr_candidates WHERE id = $1', [id]);
+  await writeAudit({ actor, action: 'delete', entity_type: 'candidate', entity_id: id, old_value: null, new_value: null });
+  return true;
+}
+
 // ---------------------------------------------------------------------
 // Recruitment / ATS — Applications
 // ---------------------------------------------------------------------
@@ -3226,6 +3243,25 @@ async function closeOffboardingCase(id, actor) {
 // Resume upload & parsing (ТЗ п.11)
 // ---------------------------------------------------------------------
 
+const EXT_MIME_TYPES = {
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+  txt: 'text/plain'
+};
+
+// Деякі браузери/ОС при завантаженні файлу не проставляють коректний
+// Content-Type для конкретної частини multipart-запиту (шлють порожньо або
+// узагальнено 'application/octet-stream') — тоді сервер віддавав би файл із
+// цим типом і браузер завжди пропонував "завантажити", а не відкривав його
+// одразу (напр. PDF-резюме не показувалось у вкладці для друку). Якщо
+// клієнт не дав чіткого типу — визначаємо його самі за розширенням файлу.
+function inferMimeType(filename, mimeType) {
+  if (mimeType && mimeType !== 'application/octet-stream') return mimeType;
+  const ext = (filename.split('.').pop() || '').toLowerCase();
+  return EXT_MIME_TYPES[ext] || mimeType || 'application/octet-stream';
+}
+
 async function extractResumeText(buffer, mimeType, filename) {
   const ext = (filename.split('.').pop() || '').toLowerCase();
   try {
@@ -3294,7 +3330,7 @@ async function uploadResumeAndMatchCandidate({ buffer, filename, mimeType }, upl
   const { rows } = await pool.query(
     `INSERT INTO hr_candidate_resumes (candidate_id, filename, mime_type, file_size, file_data, extracted_text, parse_status, uploaded_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, candidate_id, filename, mime_type, file_size, parse_status, created_at`,
-    [candidate.id, filename, mimeType || '', buffer.length, buffer, text, parse_status, uploadedBy || '']
+    [candidate.id, filename, inferMimeType(filename, mimeType), buffer.length, buffer, text, parse_status, uploadedBy || '']
   );
 
   return { candidate, duplicate, resume: rows[0], guessed, parse_status };
@@ -3305,7 +3341,7 @@ async function addResumeToCandidate(candidateId, { buffer, filename, mimeType },
   const { rows } = await pool.query(
     `INSERT INTO hr_candidate_resumes (candidate_id, filename, mime_type, file_size, file_data, extracted_text, parse_status, uploaded_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, candidate_id, filename, mime_type, file_size, parse_status, created_at`,
-    [candidateId, filename, mimeType || '', buffer.length, buffer, text, parse_status, uploadedBy || '']
+    [candidateId, filename, inferMimeType(filename, mimeType), buffer.length, buffer, text, parse_status, uploadedBy || '']
   );
   return rows[0];
 }
@@ -3330,7 +3366,7 @@ async function addVacancyRequestAttachment(vacancyRequestId, { buffer, filename,
   const { rows } = await pool.query(
     `INSERT INTO hr_vacancy_request_attachments (vacancy_request_id, filename, mime_type, file_size, file_data, uploaded_by)
      VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, vacancy_request_id, filename, mime_type, file_size, created_at`,
-    [vacancyRequestId, filename, mimeType || '', buffer.length, buffer, uploadedBy || '']
+    [vacancyRequestId, filename, inferMimeType(filename, mimeType), buffer.length, buffer, uploadedBy || '']
   );
   return rows[0];
 }
@@ -3752,6 +3788,7 @@ export default {
   listCandidates,
   getCandidate,
   updateCandidateFields,
+  deleteCandidate,
   listApplicationsForVacancy,
   getApplication,
   createApplication,

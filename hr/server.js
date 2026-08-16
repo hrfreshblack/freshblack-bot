@@ -739,6 +739,20 @@ app.post('/api/candidates/:id/personal', requireRole('Recruiter'), async (req, r
   }
 });
 
+app.delete('/api/candidates/:id', requireRole('Recruiter'), async (req, res) => {
+  try {
+    const deleted = await db.deleteCandidate(Number(req.params.id), req.account.username);
+    if (!deleted) {
+      res.status(404).json({ ok: false, error: 'Кандидата не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE /api/candidates/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити кандидата' });
+  }
+});
+
 // ---- Recruitment / ATS: Applications ----
 
 app.get('/api/applications/:id', async (req, res) => {
