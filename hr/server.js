@@ -522,6 +522,52 @@ app.post('/api/vacancy-requests/:id/convert', requireRole('Recruiter'), async (r
   }
 });
 
+app.post('/api/vacancy-requests/:id/attachments', requireRole('Recruiter'), async (req, res) => {
+  try {
+    await uploadSingleFile(req, res);
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл обов’язковий' });
+      return;
+    }
+    const attachment = await db.addVacancyRequestAttachment(
+      Number(req.params.id),
+      { buffer: req.file.buffer, filename: req.file.originalname, mimeType: req.file.mimetype },
+      req.account.username
+    );
+    res.json({ ok: true, attachment });
+  } catch (error) {
+    console.error('POST /api/vacancy-requests/:id/attachments ERROR:', error?.message || error);
+    const message = error?.message?.includes('File too large') ? 'Файл завеликий (максимум 15МБ)' : (error?.message || 'Не вдалося завантажити файл');
+    res.status(400).json({ ok: false, error: message });
+  }
+});
+
+app.get('/api/vacancy-requests/:id/attachments', async (req, res) => {
+  try {
+    const attachments = await db.listVacancyRequestAttachments(Number(req.params.id));
+    res.json({ ok: true, attachments });
+  } catch (error) {
+    console.error('GET /api/vacancy-requests/:id/attachments ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати файли' });
+  }
+});
+
+app.get('/api/vacancy-request-attachments/:id/download', async (req, res) => {
+  try {
+    const file = await db.getVacancyRequestAttachmentFile(Number(req.params.id));
+    if (!file) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.set('Content-Type', file.mime_type || 'application/octet-stream');
+    res.set('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
+    res.send(file.file_data);
+  } catch (error) {
+    console.error('GET /api/vacancy-request-attachments/:id/download ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося завантажити файл' });
+  }
+});
+
 // ---- Recruitment / ATS: Vacancies ----
 
 app.get('/api/vacancies', async (req, res) => {
