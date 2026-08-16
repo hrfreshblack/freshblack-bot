@@ -162,6 +162,7 @@
     <button id="tabKnowledge" onclick="showTab('knowledge')">Знання</button>
     <button id="tabSurveys" onclick="showTab('surveys')">Опитування</button>
     <button id="tabAbsences" onclick="showTab('absences')">Відсутності</button>
+    <button id="tabOffboarding" onclick="showTab('offboarding')">Звільнення</button>
   </nav>
 </header>
 
@@ -196,6 +197,7 @@
       <button onclick="showProfileTab('okr')">OKR / KPI</button>
       <button onclick="showProfileTab('learning')">Learning</button>
       <button onclick="showProfileTab('absences')">Відсутності</button>
+      <button onclick="showProfileTab('offboarding')">Звільнення</button>
       <button onclick="showProfileTab('changes')">Changes</button>
     </div>
     <div class="profilePanel active" id="profileOverview"></div>
@@ -207,6 +209,7 @@
     <div class="profilePanel" id="profileOkr"></div>
     <div class="profilePanel" id="profileLearning"></div>
     <div class="profilePanel" id="profileAbsences"></div>
+    <div class="profilePanel" id="profileOffboarding"></div>
     <div class="profilePanel" id="profileChanges"></div>
   </div>
 
@@ -393,6 +396,19 @@
     </div>
     <div class="tableWrap"><table><thead><tr><th>Співробітник</th><th>Департамент</th><th>Тип</th><th>З</th><th>По</th><th>Робочих днів</th><th>Статус</th></tr></thead><tbody id="absencesBody"></tbody></table></div>
     <div class="empty" id="absencesEmpty" style="display:none;">Відсутностей ще немає.</div>
+  </div>
+
+  <div id="viewOffboarding" style="display:none;">
+    <div class="viewToolbar">
+      <select id="offbStatusFilter"><option value="">— усі статуси —</option></select>
+    </div>
+    <div class="tableWrap"><table><thead><tr><th>Співробітник</th><th>Підстава</th><th>Дата ініціації</th><th>Останній день</th><th>Статус</th></tr></thead><tbody id="offboardingBody"></tbody></table></div>
+    <div class="empty" id="offboardingEmpty" style="display:none;">Процесів звільнення ще немає.</div>
+  </div>
+
+  <div id="viewOffboardingCaseDetail" style="display:none;">
+    <button class="secondary" onclick="showTab('offboarding')">← До списку звільнень</button>
+    <div id="offboardingCaseContainer" style="margin-top:16px;"></div>
   </div>
 
 </main>
@@ -969,6 +985,67 @@
   </div>
 </div>
 
+<!-- Модалка: ініціювати звільнення -->
+<div class="overlay" id="initiateOffboardingOverlay">
+  <div class="modal">
+    <h2>Ініціювати звільнення</h2>
+    <div class="field"><label>Підстава</label><select id="offbInitiationType"></select></div>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Дата ініціації</label><input type="date" id="offbInitiationDate"></div>
+      <div class="fieldItem"><label>Останній робочий день</label><input type="date" id="offbLastWorkingDay"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('initiateOffboardingOverlay')">Скасувати</button>
+      <button id="btnSaveInitiateOffboarding">Ініціювати</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: елемент чек-листа звільнення -->
+<div class="overlay" id="offboardingChecklistItemOverlay">
+  <div class="modal">
+    <h2>Новий пункт чек-листа</h2>
+    <div class="field"><label>Категорія</label>
+      <select id="ocliCategory">
+        <option value="Knowledge Transfer">Knowledge Transfer</option>
+        <option value="Assets/Access">Assets/Access</option>
+      </select>
+    </div>
+    <div class="field"><label>Назва</label><input type="text" id="ocliTitle"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('offboardingChecklistItemOverlay')">Скасувати</button>
+      <button id="btnSaveOffboardingChecklistItem">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: Exit Interview -->
+<div class="overlay" id="exitInterviewOverlay">
+  <div class="modal" style="max-width: 640px;">
+    <h2>Exit Interview</h2>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Основна причина</label><input type="text" id="eiPrimaryReason"></div>
+      <div class="fieldItem"><label>Рекомендує компанію</label><select id="eiRecommendCompany"><option value="">—</option></select></div>
+    </div>
+    <div class="field"><label>Другорядні причини</label><input type="text" id="eiSecondaryReasons"></div>
+    <div class="field"><label>Що було добре</label><textarea id="eiGoodNotes" rows="2"></textarea></div>
+    <div class="field"><label>Що було погано</label><textarea id="eiBadNotes" rows="2"></textarea></div>
+    <div class="field"><label>Керівник</label><textarea id="eiManagerNotes" rows="2"></textarea></div>
+    <div class="field"><label>Команда</label><textarea id="eiTeamNotes" rows="2"></textarea></div>
+    <div class="field"><label>Умови праці</label><textarea id="eiConditionsNotes" rows="2"></textarea></div>
+    <div class="field"><label>Компенсація</label><textarea id="eiCompensationNotes" rows="2"></textarea></div>
+    <div class="field"><label>Розвиток</label><textarea id="eiGrowthNotes" rows="2"></textarea></div>
+    <div class="field"><label>Процеси</label><textarea id="eiProcessesNotes" rows="2"></textarea></div>
+    <div class="field"><label>Що могло б втримати</label><textarea id="eiWhatCouldRetain" rows="2"></textarea></div>
+    <div class="field"><label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="eiRehireEligible" style="width:auto;"> Rehire eligible</label></div>
+    <div class="field"><label>Коментарі</label><textarea id="eiComments" rows="2"></textarea></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('exitInterviewOverlay')">Скасувати</button>
+      <button id="btnSaveExitInterview">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -1100,11 +1177,15 @@ async function loadDictionaries() {
 
   document.getElementById('absType').innerHTML = data.absenceTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
   document.getElementById('absStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.absenceStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+
+  document.getElementById('offbInitiationType').innerHTML = data.offboardingInitiationTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
+  document.getElementById('offbStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.offboardingStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('eiRecommendCompany').innerHTML = '<option value="">—</option>' + data.recommendCompanyOptions.map((o) => `<option value="${o}">${o}</option>`).join('');
 }
 
 // ---- Tabs ----
 
-const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr', 'tabKnowledge', 'tabSurveys', 'tabAbsences'];
+const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr', 'tabKnowledge', 'tabSurveys', 'tabAbsences', 'tabOffboarding'];
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
@@ -1121,6 +1202,8 @@ function showTab(tab) {
   document.getElementById('viewSurveys').style.display = tab === 'surveys' ? '' : 'none';
   document.getElementById('viewSurveyDetail').style.display = 'none';
   document.getElementById('viewAbsences').style.display = tab === 'absences' ? '' : 'none';
+  document.getElementById('viewOffboarding').style.display = tab === 'offboarding' ? '' : 'none';
+  document.getElementById('viewOffboardingCaseDetail').style.display = 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
@@ -1130,6 +1213,7 @@ function showTab(tab) {
   document.getElementById('tabKnowledge').classList.toggle('active', tab === 'knowledge');
   document.getElementById('tabSurveys').classList.toggle('active', tab === 'surveys');
   document.getElementById('tabAbsences').classList.toggle('active', tab === 'absences');
+  document.getElementById('tabOffboarding').classList.toggle('active', tab === 'offboarding');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'people') loadPeople();
   if (tab === 'org') loadOrg();
@@ -1139,6 +1223,7 @@ function showTab(tab) {
   if (tab === 'knowledge') showKnowledgeSubTab(window._knowledgeSubTab || 'articles');
   if (tab === 'surveys') loadSurveys();
   if (tab === 'absences') loadAbsencesView();
+  if (tab === 'offboarding') loadOffboardingView();
 }
 
 // ---- Dashboard ----
@@ -1320,11 +1405,12 @@ async function renderEmployeeProfile() {
   renderOkrKpiTab(e);
   renderLearningTab(e);
   renderAbsencesTab(e);
+  renderOffboardingTab(e);
   renderChangesTab(e);
 }
 
 function showProfileTab(tab) {
-  ['overview', 'personal', 'employment', 'compensation', 'onboarding', 'performance', 'okr', 'learning', 'absences', 'changes'].forEach((t) => {
+  ['overview', 'personal', 'employment', 'compensation', 'onboarding', 'performance', 'okr', 'learning', 'absences', 'offboarding', 'changes'].forEach((t) => {
     document.getElementById('profile' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
   });
   document.querySelectorAll('.profileTabs button').forEach((b) => b.classList.remove('active'));
@@ -3021,6 +3107,256 @@ document.getElementById('absDeptFilter').addEventListener('change', loadAbsences
 document.getElementById('absStatusFilter').addEventListener('change', loadAbsencesView);
 document.getElementById('absFromFilter').addEventListener('change', loadAbsencesView);
 document.getElementById('absToFilter').addEventListener('change', loadAbsencesView);
+
+// ---- Offboarding ----
+
+function offboardingStatusTag(status) {
+  const cls = status === 'Completed' ? 'ok' : status === 'Cancelled' ? 'bad' : 'warn';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+function turnoverTag(classification) {
+  const cls = classification === 'Involuntary' ? 'bad' : classification === 'Probation' ? 'warn' : 'neutral';
+  return `<span class="tag ${cls}">${classification}</span>`;
+}
+function checklistStatusTag(status) {
+  return status === 'Done' ? '<span class="tag ok">Done</span>' : '<span class="tag warn">Pending</span>';
+}
+
+async function renderOffboardingTab(e) {
+  const panel = document.getElementById('profileOffboarding');
+  const resp = await apiFetch('/api/employees/' + e.id + '/offboarding-cases');
+  const data = await resp.json();
+  const cases = data.ok ? data.cases : [];
+  if (!cases.length) {
+    panel.innerHTML = '<p style="color:var(--muted); margin-bottom:12px;">Процес звільнення ще не ініційовано.</p><button onclick="openInitiateOffboarding(' + e.id + ')">Ініціювати звільнення</button>';
+    return;
+  }
+  const latest = cases[0];
+  const fullResp = await apiFetch('/api/offboarding-cases/' + latest.id);
+  const fullData = await fullResp.json();
+  const historyNote = cases.length > 1 ? '<p style="color:var(--muted); font-size:12px; margin-top:12px;">Попередніх випадків: ' + (cases.length - 1) + '</p>' : '';
+  panel.innerHTML = '<div id="profileOffboardingCaseBody"></div>' + historyNote;
+  if (fullData.ok) renderOffboardingCaseBody('profileOffboardingCaseBody', fullData.case);
+}
+
+function renderOffboardingCaseBody(containerId, c) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = `
+    <div style="font-size:16px; font-weight:700;">${escAttr(c.employee_name || '')}</div>
+    <div style="color:var(--muted); font-size:13px; margin-bottom:12px;">${escAttr(c.initiation_type)} ${turnoverTag(c.turnover_classification)} ${offboardingStatusTag(c.status)} · ініційовано ${new Date(c.initiation_date).toLocaleDateString('uk-UA')}${c.last_working_day ? ' · останній день: ' + new Date(c.last_working_day).toLocaleDateString('uk-UA') : ''}</div>
+
+    <div class="field"><label>Останній робочий день</label><input type="date" id="offbCaseLastDay_${c.id}" value="${c.last_working_day ? c.last_working_day.slice(0, 10) : ''}"></div>
+    <div class="field"><label>Заява на звільнення (editable)</label><textarea id="offbCaseStatement_${c.id}" rows="6">${escAttr(c.statement_text)}</textarea></div>
+    <button class="secondary" onclick="saveOffboardingCase(${c.id})">Зберегти</button>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Чек-лист (Knowledge Transfer / Assets &amp; Access)</h3>
+    <button class="secondary" onclick="openAddOffboardingChecklistItem(${c.id})">+ Пункт</button>
+    <div style="margin-top:10px;">
+      ${c.checklist.map((item) => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-top:1px solid var(--border); font-size:13px;">
+          <div>${escAttr(item.title)} <span class="tag neutral" style="margin-left:4px;">${item.category}</span></div>
+          <div>${checklistStatusTag(item.status)} ${item.status !== 'Done' ? '<button class="secondary" style="font-size:11px; padding:3px 7px; margin-left:6px;" onclick="markOffboardingChecklistDone(' + item.id + ')">Виконано</button>' : ''}</div>
+        </div>
+      `).join('') || '<p style="color:var(--muted); font-size:12px;">Ще немає пунктів.</p>'}
+    </div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Exit Interview</h3>
+    ${c.exit_interview ? `
+      <div class="historyCard">
+        <div class="historyTitle">${escAttr(c.exit_interview.primary_reason || 'Причина не вказана')}</div>
+        <div class="historyMeta">Рекомендує компанію: ${escAttr(c.exit_interview.recommend_company || '—')} · Rehire eligible: ${c.exit_interview.rehire_eligible ? 'так' : 'ні'}</div>
+        ${c.exit_interview.comments ? '<div class="historyMeta">' + escAttr(c.exit_interview.comments) + '</div>' : ''}
+      </div>
+      <button class="secondary" onclick="openExitInterview(${c.id}, true)">✎ Редагувати</button>
+    ` : `<p style="color:var(--muted); font-size:12px;">Ще не заповнено.</p><button class="secondary" onclick="openExitInterview(${c.id}, false)">+ Заповнити Exit Interview</button>`}
+
+    ${c.status !== 'Completed' && c.status !== 'Cancelled' ? `
+      <div style="margin-top:20px; display:flex; gap:8px;">
+        <button onclick="closeOffboardingCaseAction(${c.id})">Завершити (Former Employee)</button>
+        <button class="bad" onclick="setOffboardingCaseStatus(${c.id}, 'Cancelled')">Скасувати</button>
+      </div>
+    ` : ''}
+  `;
+}
+
+function openInitiateOffboarding(employeeId) {
+  window._pendingOffboardingEmployeeId = employeeId;
+  document.getElementById('offbInitiationType').value = (window._dict.offboardingInitiationTypes && window._dict.offboardingInitiationTypes[0]) || 'Employee Initiative';
+  document.getElementById('offbInitiationDate').value = isoDate(new Date());
+  document.getElementById('offbLastWorkingDay').value = '';
+  document.getElementById('initiateOffboardingOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveInitiateOffboarding').onclick = async () => {
+  const body = {
+    initiation_type: document.getElementById('offbInitiationType').value,
+    initiation_date: document.getElementById('offbInitiationDate').value || null,
+    last_working_day: document.getElementById('offbLastWorkingDay').value || null
+  };
+  const resp = await apiFetch('/api/employees/' + window._pendingOffboardingEmployeeId + '/offboarding-cases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося ініціювати'); return; }
+  closeOverlay('initiateOffboardingOverlay');
+  showToast('Процес звільнення ініційовано');
+  if (currentEmployeeId === window._pendingOffboardingEmployeeId) renderEmployeeProfile();
+};
+
+function saveOffboardingCase(caseId) {
+  const body = {
+    last_working_day: document.getElementById('offbCaseLastDay_' + caseId).value || null,
+    statement_text: document.getElementById('offbCaseStatement_' + caseId).value
+  };
+  apiFetch('/api/offboarding-cases/' + caseId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+      showToast('Збережено');
+    });
+}
+
+function openAddOffboardingChecklistItem(caseId) {
+  window._pendingOffboardingCaseId = caseId;
+  document.getElementById('ocliCategory').value = 'Knowledge Transfer';
+  document.getElementById('ocliTitle').value = '';
+  document.getElementById('offboardingChecklistItemOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveOffboardingChecklistItem').onclick = async () => {
+  const title = document.getElementById('ocliTitle').value.trim();
+  if (!title) { showToast('Назва обов’язкова'); return; }
+  const body = { category: document.getElementById('ocliCategory').value, title };
+  const resp = await apiFetch('/api/offboarding-cases/' + window._pendingOffboardingCaseId + '/checklist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося додати'); return; }
+  closeOverlay('offboardingChecklistItemOverlay');
+  showToast('Додано');
+  refreshCurrentOffboardingView();
+};
+
+function markOffboardingChecklistDone(itemId) {
+  apiFetch('/api/offboarding-checklist/' + itemId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'Done' }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      refreshCurrentOffboardingView();
+    });
+}
+
+function openExitInterview(caseId, isEdit) {
+  window._pendingExitInterviewCaseId = caseId;
+  if (isEdit) {
+    apiFetch('/api/offboarding-cases/' + caseId).then((r) => r.json()).then((data) => {
+      fillExitInterviewForm(data.ok ? data.case.exit_interview : null);
+      document.getElementById('exitInterviewOverlay').classList.add('open');
+    });
+  } else {
+    fillExitInterviewForm(null);
+    document.getElementById('exitInterviewOverlay').classList.add('open');
+  }
+}
+
+function fillExitInterviewForm(ei) {
+  document.getElementById('eiPrimaryReason').value = ei?.primary_reason || '';
+  document.getElementById('eiRecommendCompany').value = ei?.recommend_company || '';
+  document.getElementById('eiSecondaryReasons').value = ei?.secondary_reasons || '';
+  document.getElementById('eiGoodNotes').value = ei?.good_notes || '';
+  document.getElementById('eiBadNotes').value = ei?.bad_notes || '';
+  document.getElementById('eiManagerNotes').value = ei?.manager_notes || '';
+  document.getElementById('eiTeamNotes').value = ei?.team_notes || '';
+  document.getElementById('eiConditionsNotes').value = ei?.conditions_notes || '';
+  document.getElementById('eiCompensationNotes').value = ei?.compensation_notes || '';
+  document.getElementById('eiGrowthNotes').value = ei?.growth_notes || '';
+  document.getElementById('eiProcessesNotes').value = ei?.processes_notes || '';
+  document.getElementById('eiWhatCouldRetain').value = ei?.what_could_retain || '';
+  document.getElementById('eiRehireEligible').checked = !!ei?.rehire_eligible;
+  document.getElementById('eiComments').value = ei?.comments || '';
+}
+
+document.getElementById('btnSaveExitInterview').onclick = async () => {
+  const body = {
+    primary_reason: document.getElementById('eiPrimaryReason').value.trim(),
+    recommend_company: document.getElementById('eiRecommendCompany').value,
+    secondary_reasons: document.getElementById('eiSecondaryReasons').value.trim(),
+    good_notes: document.getElementById('eiGoodNotes').value.trim(),
+    bad_notes: document.getElementById('eiBadNotes').value.trim(),
+    manager_notes: document.getElementById('eiManagerNotes').value.trim(),
+    team_notes: document.getElementById('eiTeamNotes').value.trim(),
+    conditions_notes: document.getElementById('eiConditionsNotes').value.trim(),
+    compensation_notes: document.getElementById('eiCompensationNotes').value.trim(),
+    growth_notes: document.getElementById('eiGrowthNotes').value.trim(),
+    processes_notes: document.getElementById('eiProcessesNotes').value.trim(),
+    what_could_retain: document.getElementById('eiWhatCouldRetain').value.trim(),
+    rehire_eligible: document.getElementById('eiRehireEligible').checked,
+    comments: document.getElementById('eiComments').value.trim()
+  };
+  const resp = await apiFetch('/api/offboarding-cases/' + window._pendingExitInterviewCaseId + '/exit-interview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('exitInterviewOverlay');
+  showToast('Exit interview збережено');
+  refreshCurrentOffboardingView();
+};
+
+function closeOffboardingCaseAction(caseId) {
+  if (!confirm('Завершити процес звільнення? Співробітник стане Former Employee, поточний період працевлаштування закриється.')) return;
+  apiFetch('/api/offboarding-cases/' + caseId + '/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося завершити'); return; }
+      showToast('Співробітника переведено у Former Employee');
+      refreshCurrentOffboardingView();
+    });
+}
+
+function setOffboardingCaseStatus(caseId, status) {
+  apiFetch('/api/offboarding-cases/' + caseId + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      showToast('Статус змінено');
+      refreshCurrentOffboardingView();
+    });
+}
+
+function refreshCurrentOffboardingView() {
+  if (document.getElementById('viewOffboardingCaseDetail').style.display !== 'none') { renderOffboardingCaseDetailView(); return; }
+  if (document.getElementById('viewEmployeeProfile').style.display !== 'none') { renderEmployeeProfile(); return; }
+}
+
+async function loadOffboardingView() {
+  const status = document.getElementById('offbStatusFilter').value;
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  const resp = await apiFetch('/api/offboarding-cases?' + params.toString());
+  const data = await resp.json();
+  const body = document.getElementById('offboardingBody');
+  const empty = document.getElementById('offboardingEmpty');
+  const cases = data.ok ? data.cases : [];
+  if (!cases.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = cases.map((c) => `
+    <tr class="clickable" onclick="openOffboardingCaseDetail(${c.id})">
+      <td>${escAttr(c.employee_name)}</td>
+      <td>${escAttr(c.initiation_type)}</td>
+      <td>${new Date(c.initiation_date).toLocaleDateString('uk-UA')}</td>
+      <td>${c.last_working_day ? new Date(c.last_working_day).toLocaleDateString('uk-UA') : '—'}</td>
+      <td>${offboardingStatusTag(c.status)}</td>
+    </tr>
+  `).join('');
+}
+document.getElementById('offbStatusFilter').addEventListener('change', loadOffboardingView);
+
+let currentOffboardingCaseId = null;
+
+async function openOffboardingCaseDetail(id) {
+  currentOffboardingCaseId = id;
+  document.getElementById('viewOffboarding').style.display = 'none';
+  document.getElementById('viewOffboardingCaseDetail').style.display = '';
+  await renderOffboardingCaseDetailView();
+}
+
+async function renderOffboardingCaseDetailView() {
+  const resp = await apiFetch('/api/offboarding-cases/' + currentOffboardingCaseId);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити'); return; }
+  renderOffboardingCaseBody('offboardingCaseContainer', data.case);
+}
 
 async function renderChangesTab(e) {
   const resp = await apiFetch('/api/audit-log?entity_type=employee&entity_id=' + e.id);
