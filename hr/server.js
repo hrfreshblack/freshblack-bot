@@ -186,7 +186,12 @@ app.get('/api/dictionaries', (req, res) => {
     surveyStatuses: db.SURVEY_STATUSES,
     surveyQuestionTypes: db.SURVEY_QUESTION_TYPES,
     absenceTypes: db.ABSENCE_TYPES,
-    absenceStatuses: db.ABSENCE_STATUSES
+    absenceStatuses: db.ABSENCE_STATUSES,
+    offboardingInitiationTypes: db.OFFBOARDING_INITIATION_TYPES,
+    offboardingStatuses: db.OFFBOARDING_STATUSES,
+    offboardingChecklistCategories: db.OFFBOARDING_CHECKLIST_CATEGORIES,
+    offboardingChecklistStatuses: db.OFFBOARDING_CHECKLIST_STATUSES,
+    recommendCompanyOptions: db.RECOMMEND_COMPANY_OPTIONS
   });
 });
 
@@ -1673,6 +1678,139 @@ app.post('/api/absences/:id', requireRole(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/absences/:id ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+// ---- Offboarding ----
+
+app.get('/api/offboarding-cases', async (req, res) => {
+  try {
+    const { status } = req.query;
+    const cases = await db.listOffboardingCases({ status: status || '' });
+    res.json({ ok: true, cases });
+  } catch (error) {
+    console.error('GET /api/offboarding-cases ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.get('/api/employees/:id/offboarding-cases', async (req, res) => {
+  try {
+    const cases = await db.getOffboardingCasesForEmployee(Number(req.params.id));
+    res.json({ ok: true, cases });
+  } catch (error) {
+    console.error('GET /api/employees/:id/offboarding-cases ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.get('/api/offboarding-cases/:id', async (req, res) => {
+  try {
+    const offboardingCase = await db.getOffboardingCase(Number(req.params.id));
+    if (!offboardingCase) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, case: offboardingCase });
+  } catch (error) {
+    console.error('GET /api/offboarding-cases/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.post('/api/employees/:id/offboarding-cases', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.initiation_type) {
+      res.status(400).json({ ok: false, error: 'Тип ініціації обов’язковий' });
+      return;
+    }
+    const offboardingCase = await db.initiateOffboarding({ ...body, employee_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, case: offboardingCase });
+  } catch (error) {
+    console.error('POST /api/employees/:id/offboarding-cases ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося ініціювати звільнення' });
+  }
+});
+
+app.post('/api/offboarding-cases/:id', requireRole(), async (req, res) => {
+  try {
+    const offboardingCase = await db.updateOffboardingCase(Number(req.params.id), req.body || {});
+    if (!offboardingCase) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, case: offboardingCase });
+  } catch (error) {
+    console.error('POST /api/offboarding-cases/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+app.post('/api/offboarding-cases/:id/status', requireRole(), async (req, res) => {
+  try {
+    const offboardingCase = await db.updateOffboardingCaseStatus(Number(req.params.id), (req.body || {}).status, req.account.username);
+    if (!offboardingCase) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, case: offboardingCase });
+  } catch (error) {
+    console.error('POST /api/offboarding-cases/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+app.post('/api/offboarding-cases/:id/checklist', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title || !body.category) {
+      res.status(400).json({ ok: false, error: 'Назва і категорія обов’язкові' });
+      return;
+    }
+    const item = await db.addOffboardingChecklistItem({ ...body, case_id: Number(req.params.id) });
+    res.json({ ok: true, item });
+  } catch (error) {
+    console.error('POST /api/offboarding-cases/:id/checklist ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося додати' });
+  }
+});
+
+app.post('/api/offboarding-checklist/:id', requireRole(), async (req, res) => {
+  try {
+    const item = await db.updateOffboardingChecklistItem(Number(req.params.id), req.body || {});
+    if (!item) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, item });
+  } catch (error) {
+    console.error('POST /api/offboarding-checklist/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+app.post('/api/offboarding-cases/:id/exit-interview', requireRole(), async (req, res) => {
+  try {
+    const exitInterview = await db.upsertExitInterview({ ...(req.body || {}), case_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, exitInterview });
+  } catch (error) {
+    console.error('POST /api/offboarding-cases/:id/exit-interview ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.post('/api/offboarding-cases/:id/close', requireRole(), async (req, res) => {
+  try {
+    const offboardingCase = await db.closeOffboardingCase(Number(req.params.id), req.account.username);
+    if (!offboardingCase) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, case: offboardingCase });
+  } catch (error) {
+    console.error('POST /api/offboarding-cases/:id/close ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося завершити' });
   }
 });
 

@@ -69,6 +69,13 @@ const SURVEY_QUESTION_TYPES = ['Scale', 'NPS', 'Single Select', 'Multi Select', 
 const ABSENCE_TYPES = ['Vacation', 'Sick Leave', 'Unpaid Leave', 'Business Trip', 'Remote', 'Other'];
 const ABSENCE_STATUSES = ['Requested', 'Approved', 'Rejected', 'Cancelled'];
 
+// Offboarding (ТЗ розділ 28, 28.1)
+const OFFBOARDING_INITIATION_TYPES = ['Employee Initiative', 'Company Initiative', 'End of Contract', 'Probation Failed', 'Mutual Agreement', 'Other'];
+const OFFBOARDING_STATUSES = ['Initiated', 'In Progress', 'Completed', 'Cancelled'];
+const OFFBOARDING_CHECKLIST_CATEGORIES = ['Knowledge Transfer', 'Assets/Access'];
+const OFFBOARDING_CHECKLIST_STATUSES = ['Pending', 'Done'];
+const RECOMMEND_COMPANY_OPTIONS = ['Yes', 'No', 'Maybe'];
+
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hr_accounts (
@@ -731,6 +738,57 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_hr_absences_employee ON hr_absences(employee_id);
     CREATE INDEX IF NOT EXISTS idx_hr_absences_dates ON hr_absences(start_date, end_date);
+
+    -- ==================== Offboarding (ТЗ 28, 28.1) ====================
+
+    CREATE TABLE IF NOT EXISTS hr_offboarding_cases (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      initiation_type TEXT NOT NULL DEFAULT 'Employee Initiative',
+      initiation_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      last_working_day DATE,
+      statement_text TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'Initiated',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      completed_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_offboarding_employee ON hr_offboarding_cases(employee_id);
+
+    CREATE TABLE IF NOT EXISTS hr_offboarding_checklist_items (
+      id SERIAL PRIMARY KEY,
+      case_id INTEGER NOT NULL REFERENCES hr_offboarding_cases(id),
+      category TEXT NOT NULL DEFAULT 'Knowledge Transfer',
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Pending',
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_offboarding_checklist_case ON hr_offboarding_checklist_items(case_id);
+
+    -- Одне exit interview на case (ТЗ 28.1).
+    CREATE TABLE IF NOT EXISTS hr_exit_interviews (
+      id SERIAL PRIMARY KEY,
+      case_id INTEGER NOT NULL UNIQUE REFERENCES hr_offboarding_cases(id),
+      primary_reason TEXT NOT NULL DEFAULT '',
+      secondary_reasons TEXT NOT NULL DEFAULT '',
+      good_notes TEXT NOT NULL DEFAULT '',
+      bad_notes TEXT NOT NULL DEFAULT '',
+      manager_notes TEXT NOT NULL DEFAULT '',
+      team_notes TEXT NOT NULL DEFAULT '',
+      conditions_notes TEXT NOT NULL DEFAULT '',
+      compensation_notes TEXT NOT NULL DEFAULT '',
+      growth_notes TEXT NOT NULL DEFAULT '',
+      processes_notes TEXT NOT NULL DEFAULT '',
+      what_could_retain TEXT NOT NULL DEFAULT '',
+      recommend_company TEXT NOT NULL DEFAULT '',
+      rehire_eligible BOOLEAN,
+      comments TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -2922,6 +2980,212 @@ async function updateAbsence(id, { comment, document_url }) {
   return rows[0] || null;
 }
 
+// ---------------------------------------------------------------------
+// Offboarding
+// ---------------------------------------------------------------------
+
+// ТЗ 28.1: "Analytics separates Voluntary / Involuntary / Probation
+// turnover" — обчислюємо з initiation_type, окремо не зберігаємо.
+function turnoverClassification(initiationType) {
+  if (initiationType === 'Probation Failed') return 'Probation';
+  if (initiationType === 'Employee Initiative' || initiationType === 'Mutual Agreement') return 'Voluntary';
+  if (initiationType === 'Company Initiative' || initiationType === 'End of Contract') return 'Involuntary';
+  return 'Other';
+}
+
+async function listOffboardingCases({ status = '' } = {}) {
+  const conditions = [];
+  const params = [];
+  if (status) { params.push(status); conditions.push(`c.status = $${params.length}`); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(`
+    SELECT c.*, per.full_name AS employee_name
+    FROM hr_offboarding_cases c
+    JOIN hr_employees emp ON emp.id = c.employee_id
+    JOIN hr_persons per ON per.id = emp.person_id
+    ${where}
+    ORDER BY c.created_at DESC
+  `, params);
+  return rows.map((c) => ({ ...c, turnover_classification: turnoverClassification(c.initiation_type) }));
+}
+
+async function getOffboardingCasesForEmployee(employeeId) {
+  const { rows } = await pool.query('SELECT * FROM hr_offboarding_cases WHERE employee_id = $1 ORDER BY created_at DESC', [employeeId]);
+  return rows.map((c) => ({ ...c, turnover_classification: turnoverClassification(c.initiation_type) }));
+}
+
+async function getOffboardingCase(id) {
+  const { rows } = await pool.query(`
+    SELECT c.*, per.full_name AS employee_name
+    FROM hr_offboarding_cases c
+    JOIN hr_employees emp ON emp.id = c.employee_id
+    JOIN hr_persons per ON per.id = emp.person_id
+    WHERE c.id = $1
+  `, [id]);
+  if (!rows[0]) return null;
+  const { rows: checklist } = await pool.query('SELECT * FROM hr_offboarding_checklist_items WHERE case_id = $1 ORDER BY category, id', [id]);
+  const { rows: exitInterview } = await pool.query('SELECT * FROM hr_exit_interviews WHERE case_id = $1', [id]);
+  return {
+    ...rows[0],
+    turnover_classification: turnoverClassification(rows[0].initiation_type),
+    checklist,
+    exit_interview: exitInterview[0] || null
+  };
+}
+
+function buildOffboardingStatementText({ full_name, initiation_date, last_working_day, initiation_type }) {
+  const initDate = initiation_date ? new Date(initiation_date).toLocaleDateString('uk-UA') : '[дата]';
+  const lastDay = last_working_day ? new Date(last_working_day).toLocaleDateString('uk-UA') : '[дата]';
+  return `Заява на звільнення
+
+Співробітник: ${full_name || '[ПІБ]'}
+Дата подання: ${initDate}
+Останній робочий день: ${lastDay}
+Підстава: ${initiation_type || '[підстава]'}
+
+Прошу вважати ${lastDay} останнім робочим днем.`;
+}
+
+async function initiateOffboarding({ employee_id, initiation_type, initiation_date, last_working_day }, createdBy) {
+  if (!OFFBOARDING_INITIATION_TYPES.includes(initiation_type)) throw new Error(`Unknown initiation type: ${initiation_type}`);
+  const { rows: empRows } = await pool.query(`
+    SELECT e.*, per.full_name FROM hr_employees e JOIN hr_persons per ON per.id = e.person_id WHERE e.id = $1
+  `, [employee_id]);
+  if (!empRows[0]) throw new Error('Співробітника не знайдено');
+
+  const statementText = buildOffboardingStatementText({
+    full_name: empRows[0].full_name, initiation_date: initiation_date || new Date().toISOString().slice(0, 10),
+    last_working_day, initiation_type
+  });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO hr_offboarding_cases (employee_id, initiation_type, initiation_date, last_working_day, statement_text, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [employee_id, initiation_type, initiation_date || new Date().toISOString().slice(0, 10), last_working_day || null, statementText, createdBy || '']
+    );
+    await client.query(`UPDATE hr_employees SET status = 'Leaving', updated_at = now() WHERE id = $1`, [employee_id]);
+    await client.query('COMMIT');
+    await writeAudit({ actor: createdBy, action: 'offboarding_initiated', entity_type: 'employee', entity_id: employee_id, new_value: { initiation_type, case_id: rows[0].id } });
+    return rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateOffboardingCase(id, { last_working_day, statement_text }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_offboarding_cases SET
+       last_working_day = COALESCE($2, last_working_day),
+       statement_text = COALESCE($3, statement_text),
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, last_working_day ?? null, statement_text ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function updateOffboardingCaseStatus(id, status, actor) {
+  if (!OFFBOARDING_STATUSES.includes(status)) throw new Error(`Unknown offboarding status: ${status}`);
+  const { rows: before } = await pool.query('SELECT status FROM hr_offboarding_cases WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_offboarding_cases SET status = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, status]
+  );
+  await writeAudit({ actor, action: 'status_change', entity_type: 'offboarding_case', entity_id: id, old_value: { status: before[0].status }, new_value: { status } });
+  return rows[0];
+}
+
+async function addOffboardingChecklistItem({ case_id, category, title }) {
+  if (!OFFBOARDING_CHECKLIST_CATEGORIES.includes(category)) throw new Error(`Unknown checklist category: ${category}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_offboarding_checklist_items (case_id, category, title) VALUES ($1,$2,$3) RETURNING *`,
+    [case_id, category, title]
+  );
+  return rows[0];
+}
+
+async function updateOffboardingChecklistItem(id, { status }) {
+  if (!OFFBOARDING_CHECKLIST_STATUSES.includes(status)) throw new Error(`Unknown checklist status: ${status}`);
+  const { rows } = await pool.query(
+    `UPDATE hr_offboarding_checklist_items SET status = $2, completed_at = CASE WHEN $2 = 'Done' THEN now() ELSE NULL END WHERE id = $1 RETURNING *`,
+    [id, status]
+  );
+  return rows[0] || null;
+}
+
+async function upsertExitInterview({ case_id, primary_reason, secondary_reasons, good_notes, bad_notes, manager_notes, team_notes,
+  conditions_notes, compensation_notes, growth_notes, processes_notes, what_could_retain, recommend_company, rehire_eligible, comments }, createdBy) {
+  if (recommend_company && !RECOMMEND_COMPANY_OPTIONS.includes(recommend_company)) throw new Error(`Unknown recommend_company value: ${recommend_company}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_exit_interviews (case_id, primary_reason, secondary_reasons, good_notes, bad_notes, manager_notes, team_notes,
+       conditions_notes, compensation_notes, growth_notes, processes_notes, what_could_retain, recommend_company, rehire_eligible, comments, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     ON CONFLICT (case_id) DO UPDATE SET
+       primary_reason = EXCLUDED.primary_reason, secondary_reasons = EXCLUDED.secondary_reasons,
+       good_notes = EXCLUDED.good_notes, bad_notes = EXCLUDED.bad_notes, manager_notes = EXCLUDED.manager_notes,
+       team_notes = EXCLUDED.team_notes, conditions_notes = EXCLUDED.conditions_notes, compensation_notes = EXCLUDED.compensation_notes,
+       growth_notes = EXCLUDED.growth_notes, processes_notes = EXCLUDED.processes_notes, what_could_retain = EXCLUDED.what_could_retain,
+       recommend_company = EXCLUDED.recommend_company, rehire_eligible = EXCLUDED.rehire_eligible, comments = EXCLUDED.comments,
+       updated_at = now()
+     RETURNING *`,
+    [case_id, primary_reason || '', secondary_reasons || '', good_notes || '', bad_notes || '', manager_notes || '', team_notes || '',
+      conditions_notes || '', compensation_notes || '', growth_notes || '', processes_notes || '', what_could_retain || '',
+      recommend_company || '', rehire_eligible ?? null, comments || '', createdBy || '']
+  );
+  return rows[0];
+}
+
+// Закриває процес: Employee → Former Employee, закриває поточний
+// Employment Period, переносить rehire eligibility з exit interview
+// (якщо є) — ТЗ 28 "Close".
+async function closeOffboardingCase(id, actor) {
+  const caseRow = await getOffboardingCase(id);
+  if (!caseRow) return null;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: currentPeriod } = await client.query(
+      `SELECT * FROM hr_employment_periods WHERE employee_id = $1 AND end_date IS NULL FOR UPDATE`,
+      [caseRow.employee_id]
+    );
+    if (currentPeriod[0]) {
+      const endDate = caseRow.last_working_day || new Date().toISOString().slice(0, 10);
+      await client.query(`UPDATE hr_employment_periods SET end_date = $2 WHERE id = $1`, [currentPeriod[0].id, endDate]);
+      const { rows: stillFilled } = await client.query(
+        `SELECT 1 FROM hr_employment_periods WHERE position_id = $1 AND end_date IS NULL AND id != $2`,
+        [currentPeriod[0].position_id, currentPeriod[0].id]
+      );
+      if (stillFilled.length === 0) {
+        await client.query(`UPDATE hr_positions SET status = 'Vacant', updated_at = now() WHERE id = $1`, [currentPeriod[0].position_id]);
+      }
+    }
+    await client.query(
+      `UPDATE hr_employees SET status = 'Former Employee', rehire_eligible = COALESCE($2, rehire_eligible), updated_at = now() WHERE id = $1`,
+      [caseRow.employee_id, caseRow.exit_interview?.rehire_eligible ?? null]
+    );
+    const { rows } = await client.query(
+      `UPDATE hr_offboarding_cases SET status = 'Completed', completed_at = now(), updated_at = now() WHERE id = $1 RETURNING *`,
+      [id]
+    );
+    await client.query('COMMIT');
+    await writeAudit({ actor, action: 'offboarding_completed', entity_type: 'employee', entity_id: caseRow.employee_id, new_value: { case_id: id } });
+    return rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -3078,5 +3342,20 @@ export default {
   listAbsences,
   createAbsence,
   updateAbsenceStatus,
-  updateAbsence
+  updateAbsence,
+  OFFBOARDING_INITIATION_TYPES,
+  OFFBOARDING_STATUSES,
+  OFFBOARDING_CHECKLIST_CATEGORIES,
+  OFFBOARDING_CHECKLIST_STATUSES,
+  RECOMMEND_COMPANY_OPTIONS,
+  listOffboardingCases,
+  getOffboardingCasesForEmployee,
+  getOffboardingCase,
+  initiateOffboarding,
+  updateOffboardingCase,
+  updateOffboardingCaseStatus,
+  addOffboardingChecklistItem,
+  updateOffboardingChecklistItem,
+  upsertExitInterview,
+  closeOffboardingCase
 };

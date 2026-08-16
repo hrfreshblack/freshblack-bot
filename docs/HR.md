@@ -1,10 +1,10 @@
-# HR CRM — перший зріз (Employee Master Data + Organization Structure)
+# HR CRM
 
 ## Що вже є
 
 Окремий вебдодаток (`hr/`), третій сервіс поруч із Telegram-ботом і `warehouse/` (ERP виробництва) — той самий підхід: своя сторінка в браузері, своя авторизація (логін+пароль, сесія в httpOnly-кукі на годину), використовує ту саму Postgres-базу, що й решта (окремі таблиці з префіксом `hr_`, жодного перетину з таблицями бота чи ERP).
 
-Це перший, навмисно вузький зріз величезного ТЗ (`HR_CRM_Fresh_Black_TZ_v1.0.docx`) — саме Employee Master Data + Organization Structure, бо на них спирається все інше (рекрутинг, офери, онбординг тощо). Реалізовано:
+Побудовано послідовними зрізами за великим ТЗ (`HR_CRM_Fresh_Black_TZ_v1.0.docx`), починаючи з Employee Master Data + Organization Structure, бо на них спирається все інше. Наразі покрито весь операційний цикл співробітника — від заявки на вакансію до звільнення. Реалізовано:
 
 - **Оргструктура** — департаменти з ієрархією (батько/дитина), посади (Position) з лінією підпорядкування (reports to) і статусами (Filled/Vacant/Recruitment Active/Planned/Frozen/Closed), просте дерево-представлення (List/Department View з ТЗ п.8 — графічний Chart View з drag&drop ще не робили).
 - **Employee Master Card** — вкладки Overview / Personal / Employment / Compensation / Changes:
@@ -45,10 +45,16 @@
   - Типи: Vacation/Sick Leave/Unpaid Leave/Business Trip/Remote/Other. Кількість робочих днів рахується автоматично (виключно будні, без урахування свят — календар свят поки не ведеться).
   - Статуси: Requested → Approved/Rejected, Approved можна скасувати (Cancelled). Валідація: дата завершення не може бути раніше дати початку.
   - Командний перегляд — фільтри за департаментом/статусом/періодом у вкладці "Відсутності" (табличний еквівалент "Team/HR calendar" з ТЗ — повноцінний візуальний календар поки не робили).
+- **Offboarding** (ТЗ розділи 28, 28.1) — восьмий, останній зріз запланованого об'єму, у вкладці "Звільнення" (і в Employee Master Card):
+  - **Ініціювати** — підстава (Employee/Company Initiative, End of Contract, Probation Failed, Mutual Agreement, Other), дата ініціації, останній робочий день; статус співробітника одразу переходить у Leaving.
+  - **Заява на звільнення** — генерується автоматично з даних кейсу, лишається editable (той самий підхід, що й welcome-лист у Preboarding).
+  - **Чек-лист** — Knowledge Transfer / Assets & Access, довільні пункти зі статусом Pending/Done.
+  - **Exit Interview** (ТЗ 28.1) — повний набір полів (причини, фідбек по керівнику/команді/умовах/компенсації/розвитку/процесах, recommend company, rehire eligibility, коментарі).
+  - **Завершити (Close)** — одна дія: Employee → Former Employee, закриває поточний Employment Period датою останнього робочого дня, звільняє посаду (Vacant), переносить rehire eligibility з exit interview. Turnover classification (Voluntary/Involuntary/Probation) рахується автоматично з підстави ініціації для майбутньої аналітики.
 
 ## Чого свідомо ще немає (наступні кроки з великого ТЗ)
 
-Resume parsing/OCR, AI-аналіз і AI-мэтчинг кандидатів, формальні scorecard-шаблони для інтерв'ю, публікація вакансій на Work.ua/Robota.ua/Jooble, інтеграції з Google Calendar/Gmail/Telegram/Viber, генератор документів у PDF, Offboarding workflow, повноцінна RBAC-матриця (зараз лише HRD з повним доступом — інші ролі з ТЗ п.4 ще не розмежовані по полях), Time & Attendance, AI Assistant, графічний Chart View оргструктури, Manager/HRD-аналітика (навмисно відкладено разом з рештою аналітики, ТЗ розділ 29, включно з absence rate), самостійне заповнення опитувань співробітниками (поки відповіді записує HR — окремого employee-порталу з логіном ще нема), візуальний календар відсутностей.
+Resume parsing/OCR, AI-аналіз і AI-мэтчинг кандидатів, формальні scorecard-шаблони для інтерв'ю, публікація вакансій на Work.ua/Robota.ua/Jooble, інтеграції з Google Calendar/Gmail/Telegram/Viber, генератор документів у PDF/DOCX (заява на звільнення поки лише текст у системі), повноцінна RBAC-матриця (зараз лише HRD з повним доступом — інші ролі з ТЗ п.4 ще не розмежовані по полях), Time & Attendance, AI Assistant, графічний Chart View оргструктури, HR Analytics & Dashboards і Recruiter Quality Dashboard (ТЗ розділи 29-30 — навмисно відкладено, ТЗ прямо каже не починати до стабілізації операційних даних; включно з turnover-аналітикою, absence rate, Knowledge Base/Learning completion), самостійне заповнення опитувань співробітниками (поки відповіді записує HR — окремого employee-порталу з логіном ще нема), візуальний календар відсутностей, повноцінна оргструктура компанії (навмисно відкладено на прохання користувача — див. Miro-схему, яку ще треба розібрати).
 
 ## Доступ
 
