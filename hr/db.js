@@ -3433,6 +3433,231 @@ async function getDashboardMetrics() {
   };
 }
 
+function avgDaysFromRows(rows, field) {
+  if (!rows.length) return null;
+  const total = rows.reduce((s, r) => s + Number(r[field]), 0);
+  return Math.round((total / rows.length) * 10) / 10;
+}
+
+// Recruiter Quality & Progress Dashboard (ТЗ розділ 30) — окремий,
+// глибший зріз саме для рекрутингу: обсяг/вік вакансій, воронка,
+// швидкість по етапах, джерела, причини відмов, ефективність по
+// рекрутеру, список "потребує уваги". Усе, що можна порахувати з
+// наявних даних без нової інфраструктури (без cost-трекінгу і
+// SLA-правил, яких ще нема — див. docs/HR.md).
+async function getRecruitmentMetrics() {
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
+
+  // -- Вакансії: обсяг і вік --
+  const { rows: vacancyRows } = await pool.query(`
+    SELECT v.id, v.title, v.status, v.created_at, v.updated_at, v.recruiter_username, d.name AS department_name
+    FROM hr_vacancies v JOIN hr_departments d ON d.id = v.department_id
+  `);
+  const openVacancies = vacancyRows.filter((v) => v.status === 'Open');
+  const onHoldVacancies = vacancyRows.filter((v) => v.status === 'On Hold');
+  const newVacancies30d = vacancyRows.filter((v) => new Date(v.created_at) >= thirtyDaysAgo);
+  const closedVacancies30d = vacancyRows.filter((v) => ['Filled', 'Cancelled', 'Closed'].includes(v.status) && new Date(v.updated_at) >= thirtyDaysAgo);
+  const avgVacancyAgeDays = openVacancies.length
+    ? Math.round((openVacancies.reduce((s, v) => s + (now - new Date(v.created_at)) / 86400000, 0) / openVacancies.length) * 10) / 10
+    : null;
+  const vacancyAging = openVacancies
+    .map((v) => ({ id: v.id, title: v.title, department_name: v.department_name, days_open: Math.round((now - new Date(v.created_at)) / 86400000) }))
+    .sort((a, b) => b.days_open - a.days_open)
+    .slice(0, 10);
+
+  // -- Кандидати та воронка --
+  const { rows: candidateRows } = await pool.query(`SELECT id, source, created_at FROM hr_candidates`);
+  const candidatesTotal = candidateRows.length;
+  const candidatesNew30d = candidateRows.filter((c) => new Date(c.created_at) >= thirtyDaysAgo).length;
+  const { rows: appCountRows } = await pool.query(`SELECT COUNT(*)::int AS count FROM hr_applications`);
+  const candidatesPerVacancy = vacancyRows.length ? Math.round((appCountRows[0].count / vacancyRows.length) * 10) / 10 : null;
+
+  const { rows: interviewTypeRows } = await pool.query(`SELECT interview_type, COUNT(*)::int AS count FROM hr_interviews GROUP BY interview_type`);
+  const interviewsByType = {};
+  INTERVIEW_TYPES.forEach((t) => { interviewsByType[t] = 0; });
+  interviewTypeRows.forEach((r) => { interviewsByType[r.interview_type || 'Не вказано'] = r.count; });
+
+  const { rows: offerStatusRows } = await pool.query(`SELECT status, COUNT(*)::int AS count FROM hr_offers GROUP BY status`);
+  const offersByStatus = {};
+  OFFER_STATUSES.forEach((s) => { offersByStatus[s] = 0; });
+  offerStatusRows.forEach((r) => { offersByStatus[r.status] = r.count; });
+
+  const { rows: hiredRows } = await pool.query(`SELECT id, created_at, updated_at FROM hr_applications WHERE status = 'Hired'`);
+  const hiresTotal = hiredRows.length;
+  const hires30d = hiredRows.filter((r) => new Date(r.updated_at) >= thirtyDaysAgo).length;
+  const overallConversionPct = candidatesTotal > 0 ? Math.round((hiresTotal / candidatesTotal) * 1000) / 10 : null;
+
+  // -- Швидкість по етапах --
+  const { rows: screeningAudit } = await pool.query(`
+    SELECT DISTINCT ON (entity_id) entity_id, created_at
+    FROM hr_audit_log
+    WHERE entity_type = 'application' AND action = 'stage_change' AND new_value->>'stage' = 'Screening'
+    ORDER BY entity_id, created_at ASC
+  `);
+  const { rows: appsForScreening } = await pool.query(`SELECT id, created_at FROM hr_applications`);
+  const appCreatedById = Object.fromEntries(appsForScreening.map((a) => [a.id, a.created_at]));
+  const screeningDeltas = screeningAudit
+    .filter((r) => appCreatedById[r.entity_id])
+    .map((r) => ({ delta: (new Date(r.created_at) - new Date(appCreatedById[r.entity_id])) / 86400000 }));
+  const timeToScreeningDays = screeningDeltas.length ? avgDaysFromRows(screeningDeltas, 'delta') : null;
+
+  const { rows: firstInterviewRows } = await pool.query(`
+    SELECT a.created_at AS app_created, MIN(iv.created_at) AS first_interview
+    FROM hr_applications a JOIN hr_interviews iv ON iv.application_id = a.id
+    GROUP BY a.id, a.created_at
+  `);
+  const timeToInterviewDays = avgDaysFromRows(
+    firstInterviewRows.map((r) => ({ delta: (new Date(r.first_interview) - new Date(r.app_created)) / 86400000 })), 'delta'
+  );
+
+  const { rows: firstOfferRows } = await pool.query(`
+    SELECT a.created_at AS app_created, MIN(o.created_at) AS first_offer
+    FROM hr_applications a JOIN hr_offers o ON o.application_id = a.id
+    GROUP BY a.id, a.created_at
+  `);
+  const timeToOfferDays = avgDaysFromRows(
+    firstOfferRows.map((r) => ({ delta: (new Date(r.first_offer) - new Date(r.app_created)) / 86400000 })), 'delta'
+  );
+
+  const timeToHireDays = avgDaysFromRows(
+    hiredRows.map((r) => ({ delta: (new Date(r.updated_at) - new Date(r.created_at)) / 86400000 })), 'delta'
+  );
+
+  // -- Джерела кандидатів --
+  const { rows: sourceAllRows } = await pool.query(`SELECT source, COUNT(*)::int AS count FROM hr_candidates GROUP BY source`);
+  const sourceOfCandidates = {};
+  sourceAllRows.forEach((r) => { sourceOfCandidates[r.source || 'Не вказано'] = r.count; });
+
+  const { rows: sourceHireRows } = await pool.query(`
+    SELECT c.source, COUNT(DISTINCT c.id)::int AS count
+    FROM hr_candidates c JOIN hr_applications a ON a.candidate_id = c.id
+    WHERE a.status = 'Hired'
+    GROUP BY c.source
+  `);
+  const sourceOfHire = {};
+  sourceHireRows.forEach((r) => { sourceOfHire[r.source || 'Не вказано'] = r.count; });
+
+  const sourceConversionPct = {};
+  Object.keys(sourceOfCandidates).forEach((src) => {
+    const hires = sourceOfHire[src] || 0;
+    sourceConversionPct[src] = sourceOfCandidates[src] > 0 ? Math.round((hires / sourceOfCandidates[src]) * 1000) / 10 : 0;
+  });
+
+  const { rows: sourceProbationRows } = await pool.query(`
+    SELECT c.source, e.probation_decision, COUNT(*)::int AS count
+    FROM hr_candidates c
+    JOIN hr_persons per ON per.id = c.person_id
+    JOIN hr_employees e ON e.person_id = per.id
+    WHERE e.probation_decision != ''
+    GROUP BY c.source, e.probation_decision
+  `);
+  const sourceQualityAgg = {};
+  sourceProbationRows.forEach((r) => {
+    const src = r.source || 'Не вказано';
+    sourceQualityAgg[src] = sourceQualityAgg[src] || { Passed: 0, Failed: 0 };
+    if (r.probation_decision === 'Passed' || r.probation_decision === 'Failed') sourceQualityAgg[src][r.probation_decision] = r.count;
+  });
+  const sourceQualityPassRatePct = {};
+  Object.entries(sourceQualityAgg).forEach(([src, counts]) => {
+    const denom = counts.Passed + counts.Failed;
+    sourceQualityPassRatePct[src] = denom > 0 ? Math.round((counts.Passed / denom) * 1000) / 10 : null;
+  });
+
+  // -- Причини відмов: company (ми відмовили) vs candidate (кандидат відмовився) --
+  const { rows: rejectionRows } = await pool.query(
+    `SELECT rejection_reason, COUNT(*)::int AS count FROM hr_applications WHERE rejection_reason != '' GROUP BY rejection_reason`
+  );
+  const companyRejectionReasons = {};
+  const candidateDeclineReasons = {};
+  rejectionRows.forEach((r) => {
+    if (REJECTION_REASONS_COMPANY.includes(r.rejection_reason)) companyRejectionReasons[r.rejection_reason] = r.count;
+    else if (REJECTION_REASONS_CANDIDATE.includes(r.rejection_reason)) candidateDeclineReasons[r.rejection_reason] = r.count;
+  });
+
+  // -- Ефективність по рекрутеру (за vacancy.recruiter_username) --
+  const recruiterStats = {};
+  vacancyRows.forEach((v) => {
+    if (!v.recruiter_username) return;
+    recruiterStats[v.recruiter_username] = recruiterStats[v.recruiter_username] || { activeVacancies: 0, hires: 0, hireDeltas: [] };
+    if (v.status === 'Open' || v.status === 'On Hold') recruiterStats[v.recruiter_username].activeVacancies++;
+  });
+  const { rows: hiresByRecruiterRows } = await pool.query(`
+    SELECT v.recruiter_username, a.created_at, a.updated_at
+    FROM hr_applications a JOIN hr_vacancies v ON v.id = a.vacancy_id
+    WHERE a.status = 'Hired' AND v.recruiter_username != ''
+  `);
+  hiresByRecruiterRows.forEach((r) => {
+    recruiterStats[r.recruiter_username] = recruiterStats[r.recruiter_username] || { activeVacancies: 0, hires: 0, hireDeltas: [] };
+    recruiterStats[r.recruiter_username].hires++;
+    recruiterStats[r.recruiter_username].hireDeltas.push((new Date(r.updated_at) - new Date(r.created_at)) / 86400000);
+  });
+  const recruiterPerformance = Object.entries(recruiterStats).map(([username, s]) => ({
+    username,
+    activeVacancies: s.activeVacancies,
+    hires: s.hires,
+    avgTimeToHireDays: s.hireDeltas.length ? Math.round((s.hireDeltas.reduce((a, b) => a + b, 0) / s.hireDeltas.length) * 10) / 10 : null
+  }));
+
+  // -- Потребує уваги: активні заявки без наступної дії / прострочені / "завислі" --
+  const { rows: activeAppRows } = await pool.query(`
+    SELECT a.id, a.next_action, a.next_action_date, a.updated_at, a.created_at, per.full_name AS candidate_name, v.title AS vacancy_title
+    FROM hr_applications a
+    JOIN hr_candidates c ON c.id = a.candidate_id
+    JOIN hr_persons per ON per.id = c.person_id
+    JOIN hr_vacancies v ON v.id = a.vacancy_id
+    WHERE a.status = 'Active'
+  `);
+  const { rows: lastStageChangeRows } = await pool.query(`
+    SELECT DISTINCT ON (entity_id) entity_id, created_at
+    FROM hr_audit_log
+    WHERE entity_type = 'application' AND action = 'stage_change'
+    ORDER BY entity_id, created_at DESC
+  `);
+  const lastStageChangeById = Object.fromEntries(lastStageChangeRows.map((r) => [r.entity_id, r.created_at]));
+
+  const withoutNextAction = activeAppRows.filter((a) => !a.next_action);
+  const overdueNextAction = activeAppRows.filter((a) => a.next_action_date && new Date(a.next_action_date) < now);
+  const stuckCandidates = activeAppRows.filter((a) => {
+    const lastMoved = lastStageChangeById[a.id] || a.created_at;
+    return (now - new Date(lastMoved)) / 86400000 > 14;
+  }).map((a) => ({ ...a, days_stuck: Math.round((now - new Date(lastStageChangeById[a.id] || a.created_at)) / 86400000) }));
+
+  return {
+    openVacancies: openVacancies.length,
+    onHoldVacancies: onHoldVacancies.length,
+    newVacancies30d: newVacancies30d.length,
+    closedVacancies30d: closedVacancies30d.length,
+    avgVacancyAgeDays,
+    vacancyAging,
+    candidatesTotal,
+    candidatesNew30d,
+    candidatesPerVacancy,
+    interviewsByType,
+    offersByStatus,
+    hiresTotal,
+    hires30d,
+    overallConversionPct,
+    timeToScreeningDays,
+    timeToInterviewDays,
+    timeToOfferDays,
+    timeToHireDays,
+    sourceOfCandidates,
+    sourceOfHire,
+    sourceConversionPct,
+    sourceQualityPassRatePct,
+    companyRejectionReasons,
+    candidateDeclineReasons,
+    recruiterPerformance,
+    withoutNextActionCount: withoutNextAction.length,
+    withoutNextActionList: withoutNextAction.slice(0, 10).map((a) => ({ id: a.id, candidate_name: a.candidate_name, vacancy_title: a.vacancy_title })),
+    overdueNextActionCount: overdueNextAction.length,
+    overdueNextActionList: overdueNextAction.slice(0, 10).map((a) => ({ id: a.id, candidate_name: a.candidate_name, vacancy_title: a.vacancy_title, next_action_date: a.next_action_date })),
+    stuckCandidatesCount: stuckCandidates.length,
+    stuckCandidatesList: stuckCandidates.sort((a, b) => b.days_stuck - a.days_stuck).slice(0, 10).map((a) => ({ id: a.id, candidate_name: a.candidate_name, vacancy_title: a.vacancy_title, days_stuck: a.days_stuck }))
+  };
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -3609,5 +3834,6 @@ export default {
   addResumeToCandidate,
   listResumesForCandidate,
   getResumeFile,
-  getDashboardMetrics
+  getDashboardMetrics,
+  getRecruitmentMetrics
 };

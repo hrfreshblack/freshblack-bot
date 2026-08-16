@@ -172,6 +172,7 @@
     <button id="tabSurveys" onclick="showTab('surveys')">Опитування</button>
     <button id="tabAbsences" onclick="showTab('absences')">Відсутності</button>
     <button id="tabOffboarding" onclick="showTab('offboarding')">Звільнення</button>
+    <button id="tabRecruitmentMetrics" onclick="showTab('recruitmentMetrics')">Метрики найму</button>
   </nav>
 </header>
 
@@ -435,6 +436,34 @@
   <div id="viewOffboardingCaseDetail" style="display:none;">
     <button class="secondary" onclick="showTab('offboarding')">← До списку звільнень</button>
     <div id="offboardingCaseContainer" style="margin-top:16px;"></div>
+  </div>
+
+  <div id="viewRecruitmentMetrics" style="display:none;">
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 16px;">Recruiter Quality &amp; Progress Dashboard (ТЗ розділ 30) — детальніші метрики саме по рекрутингу. Наведи курсор на ⓘ для формули.</p>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:0 0 8px;">Вакансії</h3>
+    <div class="kpiRow" id="rmVacancyKpis"></div>
+    <div class="breakdownGrid" id="rmVacancyAging"></div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Кандидати та воронка</h3>
+    <div class="kpiRow" id="rmCandidateKpis"></div>
+    <div class="breakdownGrid" id="rmFunnelBreakdowns"></div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Швидкість (Time to…)</h3>
+    <div class="kpiRow" id="rmTimeKpis"></div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Джерела кандидатів</h3>
+    <div class="tableWrap"><table><thead><tr><th>Джерело</th><th>Кандидатів</th><th>Наймів</th><th>Конверсія</th><th>Пройшли випробувальний</th></tr></thead><tbody id="rmSourceBody"></tbody></table></div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Причини відмов</h3>
+    <div class="breakdownGrid" id="rmRejectionBreakdowns"></div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Ефективність рекрутерів</h3>
+    <div class="tableWrap"><table><thead><tr><th>Рекрутер</th><th>Активні вакансії</th><th>Найми</th><th>Сер. Time to Hire</th></tr></thead><tbody id="rmRecruiterBody"></tbody></table></div>
+    <div class="empty" id="rmRecruiterEmpty" style="display:none;">Ще немає вакансій із зазначеним рекрутером.</div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Потребує уваги</h3>
+    <div class="breakdownGrid" id="rmAttentionLists"></div>
   </div>
 
 </main>
@@ -1226,7 +1255,7 @@ async function loadDictionaries() {
 
 // ---- Tabs ----
 
-const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr', 'tabKnowledge', 'tabSurveys', 'tabAbsences', 'tabOffboarding'];
+const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr', 'tabKnowledge', 'tabSurveys', 'tabAbsences', 'tabOffboarding', 'tabRecruitmentMetrics'];
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
@@ -1245,6 +1274,7 @@ function showTab(tab) {
   document.getElementById('viewAbsences').style.display = tab === 'absences' ? '' : 'none';
   document.getElementById('viewOffboarding').style.display = tab === 'offboarding' ? '' : 'none';
   document.getElementById('viewOffboardingCaseDetail').style.display = 'none';
+  document.getElementById('viewRecruitmentMetrics').style.display = tab === 'recruitmentMetrics' ? '' : 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
@@ -1255,6 +1285,7 @@ function showTab(tab) {
   document.getElementById('tabSurveys').classList.toggle('active', tab === 'surveys');
   document.getElementById('tabAbsences').classList.toggle('active', tab === 'absences');
   document.getElementById('tabOffboarding').classList.toggle('active', tab === 'offboarding');
+  document.getElementById('tabRecruitmentMetrics').classList.toggle('active', tab === 'recruitmentMetrics');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'people') loadPeople();
   if (tab === 'org') loadOrg();
@@ -1265,6 +1296,7 @@ function showTab(tab) {
   if (tab === 'surveys') loadSurveys();
   if (tab === 'absences') loadAbsencesView();
   if (tab === 'offboarding') loadOffboardingView();
+  if (tab === 'recruitmentMetrics') loadRecruitmentMetrics();
 }
 
 // ---- Dashboard ----
@@ -1363,6 +1395,108 @@ async function loadDashboard() {
     breakdownCardHtml('Стать (активні)', 'Розподіл активних співробітників за полем Gender у Personal.', m.genderBreakdown),
     breakdownCardHtml('Стаж (активні)', 'Розподіл активних співробітників за стажем: <3міс, 3-6міс, 6-12міс, 1-2р, 2-3р, 3+р.', m.tenureBuckets),
     breakdownCardHtml('Випробувальний термін (усього)', 'Кількість зафіксованих рішень по кожному типу за весь час.', m.probationCounts)
+  ].join('');
+}
+
+// ---- Recruitment Metrics (ТЗ розділ 30 — Recruiter Quality & Progress Dashboard) ----
+
+function attentionListHtml(title, formula, items, renderItem) {
+  return `
+    <div class="breakdownCard">
+      <div class="breakdownTitle">${escAttr(title)} (${items.length}) ${formula ? '<span class="ⓘ" title="' + escAttr(formula) + '">ⓘ</span>' : ''}</div>
+      ${items.length ? items.map(renderItem).join('') : '<p style="color:var(--muted); font-size:12px;">Немає.</p>'}
+    </div>
+  `;
+}
+
+async function loadRecruitmentMetrics() {
+  const resp = await apiFetch('/api/dashboard/recruitment-metrics');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося порахувати метрики'); return; }
+  const m = data.metrics;
+
+  document.getElementById('rmVacancyKpis').innerHTML = [
+    kpiCardHtml(m.openVacancies, 'Відкриті вакансії', 'Вакансії зі статусом Open.'),
+    kpiCardHtml(m.onHoldVacancies, 'Заморожені вакансії', 'Вакансії зі статусом On Hold.'),
+    kpiCardHtml(m.newVacancies30d, 'Нові вакансії (30 дн)', 'Вакансії, створені за останні 30 днів.'),
+    kpiCardHtml(m.closedVacancies30d, 'Закриті вакансії (30 дн)', 'Вакансії зі статусом Filled/Cancelled/Closed, оновлені за останні 30 днів.'),
+    kpiCardHtml(m.avgVacancyAgeDays != null ? m.avgVacancyAgeDays + ' дн.' : '—', 'Середній вік відкритих вакансій', 'Середня кількість днів від створення до сьогодні серед вакансій зі статусом Open.')
+  ].join('');
+
+  document.getElementById('rmVacancyAging').innerHTML = attentionListHtml(
+    'Вік вакансій (найстаріші відкриті)', 'Топ-10 відкритих вакансій, відсортованих за кількістю днів у роботі — щоб бачити, які "зависли" найдовше.',
+    m.vacancyAging,
+    (v) => `<div style="display:flex; justify-content:space-between; padding:4px 0; border-top:1px solid var(--border); font-size:12px;"><span>${escAttr(v.title)} · ${escAttr(v.department_name)}</span><span class="tag ${v.days_open > 30 ? 'bad' : v.days_open > 14 ? 'warn' : 'neutral'}">${v.days_open} дн.</span></div>`
+  );
+
+  document.getElementById('rmCandidateKpis').innerHTML = [
+    kpiCardHtml(m.candidatesTotal, 'Отримано кандидатів (усього)', 'Загальна кількість карток кандидатів у системі.'),
+    kpiCardHtml(m.candidatesNew30d, 'Нові кандидати (30 дн)', 'Кандидати, додані за останні 30 днів.'),
+    kpiCardHtml(m.candidatesPerVacancy != null ? m.candidatesPerVacancy : '—', 'Кандидатів на вакансію', 'Усього заявок (Application) / усього вакансій.'),
+    kpiCardHtml(m.hiresTotal, 'Найми (усього)', 'Заявки кандидатів зі статусом Hired.'),
+    kpiCardHtml(m.hires30d, 'Найми (30 дн)', 'Заявки, що стали Hired за останні 30 днів.'),
+    kpiCardHtml(m.overallConversionPct != null ? m.overallConversionPct + '%' : '—', 'Загальна конверсія в найм', 'Hires / Candidates × 100%.')
+  ].join('');
+
+  document.getElementById('rmFunnelBreakdowns').innerHTML = [
+    breakdownCardHtml('Інтерв\'ю за типом', 'Кількість проведених інтерв\'ю кожного типу (HR Screening, Technical/Professional, Final, Test Task Review, Reference Check).', m.interviewsByType),
+    breakdownCardHtml('Офери за статусом', 'Поточний статус усіх оферів: Draft/Sent/Accepted/Declined/Expired/Withdrawn.', m.offersByStatus)
+  ].join('');
+
+  document.getElementById('rmTimeKpis').innerHTML = [
+    kpiCardHtml(m.timeToScreeningDays != null ? m.timeToScreeningDays + ' дн.' : '—', 'Time to Screening', 'Середня к-сть днів від подання заявки кандидата до переходу етапу в Screening.'),
+    kpiCardHtml(m.timeToInterviewDays != null ? m.timeToInterviewDays + ' дн.' : '—', 'Time to Interview', 'Середня к-сть днів від подання заявки до першого запланованого інтерв\'ю.'),
+    kpiCardHtml(m.timeToOfferDays != null ? m.timeToOfferDays + ' дн.' : '—', 'Time to Offer', 'Середня к-сть днів від подання заявки до створення офера.'),
+    kpiCardHtml(m.timeToHireDays != null ? m.timeToHireDays + ' дн.' : '—', 'Time to Hire', 'Середня к-сть днів від подання заявки до статусу Hired.')
+  ].join('');
+
+  const sources = new Set([...Object.keys(m.sourceOfCandidates), ...Object.keys(m.sourceOfHire)]);
+  document.getElementById('rmSourceBody').innerHTML = [...sources].length ? [...sources].map((src) => `
+    <tr>
+      <td>${escAttr(src)}</td>
+      <td>${m.sourceOfCandidates[src] || 0}</td>
+      <td>${m.sourceOfHire[src] || 0}</td>
+      <td>${m.sourceConversionPct[src] != null ? m.sourceConversionPct[src] + '%' : '—'}</td>
+      <td>${m.sourceQualityPassRatePct[src] != null ? m.sourceQualityPassRatePct[src] + '%' : '—'}</td>
+    </tr>
+  `).join('') : '<tr><td colspan="5" style="color:var(--muted);">Немає даних.</td></tr>';
+
+  document.getElementById('rmRejectionBreakdowns').innerHTML = [
+    breakdownCardHtml('Причини відмови компанії', 'Кількість заявок з кожною причиною відмови з боку компанії (Company Rejection Reasons).', m.companyRejectionReasons),
+    breakdownCardHtml('Причини відмови кандидата', 'Кількість заявок з кожною причиною відмови з боку кандидата (Candidate Decline Reasons) — наприклад, якщо значний % відмовляється через зарплату, це управлінська інформація, а не "рекрутер погано шукає".', m.candidateDeclineReasons)
+  ].join('');
+
+  const recruiterBody = document.getElementById('rmRecruiterBody');
+  const recruiterEmpty = document.getElementById('rmRecruiterEmpty');
+  if (!m.recruiterPerformance.length) { recruiterBody.innerHTML = ''; recruiterEmpty.style.display = 'block'; }
+  else {
+    recruiterEmpty.style.display = 'none';
+    recruiterBody.innerHTML = m.recruiterPerformance.map((r) => `
+      <tr>
+        <td>${escAttr(r.username)}</td>
+        <td>${r.activeVacancies}</td>
+        <td>${r.hires}</td>
+        <td>${r.avgTimeToHireDays != null ? r.avgTimeToHireDays + ' дн.' : '—'}</td>
+      </tr>
+    `).join('');
+  }
+
+  document.getElementById('rmAttentionLists').innerHTML = [
+    attentionListHtml(
+      'Без наступної дії', 'Активні заявки (status Active), де не вказано next_action — незрозуміло, що робити далі.',
+      m.withoutNextActionList,
+      (a) => `<div style="padding:4px 0; border-top:1px solid var(--border); font-size:12px;">${escAttr(a.candidate_name)} · ${escAttr(a.vacancy_title)}</div>`
+    ),
+    attentionListHtml(
+      'Прострочена дія', 'Активні заявки, у яких next_action_date уже минула.',
+      m.overdueNextActionList,
+      (a) => `<div style="padding:4px 0; border-top:1px solid var(--border); font-size:12px;">${escAttr(a.candidate_name)} · ${escAttr(a.vacancy_title)} · до ${new Date(a.next_action_date).toLocaleDateString('uk-UA')}</div>`
+    ),
+    attentionListHtml(
+      'Завислі кандидати', 'Активні заявки без зміни етапу понад 14 днів (за журналом змін, якщо етап жодного разу не змінювався — від дати подання заявки).',
+      m.stuckCandidatesList,
+      (a) => `<div style="display:flex; justify-content:space-between; padding:4px 0; border-top:1px solid var(--border); font-size:12px;"><span>${escAttr(a.candidate_name)} · ${escAttr(a.vacancy_title)}</span><span class="tag bad">${a.days_stuck} дн.</span></div>`
+    )
   ].join('');
 }
 

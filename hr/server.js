@@ -213,6 +213,16 @@ app.get('/api/dashboard/metrics', async (req, res) => {
   }
 });
 
+app.get('/api/dashboard/recruitment-metrics', async (req, res) => {
+  try {
+    const metrics = await db.getRecruitmentMetrics();
+    res.json({ ok: true, metrics });
+  } catch (error) {
+    console.error('GET /api/dashboard/recruitment-metrics ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося порахувати метрики' });
+  }
+});
+
 // ---- Departments ----
 
 app.get('/api/departments', async (req, res) => {
