@@ -159,6 +159,7 @@
     <button id="tabRecruitment" onclick="showTab('recruitment')">Рекрутинг</button>
     <button id="tabOnboardingTemplates" onclick="showTab('onboardingTemplates')">Адаптація</button>
     <button id="tabOkr" onclick="showTab('okr')">OKR</button>
+    <button id="tabKnowledge" onclick="showTab('knowledge')">Знання</button>
   </nav>
 </header>
 
@@ -191,6 +192,7 @@
       <button onclick="showProfileTab('onboarding')">Onboarding</button>
       <button onclick="showProfileTab('performance')">Performance</button>
       <button onclick="showProfileTab('okr')">OKR / KPI</button>
+      <button onclick="showProfileTab('learning')">Learning</button>
       <button onclick="showProfileTab('changes')">Changes</button>
     </div>
     <div class="profilePanel active" id="profileOverview"></div>
@@ -200,6 +202,7 @@
     <div class="profilePanel" id="profileOnboarding"></div>
     <div class="profilePanel" id="profilePerformance"></div>
     <div class="profilePanel" id="profileOkr"></div>
+    <div class="profilePanel" id="profileLearning"></div>
     <div class="profilePanel" id="profileChanges"></div>
   </div>
 
@@ -321,6 +324,31 @@
     </div>
     <div class="tableWrap"><table><thead><tr><th>Посада</th><th>Назва</th><th>Метрика</th><th>Ціль</th><th>Вага</th></tr></thead><tbody id="kpiTplBody"></tbody></table></div>
     <div class="empty" id="kpiTplEmpty" style="display:none;">Шаблонів KPI ще немає.</div>
+  </div>
+
+  <div id="viewKnowledge" style="display:none;">
+    <div class="profileTabs">
+      <button class="active" id="kbSubArticles" onclick="showKnowledgeSubTab('articles')">Статті</button>
+      <button id="kbSubPaths" onclick="showKnowledgeSubTab('paths')">Навчальні шляхи</button>
+    </div>
+
+    <div class="profilePanel active" id="kbPanelArticles">
+      <div class="viewToolbar">
+        <input type="search" id="kbSearch" placeholder="Пошук за назвою…">
+        <select id="kbCategoryFilter"><option value="">— усі категорії —</option></select>
+        <button id="btnAddKbArticle">+ Стаття</button>
+      </div>
+      <div class="tableWrap"><table><thead><tr><th>Назва</th><th>Категорія</th><th>Аудиторія</th><th>Обов'язкова</th><th>Версія</th><th></th></tr></thead><tbody id="kbArticlesBody"></tbody></table></div>
+      <div class="empty" id="kbArticlesEmpty" style="display:none;">Статей ще немає.</div>
+    </div>
+
+    <div class="profilePanel" id="kbPanelPaths">
+      <div class="viewToolbar">
+        <button id="btnAddLearningPath">+ Навчальний шлях</button>
+      </div>
+      <div id="learningPathsList"></div>
+      <div class="empty" id="learningPathsEmpty" style="display:none;">Навчальних шляхів ще немає.</div>
+    </div>
   </div>
 
 </main>
@@ -754,6 +782,87 @@
   </div>
 </div>
 
+<!-- Модалка: KB стаття -->
+<div class="overlay" id="kbArticleOverlay">
+  <div class="modal" style="max-width: 620px;">
+    <h2 id="kbArticleModalTitle">Нова стаття</h2>
+    <input type="hidden" id="kbArticleId">
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Назва</label><input type="text" id="kbTitle"></div>
+      <div class="fieldItem"><label>Категорія</label><select id="kbCategory"></select></div>
+      <div class="fieldItem"><label>Власник (username)</label><input type="text" id="kbOwner"></div>
+      <div class="fieldItem"><label style="display:flex; align-items:center; gap:8px; margin-top:18px;"><input type="checkbox" id="kbMandatory" style="width:auto;"> Обов'язкова для читання</label></div>
+    </div>
+    <div class="field" id="kbAudienceTypeWrap"><label>Аудиторія</label>
+      <select id="kbAudienceType">
+        <option value="Company">Уся компанія</option>
+        <option value="Department">Департамент</option>
+        <option value="Position">Посада</option>
+      </select>
+    </div>
+    <div class="field" id="kbAudienceDeptWrap" style="display:none;"><label>Департамент</label><select id="kbAudienceDept"></select></div>
+    <div class="field" id="kbAudiencePosWrap" style="display:none;"><label>Посада</label><select id="kbAudiencePos"></select></div>
+    <div class="field"><label>Зміст</label><textarea id="kbContent" rows="5"></textarea></div>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Відео (URL)</label><input type="text" id="kbVideoUrl"></div>
+      <div class="fieldItem"><label>Файл (URL)</label><input type="text" id="kbFileUrl"></div>
+      <div class="fieldItem"><label>Посилання</label><input type="text" id="kbLinkUrl"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('kbArticleOverlay')">Скасувати</button>
+      <button id="btnSaveKbArticle">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: навчальний шлях -->
+<div class="overlay" id="learningPathOverlay">
+  <div class="modal">
+    <h2>Новий навчальний шлях</h2>
+    <div class="field"><label>Назва</label><input type="text" id="lpTitle"></div>
+    <div class="field"><label>Опис</label><textarea id="lpDescription" rows="2"></textarea></div>
+    <div class="field"><label>Область</label>
+      <select id="lpScope">
+        <option value="Position">Посада</option>
+        <option value="Department">Департамент</option>
+      </select>
+    </div>
+    <div class="field" id="lpDepartmentWrap" style="display:none;"><label>Департамент</label><select id="lpDepartment"></select></div>
+    <div class="field" id="lpPositionWrap"><label>Посада</label><select id="lpPosition"></select></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('learningPathOverlay')">Скасувати</button>
+      <button id="btnSaveLearningPath">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: елемент навчального шляху -->
+<div class="overlay" id="learningPathItemOverlay">
+  <div class="modal">
+    <h2>Новий елемент</h2>
+    <div class="field"><label>Тип</label><select id="lpiType"></select></div>
+    <div class="field"><label>Назва</label><input type="text" id="lpiTitle"></div>
+    <div class="field"><label>Пов'язана стаття (необов'язково)</label><select id="lpiArticle"><option value="">— немає —</option></select></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('learningPathItemOverlay')">Скасувати</button>
+      <button id="btnSaveLearningPathItem">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: призначити обов'язкове читання -->
+<div class="overlay" id="kbAssignOverlay">
+  <div class="modal">
+    <h2>Призначити обов'язкове читання</h2>
+    <div class="field"><label>Стаття</label><select id="kbAssignArticle"></select></div>
+    <div class="field"><label>Дедлайн</label><input type="date" id="kbAssignDueDate"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('kbAssignOverlay')">Скасувати</button>
+      <button id="btnSaveKbAssign">Призначити</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -873,11 +982,15 @@ async function loadDictionaries() {
 
   document.getElementById('oooStatus').innerHTML = data.oneOnOneStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
   document.getElementById('prStatus').innerHTML = data.performanceReviewStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+
+  document.getElementById('kbCategory').innerHTML = data.kbCategories.map((c) => `<option value="${c}">${c}</option>`).join('');
+  document.getElementById('kbCategoryFilter').innerHTML = '<option value="">— усі категорії —</option>' + data.kbCategories.map((c) => `<option value="${c}">${c}</option>`).join('');
+  document.getElementById('lpiType').innerHTML = data.learningItemTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
 }
 
 // ---- Tabs ----
 
-const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr'];
+const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabOnboardingTemplates', 'tabOkr', 'tabKnowledge'];
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
@@ -890,18 +1003,21 @@ function showTab(tab) {
   document.getElementById('viewApplicationDetail').style.display = 'none';
   document.getElementById('viewOnboardingTemplates').style.display = tab === 'onboardingTemplates' ? '' : 'none';
   document.getElementById('viewOkr').style.display = tab === 'okr' ? '' : 'none';
+  document.getElementById('viewKnowledge').style.display = tab === 'knowledge' ? '' : 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
   document.getElementById('tabRecruitment').classList.toggle('active', tab === 'recruitment');
   document.getElementById('tabOnboardingTemplates').classList.toggle('active', tab === 'onboardingTemplates');
   document.getElementById('tabOkr').classList.toggle('active', tab === 'okr');
+  document.getElementById('tabKnowledge').classList.toggle('active', tab === 'knowledge');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'people') loadPeople();
   if (tab === 'org') loadOrg();
   if (tab === 'recruitment') showRecruitmentSubTab(window._recruitmentSubTab || 'requests');
   if (tab === 'onboardingTemplates') loadOnboardingTemplates();
   if (tab === 'okr') loadOkrView();
+  if (tab === 'knowledge') showKnowledgeSubTab(window._knowledgeSubTab || 'articles');
 }
 
 // ---- Dashboard ----
@@ -1081,11 +1197,12 @@ async function renderEmployeeProfile() {
   renderOnboardingTab(e);
   renderPerformanceTab(e);
   renderOkrKpiTab(e);
+  renderLearningTab(e);
   renderChangesTab(e);
 }
 
 function showProfileTab(tab) {
-  ['overview', 'personal', 'employment', 'compensation', 'onboarding', 'performance', 'okr', 'changes'].forEach((t) => {
+  ['overview', 'personal', 'employment', 'compensation', 'onboarding', 'performance', 'okr', 'learning', 'changes'].forEach((t) => {
     document.getElementById('profile' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
   });
   document.querySelectorAll('.profileTabs button').forEach((b) => b.classList.remove('active'));
@@ -2104,6 +2221,348 @@ function quickUpdateKpi(id) {
       renderEmployeeProfile();
     });
 }
+
+// ---- Knowledge Base + Learning ----
+
+function kbAssignmentStatusTag(a) {
+  if (a.status === 'Acknowledged') return '<span class="tag ok">Acknowledged</span>';
+  const overdue = a.due_date && new Date(a.due_date) < new Date(new Date().toDateString());
+  return overdue ? '<span class="tag bad">Overdue</span>' : '<span class="tag warn">Assigned</span>';
+}
+function learningAssignmentStatusTag(status) {
+  const cls = status === 'Completed' ? 'ok' : status === 'Started' ? 'warn' : 'neutral';
+  return `<span class="tag ${cls}">${status}</span>`;
+}
+
+async function renderLearningTab(e) {
+  const panel = document.getElementById('profileLearning');
+  const [kbResp, laResp] = await Promise.all([
+    apiFetch('/api/employees/' + e.id + '/kb-assignments'),
+    apiFetch('/api/employees/' + e.id + '/learning-assignments')
+  ]);
+  const kbData = await kbResp.json();
+  const laData = await laResp.json();
+  const kbAssignments = kbData.ok ? kbData.assignments : [];
+  const learningAssignments = laData.ok ? laData.assignments : [];
+  const details = await Promise.all(learningAssignments.map((la) => apiFetch('/api/learning-assignments/' + la.id).then((r) => r.json())));
+
+  panel.innerHTML = `
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:0 0 8px;">Обов'язкове читання</h3>
+    <button class="secondary" onclick="openAssignKbArticle()">+ Призначити статтю</button>
+    <div style="margin-top:12px;">
+      ${kbAssignments.map((a) => `
+        <div class="historyCard">
+          <div class="historyTitle">${escAttr(a.article_title)} ${kbAssignmentStatusTag(a)}</div>
+          <div class="historyMeta">${escAttr(a.article_category || '')}${a.due_date ? ' · дедлайн ' + new Date(a.due_date).toLocaleDateString('uk-UA') : ''}</div>
+          ${a.status === 'Acknowledged'
+            ? '<div class="historyMeta">Підтверджено ' + new Date(a.acknowledged_at).toLocaleString('uk-UA') + ' (версія ' + a.acknowledged_version + ')</div>'
+            : '<div style="margin-top:6px;"><button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="acknowledgeKb(' + a.id + ')">Підтвердити прочитання</button></div>'}
+        </div>
+      `).join('') || '<p style="color:var(--muted);">Немає призначеного обов’язкового читання.</p>'}
+    </div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Навчальні шляхи</h3>
+    <button class="secondary" onclick="generateLearningForCurrent()">Згенерувати з шаблонів</button>
+    <div style="margin-top:12px;">
+      ${learningAssignments.map((la, idx) => {
+        const detail = details[idx].ok ? details[idx].assignment : null;
+        return `
+        <div class="historyCard ${la.status === 'Completed' ? 'current' : ''}">
+          <div class="historyTitle">${escAttr(la.path_title)} ${learningAssignmentStatusTag(la.status)}</div>
+          <div class="historyMeta">Прогрес: ${la.completed_count}/${la.item_count} (${la.progress_pct}%)</div>
+          ${la.test_result ? '<div class="historyMeta">Результат тесту: ' + escAttr(la.test_result) + '</div>' : ''}
+          <div style="margin:8px 0;">
+            ${(detail?.items || []).map((item) => `
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:4px 0; border-top:1px solid var(--border);">
+                <div>${item.completed ? '✅' : '⬜'} ${escAttr(item.title)} <span class="tag neutral" style="margin-left:4px;">${item.item_type}</span></div>
+                ${!item.completed ? '<button class="secondary" style="font-size:11px; padding:3px 7px;" onclick="markLearningItem(' + la.id + ', ' + item.id + ')">Позначити виконаним</button>' : ''}
+              </div>
+            `).join('')}
+          </div>
+          ${la.status !== 'Completed' ? '<button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="completeLearningPrompt(' + la.id + ')">Завершити шлях</button>' : ''}
+        </div>
+      `;
+      }).join('') || '<p style="color:var(--muted);">Ще немає призначених навчальних шляхів.</p>'}
+    </div>
+  `;
+}
+
+async function openAssignKbArticle() {
+  const resp = await apiFetch('/api/kb-articles');
+  const data = await resp.json();
+  const articles = data.ok ? data.articles : [];
+  document.getElementById('kbAssignArticle').innerHTML = articles.map((a) => `<option value="${a.id}">${escAttr(a.title)} (${escAttr(a.category || '')})</option>`).join('');
+  document.getElementById('kbAssignDueDate').value = '';
+  document.getElementById('kbAssignOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveKbAssign').onclick = async () => {
+  const body = {
+    article_id: document.getElementById('kbAssignArticle').value,
+    due_date: document.getElementById('kbAssignDueDate').value || null
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/kb-assignments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося призначити'); return; }
+  closeOverlay('kbAssignOverlay');
+  showToast('Призначено');
+  renderEmployeeProfile();
+};
+
+function acknowledgeKb(id) {
+  apiFetch('/api/kb-assignments/' + id + '/acknowledge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося підтвердити'); return; }
+      showToast('Підтверджено');
+      renderEmployeeProfile();
+    });
+}
+
+async function generateLearningForCurrent() {
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/learning-assignments/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося згенерувати'); return; }
+  showToast(data.assignments.length ? 'Призначено шляхів: ' + data.assignments.length : 'Нових шляхів немає');
+  renderEmployeeProfile();
+}
+
+function markLearningItem(assignmentId, itemId) {
+  apiFetch('/api/learning-assignments/' + assignmentId + '/items/' + itemId + '/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
+      renderEmployeeProfile();
+    });
+}
+
+function completeLearningPrompt(id) {
+  const test_result = prompt('Результат тесту (необов’язково):', '') || '';
+  apiFetch('/api/learning-assignments/' + id + '/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ test_result }) })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося завершити'); return; }
+      showToast('Шлях завершено');
+      renderEmployeeProfile();
+    });
+}
+
+// ---- Knowledge Base admin (articles + learning paths) ----
+
+function showKnowledgeSubTab(tab) {
+  window._knowledgeSubTab = tab;
+  document.getElementById('kbPanelArticles').classList.toggle('active', tab === 'articles');
+  document.getElementById('kbPanelPaths').classList.toggle('active', tab === 'paths');
+  document.getElementById('kbSubArticles').classList.toggle('active', tab === 'articles');
+  document.getElementById('kbSubPaths').classList.toggle('active', tab === 'paths');
+  if (tab === 'articles') loadKbArticles();
+  if (tab === 'paths') loadLearningPaths();
+}
+
+async function loadKbArticles() {
+  const search = document.getElementById('kbSearch').value.trim();
+  const category = document.getElementById('kbCategoryFilter').value;
+  const params = new URLSearchParams();
+  if (search) params.set('search', search);
+  if (category) params.set('category', category);
+  const resp = await apiFetch('/api/kb-articles?' + params.toString());
+  const data = await resp.json();
+  const body = document.getElementById('kbArticlesBody');
+  const empty = document.getElementById('kbArticlesEmpty');
+  const articles = data.ok ? data.articles : [];
+  if (!articles.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = articles.map((a) => `
+    <tr class="clickable" onclick="openEditKbArticle(${a.id})">
+      <td>${escAttr(a.title)}</td>
+      <td>${escAttr(a.category || '—')}</td>
+      <td>${a.audience_type === 'Company' ? 'Уся компанія' : a.audience_type === 'Department' ? escAttr(a.audience_department_name || '') : a.audience_type === 'Position' ? escAttr(a.audience_position_title || '') : 'Individual'}</td>
+      <td>${a.mandatory ? '✓' : '—'}</td>
+      <td>${a.version}</td>
+      <td class="row-actions">${(a.audience_type === 'Department' || a.audience_type === 'Position') ? '<button class="secondary" onclick="event.stopPropagation(); assignAudience(' + a.id + ')">Призначити всім</button>' : ''}</td>
+    </tr>
+  `).join('');
+}
+document.getElementById('kbSearch').addEventListener('input', () => { clearTimeout(window._kbSearchTimer); window._kbSearchTimer = setTimeout(loadKbArticles, 250); });
+document.getElementById('kbCategoryFilter').addEventListener('change', loadKbArticles);
+
+function assignAudience(id) {
+  apiFetch('/api/kb-articles/' + id + '/assign-audience', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    .then((r) => r.json()).then((data) => {
+      if (!data.ok) { showToast(data.error || 'Не вдалося призначити'); return; }
+      showToast('Призначено співробітникам: ' + data.assignments.length);
+    });
+}
+
+document.getElementById('btnAddKbArticle').onclick = async () => {
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('kbArticleModalTitle').textContent = 'Нова стаття';
+  document.getElementById('kbArticleId').value = '';
+  document.getElementById('kbTitle').value = '';
+  document.getElementById('kbCategory').value = window._dict.kbCategories[0] || '';
+  document.getElementById('kbOwner').value = '';
+  document.getElementById('kbMandatory').checked = false;
+  document.getElementById('kbAudienceType').value = 'Company';
+  document.getElementById('kbAudienceDeptWrap').style.display = 'none';
+  document.getElementById('kbAudiencePosWrap').style.display = 'none';
+  document.getElementById('kbAudienceDept').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  const posResp = await apiFetch('/api/positions');
+  const posData = await posResp.json();
+  document.getElementById('kbAudiencePos').innerHTML = (posData.ok ? posData.positions : []).map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
+  document.getElementById('kbContent').value = '';
+  document.getElementById('kbVideoUrl').value = '';
+  document.getElementById('kbFileUrl').value = '';
+  document.getElementById('kbLinkUrl').value = '';
+  document.getElementById('kbArticleOverlay').classList.add('open');
+};
+
+document.getElementById('kbAudienceType').addEventListener('change', () => {
+  const type = document.getElementById('kbAudienceType').value;
+  document.getElementById('kbAudienceDeptWrap').style.display = type === 'Department' ? '' : 'none';
+  document.getElementById('kbAudiencePosWrap').style.display = type === 'Position' ? '' : 'none';
+});
+
+async function openEditKbArticle(id) {
+  const resp = await apiFetch('/api/kb-articles/' + id);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити'); return; }
+  const a = data.article;
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('kbArticleModalTitle').textContent = 'Редагувати статтю';
+  document.getElementById('kbArticleId').value = a.id;
+  document.getElementById('kbTitle').value = a.title;
+  document.getElementById('kbCategory').value = a.category || '';
+  document.getElementById('kbOwner').value = a.owner_username || '';
+  document.getElementById('kbMandatory').checked = a.mandatory;
+  document.getElementById('kbAudienceType').value = a.audience_type;
+  document.getElementById('kbAudienceDeptWrap').style.display = a.audience_type === 'Department' ? '' : 'none';
+  document.getElementById('kbAudiencePosWrap').style.display = a.audience_type === 'Position' ? '' : 'none';
+  document.getElementById('kbAudienceDept').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}" ${d.id === a.audience_department_id ? 'selected' : ''}>${escAttr(d.name)}</option>`).join('');
+  const posResp = await apiFetch('/api/positions');
+  const posData = await posResp.json();
+  document.getElementById('kbAudiencePos').innerHTML = (posData.ok ? posData.positions : []).map((p) => `<option value="${p.id}" ${p.id === a.audience_position_id ? 'selected' : ''}>${escAttr(p.title)}</option>`).join('');
+  document.getElementById('kbContent').value = a.content || '';
+  document.getElementById('kbVideoUrl').value = a.video_url || '';
+  document.getElementById('kbFileUrl').value = a.file_url || '';
+  document.getElementById('kbLinkUrl').value = a.link_url || '';
+  document.getElementById('kbArticleOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveKbArticle').onclick = async () => {
+  const title = document.getElementById('kbTitle').value.trim();
+  if (!title) { showToast('Назва обов’язкова'); return; }
+  const id = document.getElementById('kbArticleId').value;
+  const body = {
+    title,
+    category: document.getElementById('kbCategory').value,
+    owner_username: document.getElementById('kbOwner').value.trim(),
+    mandatory: document.getElementById('kbMandatory').checked,
+    audience_type: document.getElementById('kbAudienceType').value,
+    audience_department_id: document.getElementById('kbAudienceDept').value || null,
+    audience_position_id: document.getElementById('kbAudiencePos').value || null,
+    content: document.getElementById('kbContent').value,
+    video_url: document.getElementById('kbVideoUrl').value.trim(),
+    file_url: document.getElementById('kbFileUrl').value.trim(),
+    link_url: document.getElementById('kbLinkUrl').value.trim()
+  };
+  const url = id ? '/api/kb-articles/' + id : '/api/kb-articles';
+  const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('kbArticleOverlay');
+  showToast('Збережено');
+  loadKbArticles();
+};
+
+async function loadLearningPaths() {
+  const resp = await apiFetch('/api/learning-paths');
+  const data = await resp.json();
+  const paths = data.ok ? data.paths : [];
+  const empty = document.getElementById('learningPathsEmpty');
+  if (!paths.length) { document.getElementById('learningPathsList').innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  const details = await Promise.all(paths.map((p) => apiFetch('/api/learning-paths/' + p.id).then((r) => r.json())));
+  document.getElementById('learningPathsList').innerHTML = paths.map((p, idx) => {
+    const detail = details[idx].ok ? details[idx].path : null;
+    return `
+    <div class="historyCard">
+      <div class="historyTitle">${escAttr(p.title)}</div>
+      <div class="historyMeta">${p.scope === 'Department' ? escAttr(p.department_name || '') : escAttr(p.position_title || '')} · ${p.item_count} елементів</div>
+      ${p.description ? '<div class="historyMeta">' + escAttr(p.description) + '</div>' : ''}
+      <div style="margin:8px 0;">
+        ${(detail?.items || []).map((item) => `
+          <div style="padding:4px 0; border-top:1px solid var(--border); font-size:13px;">
+            ${item.order_index + 1}. ${escAttr(item.title)} <span class="tag neutral">${item.item_type}</span>
+          </div>
+        `).join('') || '<p style="color:var(--muted); font-size:12px;">Ще немає елементів.</p>'}
+      </div>
+      <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="openAddLearningPathItem(${p.id})">+ Елемент</button>
+    </div>
+  `;
+  }).join('');
+}
+
+document.getElementById('btnAddLearningPath').onclick = async () => {
+  await ensureRecruitmentRefsLoaded();
+  document.getElementById('lpTitle').value = '';
+  document.getElementById('lpDescription').value = '';
+  document.getElementById('lpScope').value = 'Position';
+  document.getElementById('lpDepartmentWrap').style.display = 'none';
+  document.getElementById('lpPositionWrap').style.display = '';
+  document.getElementById('lpDepartment').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
+  const posResp = await apiFetch('/api/positions');
+  const posData = await posResp.json();
+  document.getElementById('lpPosition').innerHTML = (posData.ok ? posData.positions : []).map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
+  document.getElementById('learningPathOverlay').classList.add('open');
+};
+
+document.getElementById('lpScope').addEventListener('change', () => {
+  const scope = document.getElementById('lpScope').value;
+  document.getElementById('lpDepartmentWrap').style.display = scope === 'Department' ? '' : 'none';
+  document.getElementById('lpPositionWrap').style.display = scope === 'Position' ? '' : 'none';
+});
+
+document.getElementById('btnSaveLearningPath').onclick = async () => {
+  const title = document.getElementById('lpTitle').value.trim();
+  if (!title) { showToast('Назва обов’язкова'); return; }
+  const body = {
+    title,
+    description: document.getElementById('lpDescription').value.trim(),
+    scope: document.getElementById('lpScope').value,
+    department_id: document.getElementById('lpDepartment').value || null,
+    position_id: document.getElementById('lpPosition').value || null
+  };
+  const resp = await apiFetch('/api/learning-paths', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  closeOverlay('learningPathOverlay');
+  showToast('Створено');
+  loadLearningPaths();
+};
+
+async function openAddLearningPathItem(pathId) {
+  window._pendingLearningPathId = pathId;
+  const resp = await apiFetch('/api/kb-articles');
+  const data = await resp.json();
+  const articles = data.ok ? data.articles : [];
+  document.getElementById('lpiArticle').innerHTML = '<option value="">— немає —</option>' + articles.map((a) => `<option value="${a.id}">${escAttr(a.title)}</option>`).join('');
+  document.getElementById('lpiTitle').value = '';
+  document.getElementById('lpiType').value = window._dict.learningItemTypes[0] || 'Article';
+  document.getElementById('learningPathItemOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveLearningPathItem').onclick = async () => {
+  const title = document.getElementById('lpiTitle').value.trim();
+  if (!title) { showToast('Назва обов’язкова'); return; }
+  const body = {
+    title,
+    item_type: document.getElementById('lpiType').value,
+    kb_article_id: document.getElementById('lpiArticle').value || null
+  };
+  const resp = await apiFetch('/api/learning-paths/' + window._pendingLearningPathId + '/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося додати'); return; }
+  closeOverlay('learningPathItemOverlay');
+  showToast('Елемент додано');
+  loadLearningPaths();
+};
 
 async function renderChangesTab(e) {
   const resp = await apiFetch('/api/audit-log?entity_type=employee&entity_id=' + e.id);

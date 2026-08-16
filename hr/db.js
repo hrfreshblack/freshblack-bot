@@ -52,6 +52,14 @@ const KPI_SOURCES = ['Manual', 'System'];
 const KPI_STATUSES = ['Active', 'Completed', 'Cancelled'];
 const PDP_ITEM_STATUSES = ['Not Started', 'In Progress', 'Completed', 'Cancelled'];
 
+// Knowledge Base + Learning (ТЗ розділ 24)
+const KB_CATEGORIES = ['About Fresh Black', 'Welcome', 'Rules', 'HR Policies', 'Departments', 'Products', 'Processes', 'Tools', 'Sales', 'Production', 'Finance', 'Templates', 'FAQ'];
+const KB_AUDIENCE_TYPES = ['Company', 'Department', 'Position', 'Individual'];
+const KB_ASSIGNMENT_STATUSES = ['Assigned', 'Acknowledged'];
+const LEARNING_PATH_SCOPES = ['Department', 'Position'];
+const LEARNING_ITEM_TYPES = ['Article', 'Task', 'Test'];
+const LEARNING_ASSIGNMENT_STATUSES = ['Assigned', 'Started', 'Completed'];
+
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hr_accounts (
@@ -539,6 +547,96 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_pdp_employee ON hr_development_plan_items(employee_id);
+
+    -- ==================== Knowledge Base + Learning (ТЗ 24) ====================
+
+    CREATE TABLE IF NOT EXISTS hr_kb_articles (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL DEFAULT '',
+      video_url TEXT NOT NULL DEFAULT '',
+      file_url TEXT NOT NULL DEFAULT '',
+      link_url TEXT NOT NULL DEFAULT '',
+      owner_username TEXT NOT NULL DEFAULT '',
+      version INTEGER NOT NULL DEFAULT 1,
+      audience_type TEXT NOT NULL DEFAULT 'Company',
+      audience_department_id INTEGER REFERENCES hr_departments(id),
+      audience_position_id INTEGER REFERENCES hr_positions(id),
+      mandatory BOOLEAN NOT NULL DEFAULT false,
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_kb_articles_category ON hr_kb_articles(category);
+    CREATE INDEX IF NOT EXISTS idx_hr_kb_articles_audience ON hr_kb_articles(audience_type, audience_department_id, audience_position_id);
+
+    -- Mandatory reading assignment + acknowledgement (ТЗ 24: "store user,
+    -- document version, date/time"). acknowledged_version фіксує версію
+    -- статті на момент підтвердження — якщо статтю потім оновили, видно,
+    -- що людина читала стару версію.
+    CREATE TABLE IF NOT EXISTS hr_kb_assignments (
+      id SERIAL PRIMARY KEY,
+      article_id INTEGER NOT NULL REFERENCES hr_kb_articles(id),
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      due_date DATE,
+      status TEXT NOT NULL DEFAULT 'Assigned',
+      acknowledged_at TIMESTAMPTZ,
+      acknowledged_version INTEGER,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (article_id, employee_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_kb_assignments_employee ON hr_kb_assignments(employee_id);
+
+    -- Learning Path: впорядковані матеріали/задачі/тести під конкретну
+    -- посаду або департамент (ТЗ 24 "Position automation").
+    CREATE TABLE IF NOT EXISTS hr_learning_paths (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      scope TEXT NOT NULL DEFAULT 'Position',
+      department_id INTEGER REFERENCES hr_departments(id),
+      position_id INTEGER REFERENCES hr_positions(id),
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_learning_paths_scope ON hr_learning_paths(scope, department_id, position_id);
+
+    CREATE TABLE IF NOT EXISTS hr_learning_path_items (
+      id SERIAL PRIMARY KEY,
+      learning_path_id INTEGER NOT NULL REFERENCES hr_learning_paths(id),
+      order_index INTEGER NOT NULL DEFAULT 0,
+      title TEXT NOT NULL,
+      item_type TEXT NOT NULL DEFAULT 'Article',
+      kb_article_id INTEGER REFERENCES hr_kb_articles(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_learning_items_path ON hr_learning_path_items(learning_path_id);
+
+    CREATE TABLE IF NOT EXISTS hr_learning_assignments (
+      id SERIAL PRIMARY KEY,
+      learning_path_id INTEGER NOT NULL REFERENCES hr_learning_paths(id),
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      status TEXT NOT NULL DEFAULT 'Assigned',
+      test_result TEXT NOT NULL DEFAULT '',
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (learning_path_id, employee_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_learning_assignments_employee ON hr_learning_assignments(employee_id);
+
+    CREATE TABLE IF NOT EXISTS hr_learning_item_progress (
+      id SERIAL PRIMARY KEY,
+      assignment_id INTEGER NOT NULL REFERENCES hr_learning_assignments(id),
+      item_id INTEGER NOT NULL REFERENCES hr_learning_path_items(id),
+      completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (assignment_id, item_id)
+    );
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -1622,6 +1720,7 @@ async function updateOfferStatus(id, status, actor, approved_by) {
       await setProbation(employee.id, { probation_goals: offer.probation_goals || '' });
       if (vacancy?.position_id || vacancy?.department_id) {
         await generateOnboardingTasks(employee.id, { department_id: vacancy.department_id, position_id: vacancy.position_id, start_date: offer.start_date }, actor);
+        await generateLearningAssignments(employee.id, { department_id: vacancy.department_id, position_id: vacancy.position_id }, actor);
       }
     } catch (sideEffectError) {
       console.error('offer_accepted onboarding/probation side effect ERROR:', sideEffectError?.message || sideEffectError);
@@ -2208,6 +2307,276 @@ async function updateDevelopmentPlanItem(id, { status, action, learning_item, du
   return rows[0] || null;
 }
 
+// ---------------------------------------------------------------------
+// Knowledge Base — articles
+// ---------------------------------------------------------------------
+
+async function listKbArticles({ category = '', audience_type = '', search = '' } = {}) {
+  const conditions = ['a.active = true'];
+  const params = [];
+  if (category) { params.push(category); conditions.push(`a.category = $${params.length}`); }
+  if (audience_type) { params.push(audience_type); conditions.push(`a.audience_type = $${params.length}`); }
+  if (search) { params.push(`%${search.toLowerCase()}%`); conditions.push(`lower(a.title) LIKE $${params.length}`); }
+  const { rows } = await pool.query(`
+    SELECT a.*, d.name AS audience_department_name, p.title AS audience_position_title
+    FROM hr_kb_articles a
+    LEFT JOIN hr_departments d ON d.id = a.audience_department_id
+    LEFT JOIN hr_positions p ON p.id = a.audience_position_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY a.category, lower(a.title)
+  `, params);
+  return rows;
+}
+
+async function getKbArticle(id) {
+  const { rows } = await pool.query('SELECT * FROM hr_kb_articles WHERE id = $1', [id]);
+  return rows[0] || null;
+}
+
+async function createKbArticle({ title, category, content, video_url, file_url, link_url, owner_username,
+  audience_type, audience_department_id, audience_position_id, mandatory }, createdBy) {
+  if (category && !KB_CATEGORIES.includes(category)) throw new Error(`Unknown category: ${category}`);
+  if (audience_type && !KB_AUDIENCE_TYPES.includes(audience_type)) throw new Error(`Unknown audience type: ${audience_type}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_kb_articles (title, category, content, video_url, file_url, link_url, owner_username, audience_type, audience_department_id, audience_position_id, mandatory, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    [title, category || '', content || '', video_url || '', file_url || '', link_url || '', owner_username || '',
+      audience_type || 'Company', audience_type === 'Department' ? audience_department_id || null : null,
+      audience_type === 'Position' ? audience_position_id || null : null, !!mandatory, createdBy || '']
+  );
+  return rows[0];
+}
+
+async function updateKbArticle(id, { title, category, content, video_url, file_url, link_url, owner_username, mandatory, active,
+  audience_type, audience_department_id, audience_position_id }) {
+  if (category && !KB_CATEGORIES.includes(category)) throw new Error(`Unknown category: ${category}`);
+  if (audience_type && !KB_AUDIENCE_TYPES.includes(audience_type)) throw new Error(`Unknown audience type: ${audience_type}`);
+  const { rows } = await pool.query(
+    `UPDATE hr_kb_articles SET
+       title = COALESCE($2, title),
+       category = COALESCE($3, category),
+       content = COALESCE($4, content),
+       video_url = COALESCE($5, video_url),
+       file_url = COALESCE($6, file_url),
+       link_url = COALESCE($7, link_url),
+       owner_username = COALESCE($8, owner_username),
+       mandatory = COALESCE($9, mandatory),
+       active = COALESCE($10, active),
+       audience_type = COALESCE($11, audience_type),
+       audience_department_id = CASE WHEN $11 = 'Department' THEN $12 WHEN $11 IS NOT NULL THEN NULL ELSE audience_department_id END,
+       audience_position_id = CASE WHEN $11 = 'Position' THEN $13 WHEN $11 IS NOT NULL THEN NULL ELSE audience_position_id END,
+       version = CASE WHEN $4 IS NOT NULL THEN version + 1 ELSE version END,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, title ?? null, category ?? null, content ?? null, video_url ?? null, file_url ?? null, link_url ?? null,
+      owner_username ?? null, mandatory ?? null, active ?? null, audience_type ?? null,
+      audience_department_id ?? null, audience_position_id ?? null]
+  );
+  return rows[0] || null;
+}
+
+// ---------------------------------------------------------------------
+// Knowledge Base — mandatory reading assignments
+// ---------------------------------------------------------------------
+
+async function listKbAssignmentsForEmployee(employeeId) {
+  const { rows } = await pool.query(`
+    SELECT ka.*, a.title AS article_title, a.category AS article_category, a.version AS article_current_version
+    FROM hr_kb_assignments ka JOIN hr_kb_articles a ON a.id = ka.article_id
+    WHERE ka.employee_id = $1
+    ORDER BY ka.due_date NULLS LAST, ka.id DESC
+  `, [employeeId]);
+  return rows;
+}
+
+async function assignKbArticle({ article_id, employee_id, due_date }, createdBy) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_kb_assignments (article_id, employee_id, due_date, created_by)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (article_id, employee_id) DO NOTHING RETURNING *`,
+    [article_id, employee_id, due_date || null, createdBy || '']
+  );
+  if (rows[0]) return rows[0];
+  const { rows: existing } = await pool.query('SELECT * FROM hr_kb_assignments WHERE article_id = $1 AND employee_id = $2', [article_id, employee_id]);
+  return existing[0];
+}
+
+// Масове призначення всім активним співробітникам, що підпадають під
+// audience статті (ТЗ 24 "Position automation"). Ідемпотентно — вже
+// призначеним не дублює.
+async function assignArticleToAudience(articleId, createdBy) {
+  const article = await getKbArticle(articleId);
+  if (!article) throw new Error('Статтю не знайдено');
+  if (article.audience_type === 'Individual' || article.audience_type === 'Company') {
+    throw new Error('Масове призначення доступне лише для audience Department/Position');
+  }
+  const conditions = ['ep.end_date IS NULL', 'e.active = true'];
+  const params = [];
+  if (article.audience_type === 'Department' && article.audience_department_id) {
+    params.push(article.audience_department_id);
+    conditions.push(`ep.department_id = $${params.length}`);
+  } else if (article.audience_type === 'Position' && article.audience_position_id) {
+    params.push(article.audience_position_id);
+    conditions.push(`ep.position_id = $${params.length}`);
+  } else {
+    return [];
+  }
+  const { rows: employees } = await pool.query(`
+    SELECT DISTINCT e.id FROM hr_employees e JOIN hr_employment_periods ep ON ep.employee_id = e.id
+    WHERE ${conditions.join(' AND ')}
+  `, params);
+  const created = [];
+  for (const emp of employees) {
+    const assignment = await assignKbArticle({ article_id: articleId, employee_id: emp.id }, createdBy);
+    created.push(assignment);
+  }
+  return created;
+}
+
+async function acknowledgeKbAssignment(id) {
+  const { rows: before } = await pool.query('SELECT article_id FROM hr_kb_assignments WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const article = await getKbArticle(before[0].article_id);
+  const { rows } = await pool.query(
+    `UPDATE hr_kb_assignments SET status = 'Acknowledged', acknowledged_at = now(), acknowledged_version = $2 WHERE id = $1 RETURNING *`,
+    [id, article?.version || null]
+  );
+  return rows[0] || null;
+}
+
+// ---------------------------------------------------------------------
+// Learning Paths
+// ---------------------------------------------------------------------
+
+async function listLearningPaths({ department_id = null, position_id = null } = {}) {
+  const conditions = ['lp.active = true'];
+  const params = [];
+  if (department_id) { params.push(department_id); conditions.push(`lp.department_id = $${params.length}`); }
+  if (position_id) { params.push(position_id); conditions.push(`lp.position_id = $${params.length}`); }
+  const { rows } = await pool.query(`
+    SELECT lp.*, d.name AS department_name, p.title AS position_title,
+      (SELECT COUNT(*)::int FROM hr_learning_path_items i WHERE i.learning_path_id = lp.id) AS item_count
+    FROM hr_learning_paths lp
+    LEFT JOIN hr_departments d ON d.id = lp.department_id
+    LEFT JOIN hr_positions p ON p.id = lp.position_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY lp.created_at DESC
+  `, params);
+  return rows;
+}
+
+async function getLearningPath(id) {
+  const { rows } = await pool.query(`
+    SELECT lp.*, d.name AS department_name, p.title AS position_title
+    FROM hr_learning_paths lp
+    LEFT JOIN hr_departments d ON d.id = lp.department_id
+    LEFT JOIN hr_positions p ON p.id = lp.position_id
+    WHERE lp.id = $1
+  `, [id]);
+  if (!rows[0]) return null;
+  const { rows: items } = await pool.query('SELECT * FROM hr_learning_path_items WHERE learning_path_id = $1 ORDER BY order_index, id', [id]);
+  return { ...rows[0], items };
+}
+
+async function createLearningPath({ title, description, scope, department_id, position_id }, createdBy) {
+  if (!LEARNING_PATH_SCOPES.includes(scope)) throw new Error(`Unknown learning path scope: ${scope}`);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_learning_paths (title, description, scope, department_id, position_id, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [title, description || '', scope, scope === 'Department' ? department_id || null : null, scope === 'Position' ? position_id || null : null, createdBy || '']
+  );
+  return rows[0];
+}
+
+async function updateLearningPath(id, { title, description, active }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_learning_paths SET title = COALESCE($2, title), description = COALESCE($3, description), active = COALESCE($4, active) WHERE id = $1 RETURNING *`,
+    [id, title ?? null, description ?? null, active ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function addLearningPathItem({ learning_path_id, title, item_type, kb_article_id }) {
+  if (item_type && !LEARNING_ITEM_TYPES.includes(item_type)) throw new Error(`Unknown item type: ${item_type}`);
+  const { rows: maxRows } = await pool.query('SELECT COALESCE(MAX(order_index), -1) AS max_order FROM hr_learning_path_items WHERE learning_path_id = $1', [learning_path_id]);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_learning_path_items (learning_path_id, order_index, title, item_type, kb_article_id)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [learning_path_id, maxRows[0].max_order + 1, title, item_type || 'Article', kb_article_id || null]
+  );
+  return rows[0];
+}
+
+// ---------------------------------------------------------------------
+// Learning assignments (per-employee progress)
+// ---------------------------------------------------------------------
+
+// Ідемпотентно, аналогічно generateOnboardingTasks — шлях, вже
+// призначений цьому співробітнику, повторно не дублюється.
+async function generateLearningAssignments(employeeId, { department_id, position_id }, createdBy) {
+  const { rows: paths } = await pool.query(`
+    SELECT * FROM hr_learning_paths
+    WHERE active = true AND (
+      (scope = 'Department' AND department_id = $1)
+      OR (scope = 'Position' AND position_id = $2)
+    )
+  `, [department_id || null, position_id || null]);
+  const created = [];
+  for (const path of paths) {
+    const { rows } = await pool.query(
+      `INSERT INTO hr_learning_assignments (learning_path_id, employee_id, created_by)
+       VALUES ($1,$2,$3) ON CONFLICT (learning_path_id, employee_id) DO NOTHING RETURNING *`,
+      [path.id, employeeId, createdBy || '']
+    );
+    if (rows[0]) created.push(rows[0]);
+  }
+  return created;
+}
+
+async function listLearningAssignmentsForEmployee(employeeId) {
+  const { rows } = await pool.query(`
+    SELECT la.*, lp.title AS path_title,
+      (SELECT COUNT(*)::int FROM hr_learning_path_items i WHERE i.learning_path_id = la.learning_path_id) AS item_count,
+      (SELECT COUNT(*)::int FROM hr_learning_item_progress ip WHERE ip.assignment_id = la.id) AS completed_count
+    FROM hr_learning_assignments la
+    JOIN hr_learning_paths lp ON lp.id = la.learning_path_id
+    WHERE la.employee_id = $1
+    ORDER BY la.created_at DESC
+  `, [employeeId]);
+  return rows.map((r) => ({ ...r, progress_pct: r.item_count ? Math.round((r.completed_count / r.item_count) * 100) : 0 }));
+}
+
+async function getLearningAssignment(id) {
+  const { rows } = await pool.query(`
+    SELECT la.*, lp.title AS path_title FROM hr_learning_assignments la JOIN hr_learning_paths lp ON lp.id = la.learning_path_id WHERE la.id = $1
+  `, [id]);
+  if (!rows[0]) return null;
+  const { rows: items } = await pool.query('SELECT * FROM hr_learning_path_items WHERE learning_path_id = $1 ORDER BY order_index, id', [rows[0].learning_path_id]);
+  const { rows: progress } = await pool.query('SELECT item_id FROM hr_learning_item_progress WHERE assignment_id = $1', [id]);
+  const completedIds = new Set(progress.map((p) => p.item_id));
+  return { ...rows[0], items: items.map((i) => ({ ...i, completed: completedIds.has(i.id) })) };
+}
+
+async function markLearningItemComplete(assignmentId, itemId) {
+  await pool.query(
+    `INSERT INTO hr_learning_item_progress (assignment_id, item_id) VALUES ($1,$2) ON CONFLICT (assignment_id, item_id) DO NOTHING`,
+    [assignmentId, itemId]
+  );
+  const { rows: before } = await pool.query('SELECT status FROM hr_learning_assignments WHERE id = $1', [assignmentId]);
+  if (before[0] && before[0].status === 'Assigned') {
+    await pool.query(`UPDATE hr_learning_assignments SET status = 'Started', started_at = now() WHERE id = $1`, [assignmentId]);
+  }
+  return getLearningAssignment(assignmentId);
+}
+
+async function completeLearningAssignment(id, { test_result }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_learning_assignments SET status = 'Completed', completed_at = now(), test_result = COALESCE($2, test_result) WHERE id = $1 RETURNING *`,
+    [id, test_result ?? null]
+  );
+  return rows[0] || null;
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -2322,5 +2691,29 @@ export default {
   updateKpi,
   listDevelopmentPlanItems,
   createDevelopmentPlanItem,
-  updateDevelopmentPlanItem
+  updateDevelopmentPlanItem,
+  KB_CATEGORIES,
+  KB_AUDIENCE_TYPES,
+  KB_ASSIGNMENT_STATUSES,
+  LEARNING_PATH_SCOPES,
+  LEARNING_ITEM_TYPES,
+  LEARNING_ASSIGNMENT_STATUSES,
+  listKbArticles,
+  getKbArticle,
+  createKbArticle,
+  updateKbArticle,
+  listKbAssignmentsForEmployee,
+  assignKbArticle,
+  assignArticleToAudience,
+  acknowledgeKbAssignment,
+  listLearningPaths,
+  getLearningPath,
+  createLearningPath,
+  updateLearningPath,
+  addLearningPathItem,
+  generateLearningAssignments,
+  listLearningAssignmentsForEmployee,
+  getLearningAssignment,
+  markLearningItemComplete,
+  completeLearningAssignment
 };
