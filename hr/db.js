@@ -256,6 +256,21 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_hr_vacancy_requests_status ON hr_vacancy_requests(status);
 
+    -- Довільні файли, прикріплені до заявки на вакансію (опис вакансії,
+    -- узгоджений ТЗ на пошук тощо) — той самий підхід, що й резюме
+    -- кандидата: файл у базі (BYTEA), диск на Railway ефемерний, append-only.
+    CREATE TABLE IF NOT EXISTS hr_vacancy_request_attachments (
+      id SERIAL PRIMARY KEY,
+      vacancy_request_id INTEGER NOT NULL REFERENCES hr_vacancy_requests(id),
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT '',
+      file_size INTEGER NOT NULL DEFAULT 0,
+      file_data BYTEA NOT NULL,
+      uploaded_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_vr_attachments_request ON hr_vacancy_request_attachments(vacancy_request_id);
+
     CREATE TABLE IF NOT EXISTS hr_vacancies (
       id SERIAL PRIMARY KEY,
       vacancy_request_id INTEGER REFERENCES hr_vacancy_requests(id),
@@ -3309,6 +3324,31 @@ async function getResumeFile(resumeId) {
   return rows[0] || null;
 }
 
+// -- Файли, прикріплені до заявки на вакансію --
+
+async function addVacancyRequestAttachment(vacancyRequestId, { buffer, filename, mimeType }, uploadedBy) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_vacancy_request_attachments (vacancy_request_id, filename, mime_type, file_size, file_data, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, vacancy_request_id, filename, mime_type, file_size, created_at`,
+    [vacancyRequestId, filename, mimeType || '', buffer.length, buffer, uploadedBy || '']
+  );
+  return rows[0];
+}
+
+async function listVacancyRequestAttachments(vacancyRequestId) {
+  const { rows } = await pool.query(
+    `SELECT id, vacancy_request_id, filename, mime_type, file_size, uploaded_by, created_at
+     FROM hr_vacancy_request_attachments WHERE vacancy_request_id = $1 ORDER BY created_at DESC`,
+    [vacancyRequestId]
+  );
+  return rows;
+}
+
+async function getVacancyRequestAttachmentFile(attachmentId) {
+  const { rows } = await pool.query('SELECT filename, mime_type, file_data FROM hr_vacancy_request_attachments WHERE id = $1', [attachmentId]);
+  return rows[0] || null;
+}
+
 // ---------------------------------------------------------------------
 // Dashboard metrics — базові HR-метрики зі стандартними формулами
 // (навмисно без повноцінної аналітики/фільтрів з ТЗ розділу 29, яку
@@ -3834,6 +3874,9 @@ export default {
   addResumeToCandidate,
   listResumesForCandidate,
   getResumeFile,
+  addVacancyRequestAttachment,
+  listVacancyRequestAttachments,
+  getVacancyRequestAttachmentFile,
   getDashboardMetrics,
   getRecruitmentMetrics
 };

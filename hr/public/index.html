@@ -616,6 +616,13 @@
         <button onclick="convertVacancyRequest()">Конвертувати у вакансію</button>
       </div>
     </div>
+    <div id="vrAttachmentsSection" style="display:none;">
+      <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:16px 0 8px;">Файли</h3>
+      <div id="vrAttachmentsList"></div>
+      <label class="secondary" style="display:inline-flex; align-items:center; padding:8px 10px; border:1px solid var(--border); border-radius:8px; cursor:pointer; font-size:13px; margin-top:8px;">
+        + Прикріпити файл<input type="file" id="vrAttachmentFileInput" style="display:none;">
+      </label>
+    </div>
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('vacancyRequestOverlay')">Закрити</button>
       <button id="btnSaveVacancyRequest">Зберегти</button>
@@ -3871,8 +3878,21 @@ document.getElementById('btnAddVacancyRequest').onclick = async () => {
   document.getElementById('vrCompAfter').value = '';
   document.getElementById('vrNotes').value = '';
   document.getElementById('vrStatusActions').style.display = 'none';
+  document.getElementById('vrAttachmentsSection').style.display = 'none';
   document.getElementById('vacancyRequestOverlay').classList.add('open');
 };
+
+async function renderVacancyRequestAttachments(id) {
+  const resp = await apiFetch('/api/vacancy-requests/' + id + '/attachments');
+  const data = await resp.json();
+  const attachments = data.ok ? data.attachments : [];
+  document.getElementById('vrAttachmentsList').innerHTML = attachments.length ? attachments.map((a) => `
+    <div class="historyCard" style="padding:8px 12px;">
+      <a href="/api/vacancy-request-attachments/${a.id}/download" target="_blank" style="color:var(--accent2);">${escAttr(a.filename)}</a>
+      <span class="historyMeta" style="margin-left:6px;">${new Date(a.created_at).toLocaleDateString('uk-UA')}</span>
+    </div>
+  `).join('') : '<p style="color:var(--muted); font-size:13px;">Файлів ще немає.</p>';
+}
 
 async function openVacancyRequest(id) {
   await ensureRecruitmentRefsLoaded();
@@ -3896,8 +3916,25 @@ async function openVacancyRequest(id) {
   document.getElementById('vrNotes').value = r.notes || '';
   document.getElementById('vrCurrentStatusTag').innerHTML = vrStatusTag(r.status);
   document.getElementById('vrStatusActions').style.display = '';
+  document.getElementById('vrAttachmentsSection').style.display = '';
+  renderVacancyRequestAttachments(id);
   document.getElementById('vacancyRequestOverlay').classList.add('open');
 }
+
+document.getElementById('vrAttachmentFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const id = document.getElementById('vrId').value;
+  if (!id) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  const resp = await apiFetch('/api/vacancy-requests/' + id + '/attachments', { method: 'POST', body: formData });
+  const data = await resp.json();
+  e.target.value = '';
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити файл'); return; }
+  showToast('Файл завантажено');
+  renderVacancyRequestAttachments(id);
+});
 
 document.getElementById('btnSaveVacancyRequest').onclick = async () => {
   const position_title = document.getElementById('vrPositionTitle').value.trim();
