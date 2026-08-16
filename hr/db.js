@@ -1,6 +1,8 @@
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import pdfParse from 'pdf-parse';
+import mammoth from 'mammoth';
 
 const { Pool } = pg;
 
@@ -789,6 +791,24 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Резюме — прив'язані до кандидата файли (ТЗ 11 "Resume Upload &
+    -- Parsing"). Зберігаємо сам файл у базі (BYTEA), бо диск на Railway
+    -- ефемерний і зникає при редеплої. Append-only: новий аплоад — новий
+    -- рядок, історія не втрачається.
+    CREATE TABLE IF NOT EXISTS hr_candidate_resumes (
+      id SERIAL PRIMARY KEY,
+      candidate_id INTEGER NOT NULL REFERENCES hr_candidates(id),
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT '',
+      file_size INTEGER NOT NULL DEFAULT 0,
+      file_data BYTEA NOT NULL,
+      extracted_text TEXT NOT NULL DEFAULT '',
+      parse_status TEXT NOT NULL DEFAULT 'ok',
+      uploaded_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_candidate_resumes_candidate ON hr_candidate_resumes(candidate_id);
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -3186,6 +3206,108 @@ async function closeOffboardingCase(id, actor) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Resume upload & parsing (ТЗ п.11)
+// ---------------------------------------------------------------------
+
+async function extractResumeText(buffer, mimeType, filename) {
+  const ext = (filename.split('.').pop() || '').toLowerCase();
+  try {
+    if (mimeType === 'application/pdf' || ext === 'pdf') {
+      const parsed = await pdfParse(buffer);
+      return { text: parsed.text || '', parse_status: 'ok' };
+    }
+    if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || ext === 'docx') {
+      const result = await mammoth.extractRawText({ buffer });
+      return { text: result.value || '', parse_status: 'ok' };
+    }
+    if (mimeType === 'text/plain' || ext === 'txt') {
+      return { text: buffer.toString('utf8'), parse_status: 'ok' };
+    }
+    // .doc (старий бінарний формат), зображення (скани) — без OCR/AI не
+    // розбираємо; файл все одно зберігається, текст просто порожній.
+    return { text: '', parse_status: 'unsupported' };
+  } catch (error) {
+    console.error('extractResumeText ERROR:', error?.message || error);
+    return { text: '', parse_status: 'failed' };
+  }
+}
+
+function guessEmailFromText(text) {
+  const match = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  return match ? match[0] : '';
+}
+
+function guessPhoneFromText(text) {
+  const match = text.match(/(\+?38)?[\s.\-(]*0\d{2}[\s.\-)]*\d{3}[\s.\-]*\d{2}[\s.\-]*\d{2}/);
+  if (match) return match[0].replace(/[\s().]/g, '');
+  const generic = text.match(/\+?\d[\d\s\-()]{8,14}\d/);
+  return generic ? generic[0].replace(/[\s()]/g, '') : '';
+}
+
+// Без AI — евристика: перші кілька непорожніх рядків, шукаємо той, що
+// виглядає як ПІБ (2-3 слова з великої літери, без цифр/@, розумна
+// довжина). Завжди можна поправити вручну після імпорту.
+function guessNameFromText(text, fallbackFilename) {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 15);
+  const nameLike = /^[\p{Lu}][\p{L}'-]+(\s+[\p{Lu}][\p{L}'-]+){1,3}$/u;
+  for (const line of lines) {
+    if (line.length <= 60 && nameLike.test(line)) return line;
+  }
+  return fallbackFilename.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+}
+
+// Один файл → або нова картка кандидата (createCandidate вже вміє
+// dedupe за телефоном/email), або резюме доклеюється до вже існуючого
+// кандидата, якщо збіг знайдено — жодного дублювання людини.
+async function uploadResumeAndMatchCandidate({ buffer, filename, mimeType }, uploadedBy) {
+  const { text, parse_status } = await extractResumeText(buffer, mimeType, filename);
+  const guessed = {
+    full_name: guessNameFromText(text, filename),
+    email: guessEmailFromText(text),
+    phone: guessPhoneFromText(text)
+  };
+
+  const { candidate, duplicate } = await createCandidate({
+    full_name: guessed.full_name,
+    phone: guessed.phone,
+    personal_email: guessed.email,
+    source: 'Resume Import'
+  }, uploadedBy);
+
+  const { rows } = await pool.query(
+    `INSERT INTO hr_candidate_resumes (candidate_id, filename, mime_type, file_size, file_data, extracted_text, parse_status, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, candidate_id, filename, mime_type, file_size, parse_status, created_at`,
+    [candidate.id, filename, mimeType || '', buffer.length, buffer, text, parse_status, uploadedBy || '']
+  );
+
+  return { candidate, duplicate, resume: rows[0], guessed, parse_status };
+}
+
+async function addResumeToCandidate(candidateId, { buffer, filename, mimeType }, uploadedBy) {
+  const { text, parse_status } = await extractResumeText(buffer, mimeType, filename);
+  const { rows } = await pool.query(
+    `INSERT INTO hr_candidate_resumes (candidate_id, filename, mime_type, file_size, file_data, extracted_text, parse_status, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, candidate_id, filename, mime_type, file_size, parse_status, created_at`,
+    [candidateId, filename, mimeType || '', buffer.length, buffer, text, parse_status, uploadedBy || '']
+  );
+  return rows[0];
+}
+
+async function listResumesForCandidate(candidateId) {
+  const { rows } = await pool.query(
+    `SELECT id, candidate_id, filename, mime_type, file_size, parse_status, created_at
+     FROM hr_candidate_resumes WHERE candidate_id = $1 ORDER BY created_at DESC`,
+    [candidateId]
+  );
+  return rows;
+}
+
+async function getResumeFile(resumeId) {
+  const { rows } = await pool.query('SELECT filename, mime_type, file_data FROM hr_candidate_resumes WHERE id = $1', [resumeId]);
+  return rows[0] || null;
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -3357,5 +3479,9 @@ export default {
   addOffboardingChecklistItem,
   updateOffboardingChecklistItem,
   upsertExitInterview,
-  closeOffboardingCase
+  closeOffboardingCase,
+  uploadResumeAndMatchCandidate,
+  addResumeToCandidate,
+  listResumesForCandidate,
+  getResumeFile
 };

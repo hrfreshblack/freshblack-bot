@@ -1,9 +1,17 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import multer from 'multer';
 import db from './db.js';
 import seedAccounts from './seed-accounts.js';
 import { signSsoToken, verifySsoToken } from './sso.js';
+
+const resumeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+function uploadSingleFile(req, res) {
+  return new Promise((resolve, reject) => {
+    resumeUpload.single('file')(req, res, (err) => { if (err) reject(err); else resolve(); });
+  });
+}
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is not set.');
@@ -604,6 +612,25 @@ app.post('/api/candidates', requireRole(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/candidates ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити кандидата' });
+  }
+});
+
+app.post('/api/candidates/upload-resume', requireRole(), async (req, res) => {
+  try {
+    await uploadSingleFile(req, res);
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл обов’язковий' });
+      return;
+    }
+    const result = await db.uploadResumeAndMatchCandidate(
+      { buffer: req.file.buffer, filename: req.file.originalname, mimeType: req.file.mimetype },
+      req.account.username
+    );
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('POST /api/candidates/upload-resume ERROR:', error?.message || error);
+    const message = error?.message?.includes('File too large') ? 'Файл завеликий (максимум 15МБ)' : (error?.message || 'Не вдалося завантажити резюме');
+    res.status(400).json({ ok: false, error: message });
   }
 });
 
@@ -1811,6 +1838,54 @@ app.post('/api/offboarding-cases/:id/close', requireRole(), async (req, res) => 
   } catch (error) {
     console.error('POST /api/offboarding-cases/:id/close ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося завершити' });
+  }
+});
+
+// ---- Resume upload & parsing (ТЗ п.11) ----
+
+app.post('/api/candidates/:id/resumes', requireRole(), async (req, res) => {
+  try {
+    await uploadSingleFile(req, res);
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл обов’язковий' });
+      return;
+    }
+    const resume = await db.addResumeToCandidate(
+      Number(req.params.id),
+      { buffer: req.file.buffer, filename: req.file.originalname, mimeType: req.file.mimetype },
+      req.account.username
+    );
+    res.json({ ok: true, resume });
+  } catch (error) {
+    console.error('POST /api/candidates/:id/resumes ERROR:', error?.message || error);
+    const message = error?.message?.includes('File too large') ? 'Файл завеликий (максимум 15МБ)' : (error?.message || 'Не вдалося завантажити резюме');
+    res.status(400).json({ ok: false, error: message });
+  }
+});
+
+app.get('/api/candidates/:id/resumes', async (req, res) => {
+  try {
+    const resumes = await db.listResumesForCandidate(Number(req.params.id));
+    res.json({ ok: true, resumes });
+  } catch (error) {
+    console.error('GET /api/candidates/:id/resumes ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати резюме' });
+  }
+});
+
+app.get('/api/resumes/:id/download', async (req, res) => {
+  try {
+    const file = await db.getResumeFile(Number(req.params.id));
+    if (!file) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.set('Content-Type', file.mime_type || 'application/octet-stream');
+    res.set('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
+    res.send(file.file_data);
+  } catch (error) {
+    console.error('GET /api/resumes/:id/download ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося завантажити файл' });
   }
 });
 
