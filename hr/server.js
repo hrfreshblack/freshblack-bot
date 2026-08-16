@@ -492,6 +492,30 @@ app.post('/api/vacancy-requests', requireRole('Recruiter'), async (req, res) => 
   }
 });
 
+app.post('/api/vacancy-requests/upload', requireRole('Recruiter'), async (req, res) => {
+  try {
+    await uploadSingleFile(req, res);
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл обов’язковий' });
+      return;
+    }
+    const department_id = Number(req.body?.department_id) || null;
+    if (!department_id) {
+      res.status(400).json({ ok: false, error: 'Департамент обов’язковий' });
+      return;
+    }
+    const result = await db.createVacancyRequestFromFile(
+      { buffer: req.file.buffer, filename: req.file.originalname, mimeType: req.file.mimetype, department_id },
+      req.account.username
+    );
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('POST /api/vacancy-requests/upload ERROR:', error?.message || error);
+    const message = error?.message?.includes('File too large') ? 'Файл завеликий (максимум 15МБ)' : (error?.message || 'Не вдалося створити заявку з файлу');
+    res.status(400).json({ ok: false, error: message });
+  }
+});
+
 app.post('/api/vacancy-requests/:id', requireRole('Recruiter'), async (req, res) => {
   try {
     const request = await db.updateVacancyRequest(Number(req.params.id), req.body || {});
