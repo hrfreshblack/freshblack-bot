@@ -251,6 +251,7 @@
       <div class="viewToolbar">
         <input type="search" id="candSearch" placeholder="Пошук за ПІБ, телефоном, email…">
         <button id="btnAddCandidate">+ Кандидат</button>
+        <button class="secondary" id="btnUploadResumes">+ Завантажити резюме</button>
       </div>
       <div class="tableWrap"><table><thead><tr><th>ПІБ</th><th>Телефон</th><th>Email</th><th>Джерело</th><th>Активні заявки</th></tr></thead><tbody id="candTableBody"></tbody></table></div>
       <div class="empty" id="candEmpty" style="display:none;">Кандидатів ще немає.</div>
@@ -272,6 +273,13 @@
     <div id="candidateDetailHeader" style="margin:16px 0;"></div>
     <div class="fieldGrid" id="candidateDetailFields"></div>
     <button class="secondary" onclick="openCandidateEdit(currentCandidateId)" style="margin-bottom:16px;">✎ Редагувати</button>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Резюме</h3>
+    <div id="candidateResumesList"></div>
+    <label class="secondary" style="display:inline-flex; align-items:center; padding:8px 10px; border:1px solid var(--border); border-radius:8px; cursor:pointer; font-size:13px; margin-top:8px;">
+      + Завантажити резюме<input type="file" id="candidateResumeFileInput" style="display:none;" accept=".pdf,.docx,.doc,.txt">
+    </label>
+
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Заявки на вакансії</h3>
     <div class="tableWrap"><table><thead><tr><th>Вакансія</th><th>Етап</th><th>Статус</th><th>Подано</th></tr></thead><tbody id="candApplicationsBody"></tbody></table></div>
     <div class="empty" id="candApplicationsEmpty" style="display:none;">Ще немає заявок.</div>
@@ -1042,6 +1050,21 @@
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('exitInterviewOverlay')">Скасувати</button>
       <button id="btnSaveExitInterview">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: масове завантаження резюме -->
+<div class="overlay" id="bulkResumeOverlay">
+  <div class="modal" style="max-width: 640px;">
+    <h2>Завантажити резюме</h2>
+    <p style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;">PDF, DOCX або TXT. Можна обрати кілька файлів одразу — для кожного система спробує розпізнати ПІБ/телефон/email; якщо такий кандидат вже є (за телефоном чи email), резюме просто доклеїться до нього, без дублю.</p>
+    <div class="field"><input type="file" id="bulkResumeFiles" multiple accept=".pdf,.docx,.doc,.txt"></div>
+    <div id="bulkResumeProgress" style="font-size: 12px; color: var(--muted); margin: 8px 0; display: none;"></div>
+    <div id="bulkResumeResults"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('bulkResumeOverlay')">Закрити</button>
+      <button id="btnStartBulkResumeUpload">Завантажити</button>
     </div>
   </div>
 </div>
@@ -3945,6 +3968,7 @@ async function renderCandidateDetail() {
     <div class="fieldItem"><label>Резюме</label>${c.resume_url ? '<a href="' + escAttr(c.resume_url) + '" target="_blank" style="color:var(--accent2);">посилання</a>' : '—'}</div>
     <div class="fieldItem"><label>Нотатки</label>${escAttr(c.notes || '—')}</div>
   `;
+  renderCandidateResumes(currentCandidateId);
   const body = document.getElementById('candApplicationsBody');
   const empty = document.getElementById('candApplicationsEmpty');
   if (!c.applications.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
@@ -3958,6 +3982,84 @@ async function renderCandidateDetail() {
     </tr>
   `).join('');
 }
+
+// -- Resumes (upload, parse, bulk import) --
+
+function resumeParseStatusNote(status) {
+  if (status === 'unsupported') return '<span class="tag neutral" style="margin-left:6px;">текст не розпізнано</span>';
+  if (status === 'failed') return '<span class="tag warn" style="margin-left:6px;">помилка розбору</span>';
+  return '';
+}
+
+async function renderCandidateResumes(candidateId) {
+  const resp = await apiFetch('/api/candidates/' + candidateId + '/resumes');
+  const data = await resp.json();
+  const resumes = data.ok ? data.resumes : [];
+  document.getElementById('candidateResumesList').innerHTML = resumes.length ? resumes.map((r) => `
+    <div class="historyCard" style="padding:8px 12px;">
+      <a href="/api/resumes/${r.id}/download" target="_blank" style="color:var(--accent2);">${escAttr(r.filename)}</a>
+      ${resumeParseStatusNote(r.parse_status)}
+      <span class="historyMeta" style="margin-left:6px;">${new Date(r.created_at).toLocaleDateString('uk-UA')}</span>
+    </div>
+  `).join('') : '<p style="color:var(--muted); font-size:13px;">Резюме ще не завантажено.</p>';
+}
+
+document.getElementById('candidateResumeFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  const resp = await apiFetch('/api/candidates/' + currentCandidateId + '/resumes', { method: 'POST', body: formData });
+  const data = await resp.json();
+  e.target.value = '';
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити'); return; }
+  showToast('Резюме завантажено');
+  renderCandidateResumes(currentCandidateId);
+});
+
+document.getElementById('btnUploadResumes').onclick = () => {
+  document.getElementById('bulkResumeFiles').value = '';
+  document.getElementById('bulkResumeProgress').style.display = 'none';
+  document.getElementById('bulkResumeResults').innerHTML = '';
+  document.getElementById('bulkResumeOverlay').classList.add('open');
+};
+
+document.getElementById('btnStartBulkResumeUpload').onclick = async () => {
+  const files = Array.from(document.getElementById('bulkResumeFiles').files || []);
+  if (!files.length) { showToast('Обери хоча б один файл'); return; }
+  const progress = document.getElementById('bulkResumeProgress');
+  const results = document.getElementById('bulkResumeResults');
+  progress.style.display = 'block';
+  results.innerHTML = '';
+  const rows = [];
+
+  for (let i = 0; i < files.length; i++) {
+    progress.textContent = `Обробка ${i + 1} з ${files.length}: ${files[i].name}…`;
+    const formData = new FormData();
+    formData.append('file', files[i]);
+    try {
+      const resp = await apiFetch('/api/candidates/upload-resume', { method: 'POST', body: formData });
+      const data = await resp.json();
+      if (!data.ok) {
+        rows.push(`<div class="historyCard" style="padding:8px 12px;"><span class="tag bad">Помилка</span> ${escAttr(files[i].name)} — ${escAttr(data.error || '')}</div>`);
+      } else {
+        const label = data.duplicate ? '<span class="tag warn">Доклеєно до існуючого</span>' : '<span class="tag ok">Створено</span>';
+        rows.push(`
+          <div class="historyCard" style="padding:8px 12px;">
+            ${label} ${escAttr(files[i].name)} → <span class="clientLink" onclick="closeOverlay('bulkResumeOverlay'); openCandidateDetail(${data.candidate.id})">${escAttr(data.candidate.full_name)}</span>
+            ${resumeParseStatusNote(data.parse_status)}
+          </div>
+        `);
+      }
+    } catch (error) {
+      rows.push(`<div class="historyCard" style="padding:8px 12px;"><span class="tag bad">Помилка</span> ${escAttr(files[i].name)} — ${escAttr(error?.message || '')}</div>`);
+    }
+    results.innerHTML = rows.join('');
+  }
+
+  progress.textContent = `Готово: ${files.length} файл(ів) оброблено.`;
+  loadCandidates();
+};
 
 // -- Application detail (stage/status, interviews, offers) --
 
