@@ -3262,19 +3262,29 @@ function inferMimeType(filename, mimeType) {
   return EXT_MIME_TYPES[ext] || mimeType || 'application/octet-stream';
 }
 
+// Postgres не приймає байт 0x00 у TEXT-колонках взагалі (незалежно від
+// кодування) — деякі PDF (пошкоджені/нестандартно вбудовані шрифти) при
+// розборі pdf-parse видають текст із null-байтами, і INSERT падав з
+// "invalid byte sequence for encoding UTF8: 0x00". Прибираємо їх одразу
+// після витягування, до будь-якого подальшого використання тексту
+// (збереження, вгадування ПІБ/email/телефону).
+function stripNullBytes(text) {
+  return text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+}
+
 async function extractResumeText(buffer, mimeType, filename) {
   const ext = (filename.split('.').pop() || '').toLowerCase();
   try {
     if (mimeType === 'application/pdf' || ext === 'pdf') {
       const parsed = await pdfParse(buffer);
-      return { text: parsed.text || '', parse_status: 'ok' };
+      return { text: stripNullBytes(parsed.text || ''), parse_status: 'ok' };
     }
     if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || ext === 'docx') {
       const result = await mammoth.extractRawText({ buffer });
-      return { text: result.value || '', parse_status: 'ok' };
+      return { text: stripNullBytes(result.value || ''), parse_status: 'ok' };
     }
     if (mimeType === 'text/plain' || ext === 'txt') {
-      return { text: buffer.toString('utf8'), parse_status: 'ok' };
+      return { text: stripNullBytes(buffer.toString('utf8')), parse_status: 'ok' };
     }
     // .doc (старий бінарний формат), зображення (скани) — без OCR/AI не
     // розбираємо; файл все одно зберігається, текст просто порожній.
