@@ -175,7 +175,13 @@ app.get('/api/dictionaries', (req, res) => {
     okrConfidenceLevels: db.OKR_CONFIDENCE_LEVELS,
     kpiSources: db.KPI_SOURCES,
     kpiStatuses: db.KPI_STATUSES,
-    pdpItemStatuses: db.PDP_ITEM_STATUSES
+    pdpItemStatuses: db.PDP_ITEM_STATUSES,
+    kbCategories: db.KB_CATEGORIES,
+    kbAudienceTypes: db.KB_AUDIENCE_TYPES,
+    kbAssignmentStatuses: db.KB_ASSIGNMENT_STATUSES,
+    learningPathScopes: db.LEARNING_PATH_SCOPES,
+    learningItemTypes: db.LEARNING_ITEM_TYPES,
+    learningAssignmentStatuses: db.LEARNING_ASSIGNMENT_STATUSES
   });
 });
 
@@ -1242,6 +1248,254 @@ app.post('/api/development-plan/:id', requireRole(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/development-plan/:id ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+// ---- Knowledge Base: articles ----
+
+app.get('/api/kb-articles', async (req, res) => {
+  try {
+    const { category, audience_type, search } = req.query;
+    const articles = await db.listKbArticles({ category: category || '', audience_type: audience_type || '', search: search || '' });
+    res.json({ ok: true, articles });
+  } catch (error) {
+    console.error('GET /api/kb-articles ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати статті' });
+  }
+});
+
+app.get('/api/kb-articles/:id', async (req, res) => {
+  try {
+    const article = await db.getKbArticle(Number(req.params.id));
+    if (!article) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, article });
+  } catch (error) {
+    console.error('GET /api/kb-articles/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати статтю' });
+  }
+});
+
+app.post('/api/kb-articles', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title) {
+      res.status(400).json({ ok: false, error: 'Назва обов’язкова' });
+      return;
+    }
+    const article = await db.createKbArticle(body, req.account.username);
+    res.json({ ok: true, article });
+  } catch (error) {
+    console.error('POST /api/kb-articles ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/kb-articles/:id', requireRole(), async (req, res) => {
+  try {
+    const article = await db.updateKbArticle(Number(req.params.id), req.body || {});
+    if (!article) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, article });
+  } catch (error) {
+    console.error('POST /api/kb-articles/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+app.post('/api/kb-articles/:id/assign-audience', requireRole(), async (req, res) => {
+  try {
+    const assignments = await db.assignArticleToAudience(Number(req.params.id), req.account.username);
+    res.json({ ok: true, assignments });
+  } catch (error) {
+    console.error('POST /api/kb-articles/:id/assign-audience ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося призначити' });
+  }
+});
+
+// ---- Knowledge Base: per-employee assignments ----
+
+app.get('/api/employees/:id/kb-assignments', async (req, res) => {
+  try {
+    const assignments = await db.listKbAssignmentsForEmployee(Number(req.params.id));
+    res.json({ ok: true, assignments });
+  } catch (error) {
+    console.error('GET /api/employees/:id/kb-assignments ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.post('/api/employees/:id/kb-assignments', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.article_id) {
+      res.status(400).json({ ok: false, error: 'Стаття обов’язкова' });
+      return;
+    }
+    const assignment = await db.assignKbArticle({ ...body, employee_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, assignment });
+  } catch (error) {
+    console.error('POST /api/employees/:id/kb-assignments ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося призначити' });
+  }
+});
+
+app.post('/api/kb-assignments/:id/acknowledge', requireRole(), async (req, res) => {
+  try {
+    const assignment = await db.acknowledgeKbAssignment(Number(req.params.id));
+    if (!assignment) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, assignment });
+  } catch (error) {
+    console.error('POST /api/kb-assignments/:id/acknowledge ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося підтвердити' });
+  }
+});
+
+// ---- Learning Paths ----
+
+app.get('/api/learning-paths', async (req, res) => {
+  try {
+    const department_id = req.query.department_id ? Number(req.query.department_id) : null;
+    const position_id = req.query.position_id ? Number(req.query.position_id) : null;
+    const paths = await db.listLearningPaths({ department_id, position_id });
+    res.json({ ok: true, paths });
+  } catch (error) {
+    console.error('GET /api/learning-paths ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати навчальні шляхи' });
+  }
+});
+
+app.get('/api/learning-paths/:id', async (req, res) => {
+  try {
+    const path = await db.getLearningPath(Number(req.params.id));
+    if (!path) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, path });
+  } catch (error) {
+    console.error('GET /api/learning-paths/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.post('/api/learning-paths', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title || !body.scope) {
+      res.status(400).json({ ok: false, error: 'Назва і область обов’язкові' });
+      return;
+    }
+    const path = await db.createLearningPath(body, req.account.username);
+    res.json({ ok: true, path });
+  } catch (error) {
+    console.error('POST /api/learning-paths ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/learning-paths/:id', requireRole(), async (req, res) => {
+  try {
+    const path = await db.updateLearningPath(Number(req.params.id), req.body || {});
+    if (!path) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, path });
+  } catch (error) {
+    console.error('POST /api/learning-paths/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+app.post('/api/learning-paths/:id/items', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title) {
+      res.status(400).json({ ok: false, error: 'Назва обов’язкова' });
+      return;
+    }
+    const item = await db.addLearningPathItem({ ...body, learning_path_id: Number(req.params.id) });
+    res.json({ ok: true, item });
+  } catch (error) {
+    console.error('POST /api/learning-paths/:id/items ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося додати' });
+  }
+});
+
+// ---- Learning assignments (per employee) ----
+
+app.get('/api/employees/:id/learning-assignments', async (req, res) => {
+  try {
+    const assignments = await db.listLearningAssignmentsForEmployee(Number(req.params.id));
+    res.json({ ok: true, assignments });
+  } catch (error) {
+    console.error('GET /api/employees/:id/learning-assignments ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.post('/api/employees/:id/learning-assignments/generate', requireRole(), async (req, res) => {
+  try {
+    const employee = await db.getEmployee(Number(req.params.id));
+    if (!employee) {
+      res.status(404).json({ ok: false, error: 'Співробітника не знайдено' });
+      return;
+    }
+    const cur = employee.current_period;
+    const assignments = await db.generateLearningAssignments(employee.id, {
+      department_id: cur?.department_id || null,
+      position_id: cur?.position_id || null
+    }, req.account.username);
+    res.json({ ok: true, assignments });
+  } catch (error) {
+    console.error('POST /api/employees/:id/learning-assignments/generate ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося згенерувати' });
+  }
+});
+
+app.get('/api/learning-assignments/:id', async (req, res) => {
+  try {
+    const assignment = await db.getLearningAssignment(Number(req.params.id));
+    if (!assignment) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, assignment });
+  } catch (error) {
+    console.error('GET /api/learning-assignments/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.post('/api/learning-assignments/:id/items/:itemId/complete', requireRole(), async (req, res) => {
+  try {
+    const assignment = await db.markLearningItemComplete(Number(req.params.id), Number(req.params.itemId));
+    res.json({ ok: true, assignment });
+  } catch (error) {
+    console.error('POST /api/learning-assignments/:id/items/:itemId/complete ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити' });
+  }
+});
+
+app.post('/api/learning-assignments/:id/complete', requireRole(), async (req, res) => {
+  try {
+    const assignment = await db.completeLearningAssignment(Number(req.params.id), req.body || {});
+    if (!assignment) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, assignment });
+  } catch (error) {
+    console.error('POST /api/learning-assignments/:id/complete ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося завершити' });
   }
 });
 
