@@ -181,7 +181,10 @@ app.get('/api/dictionaries', (req, res) => {
     kbAssignmentStatuses: db.KB_ASSIGNMENT_STATUSES,
     learningPathScopes: db.LEARNING_PATH_SCOPES,
     learningItemTypes: db.LEARNING_ITEM_TYPES,
-    learningAssignmentStatuses: db.LEARNING_ASSIGNMENT_STATUSES
+    learningAssignmentStatuses: db.LEARNING_ASSIGNMENT_STATUSES,
+    surveyTypes: db.SURVEY_TYPES,
+    surveyStatuses: db.SURVEY_STATUSES,
+    surveyQuestionTypes: db.SURVEY_QUESTION_TYPES
   });
 });
 
@@ -1496,6 +1499,119 @@ app.post('/api/learning-assignments/:id/complete', requireRole(), async (req, re
   } catch (error) {
     console.error('POST /api/learning-assignments/:id/complete ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося завершити' });
+  }
+});
+
+// ---- Surveys & Engagement ----
+
+app.get('/api/surveys', async (req, res) => {
+  try {
+    const { type, status } = req.query;
+    const surveys = await db.listSurveys({ type: type || '', status: status || '' });
+    res.json({ ok: true, surveys });
+  } catch (error) {
+    console.error('GET /api/surveys ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати опитування' });
+  }
+});
+
+app.get('/api/surveys/:id', async (req, res) => {
+  try {
+    const survey = await db.getSurvey(Number(req.params.id));
+    if (!survey) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, survey });
+  } catch (error) {
+    console.error('GET /api/surveys/:id ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати' });
+  }
+});
+
+app.get('/api/surveys/:id/results', async (req, res) => {
+  try {
+    const results = await db.getSurveyResults(Number(req.params.id));
+    if (!results) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, results });
+  } catch (error) {
+    console.error('GET /api/surveys/:id/results ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати результати' });
+  }
+});
+
+app.post('/api/surveys', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.title || !body.type) {
+      res.status(400).json({ ok: false, error: 'Назва і тип обов’язкові' });
+      return;
+    }
+    const survey = await db.createSurvey(body, req.account.username);
+    res.json({ ok: true, survey });
+  } catch (error) {
+    console.error('POST /api/surveys ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити' });
+  }
+});
+
+app.post('/api/surveys/:id/status', requireRole(), async (req, res) => {
+  try {
+    const survey = await db.updateSurveyStatus(Number(req.params.id), (req.body || {}).status);
+    if (!survey) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, survey });
+  } catch (error) {
+    console.error('POST /api/surveys/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+app.post('/api/surveys/:id/questions', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.question_text || !body.question_type) {
+      res.status(400).json({ ok: false, error: 'Текст питання і тип обов’язкові' });
+      return;
+    }
+    const question = await db.addSurveyQuestion({ ...body, survey_id: Number(req.params.id) });
+    res.json({ ok: true, question });
+  } catch (error) {
+    console.error('POST /api/surveys/:id/questions ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося додати' });
+  }
+});
+
+app.post('/api/surveys/:id/invite', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const invitations = body.all
+      ? await db.inviteAllActiveEmployees(Number(req.params.id))
+      : await db.inviteEmployees(Number(req.params.id), body.employee_ids || []);
+    res.json({ ok: true, invitations });
+  } catch (error) {
+    console.error('POST /api/surveys/:id/invite ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося запросити' });
+  }
+});
+
+app.post('/api/surveys/:id/responses', requireRole(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.employee_id) {
+      res.status(400).json({ ok: false, error: 'Співробітник обов’язковий' });
+      return;
+    }
+    const response = await db.submitSurveyResponse({ ...body, survey_id: Number(req.params.id) }, req.account.username);
+    res.json({ ok: true, response });
+  } catch (error) {
+    console.error('POST /api/surveys/:id/responses ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти відповідь' });
   }
 });
 
