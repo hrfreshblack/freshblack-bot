@@ -247,12 +247,12 @@ app.get('/api/departments', async (req, res) => {
 
 app.post('/api/departments', requireRole(), async (req, res) => {
   try {
-    const { name, parent_department_id, planned_headcount } = req.body || {};
+    const { name, parent_department_id, planned_headcount, purpose } = req.body || {};
     if (!name || !String(name).trim()) {
       res.status(400).json({ ok: false, error: 'Назва обов’язкова' });
       return;
     }
-    const department = await db.createDepartment({ name: String(name).trim(), parent_department_id, planned_headcount });
+    const department = await db.createDepartment({ name: String(name).trim(), parent_department_id, planned_headcount, purpose });
     res.json({ ok: true, department });
   } catch (error) {
     console.error('POST /api/departments ERROR:', error?.message || error);
@@ -262,8 +262,8 @@ app.post('/api/departments', requireRole(), async (req, res) => {
 
 app.post('/api/departments/:id', requireRole(), async (req, res) => {
   try {
-    const { name, parent_department_id, planned_headcount, active } = req.body || {};
-    const department = await db.updateDepartment(Number(req.params.id), { name, parent_department_id, planned_headcount, active });
+    const { name, parent_department_id, planned_headcount, purpose, active } = req.body || {};
+    const department = await db.updateDepartment(Number(req.params.id), { name, parent_department_id, planned_headcount, purpose, active });
     if (!department) {
       res.status(404).json({ ok: false, error: 'Департамент не знайдено' });
       return;
@@ -290,12 +290,12 @@ app.get('/api/positions', async (req, res) => {
 
 app.post('/api/positions', requireRole(), async (req, res) => {
   try {
-    const { title, department_id, reports_to_position_id, status, is_department_head, note } = req.body || {};
+    const { title, department_id, reports_to_position_id, status, is_department_head, note, purpose } = req.body || {};
     if (!title || !department_id) {
       res.status(400).json({ ok: false, error: 'Назва посади і департамент обов’язкові' });
       return;
     }
-    const position = await db.createPosition({ title, department_id, reports_to_position_id, status, is_department_head, note });
+    const position = await db.createPosition({ title, department_id, reports_to_position_id, status, is_department_head, note, purpose });
     res.json({ ok: true, position });
   } catch (error) {
     console.error('POST /api/positions ERROR:', error?.message || error);
@@ -305,8 +305,8 @@ app.post('/api/positions', requireRole(), async (req, res) => {
 
 app.post('/api/positions/:id', requireRole(), async (req, res) => {
   try {
-    const { title, department_id, reports_to_position_id, status, is_department_head, note, active } = req.body || {};
-    const position = await db.updatePosition(Number(req.params.id), { title, department_id, reports_to_position_id, status, is_department_head, note, active });
+    const { title, department_id, reports_to_position_id, status, is_department_head, note, purpose, active } = req.body || {};
+    const position = await db.updatePosition(Number(req.params.id), { title, department_id, reports_to_position_id, status, is_department_head, note, purpose, active });
     if (!position) {
       res.status(404).json({ ok: false, error: 'Посаду не знайдено' });
       return;
