@@ -1176,6 +1176,71 @@ async function createEmployee({ full_name, birth_date, gender, phone, personal_e
   }
 }
 
+// Одноразовий (за суттю ідемпотентний) імпорт реального списку
+// співробітників (seed-org-import.js) — департаменти зі списку створюються,
+// якщо їх ще нема, кожен рядок стає окремою штатною одиницею (Position) +
+// Person + Employee, якщо людини з таким ПІБ ще немає в базі (щоб рестарт
+// сервера не плодив дублі). "Директор" зі списку резолвиться в
+// manager_employee_id (Employment Period) і reports_to_position_id
+// (Position), якщо ця людина теж є в цьому ж списку — інакше лишається
+// порожнім (напр. власник компанії чи людина з іншої юрособи, якої немає
+// серед співробітників). Дат прийому на роботу в списку не було — ставимо
+// дату імпорту, це свідомо неточне значення, яке Тетяна поправить вручну.
+async function seedOrgImport(departmentNames, employeeRows) {
+  const deptIdByName = {};
+  for (const name of departmentNames) {
+    const { rows } = await pool.query('SELECT id FROM hr_departments WHERE name = $1', [name]);
+    deptIdByName[name] = rows.length ? rows[0].id : (await createDepartment({ name })).id;
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  const employeeIdByName = {};
+  const positionIdByName = {};
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Скок Олександр Олександрович — "директор" майже для всіх у списку;
+  // створюємо його першим, щоб знати employee_id/position_id заздалегідь
+  // і не робити другий прохід по решті записів.
+  const sorted = [...employeeRows].sort((a, b) => (a.full_name === 'Скок Олександр Олександрович' ? -1 : 0) - (b.full_name === 'Скок Олександр Олександрович' ? -1 : 0));
+
+  for (const row of sorted) {
+    const { rows: existingPerson } = await pool.query('SELECT id FROM hr_persons WHERE full_name = $1', [row.full_name]);
+    if (existingPerson.length) { skipped += 1; continue; }
+
+    // "Директор" у списку іноді — кілька імен через кому (людина оформлена
+    // одразу в двох юрособах, у кожної свій директор) — резолвимо лише
+    // перше ім'я, воно ж основне в рядку.
+    const primaryDirector = (row.director || '').split(',')[0].trim();
+
+    const departmentId = deptIdByName[row.department];
+    const position = await createPosition({
+      title: row.working_title || row.official_title || row.full_name,
+      department_id: departmentId,
+      reports_to_position_id: positionIdByName[primaryDirector] || null,
+      note: row.official_title ? `Офіційна посада: ${row.official_title}` : ''
+    });
+    positionIdByName[row.full_name] = position.id;
+
+    const employee = await createEmployee({
+      full_name: row.full_name,
+      telegram: row.telegram || '',
+      employee_number: row.employee_number || null,
+      status: 'Active',
+      position_id: position.id,
+      department_id: departmentId,
+      manager_employee_id: employeeIdByName[primaryDirector] || null,
+      start_date: today,
+      employment_type: row.employment_type || '',
+      created_by: 'seed-org-import'
+    });
+    employeeIdByName[row.full_name] = employee.id;
+    imported += 1;
+  }
+
+  return { imported, skipped };
+}
+
 async function updatePersonFields(personId, fields) {
   const { full_name, birth_date, gender, phone, personal_email, telegram, city, emergency_contact, photo_url } = fields;
   const { rows } = await pool.query(
@@ -1346,9 +1411,10 @@ async function addCompensationRecord({ employee_id, effective_from, fixed_salary
 async function getOrgTree() {
   const departments = await listDepartments();
   const { rows: positions } = await pool.query(`
-    SELECT p.*, ep.employee_id AS current_employee_id, per.full_name AS current_employee_name,
+    SELECT p.*, rp.title AS reports_to_title, ep.employee_id AS current_employee_id, per.full_name AS current_employee_name,
       per.photo_url AS current_employee_photo, emp.status AS current_employee_status
     FROM hr_positions p
+    LEFT JOIN hr_positions rp ON rp.id = p.reports_to_position_id
     LEFT JOIN hr_employment_periods ep ON ep.position_id = p.id AND ep.end_date IS NULL
     LEFT JOIN hr_employees emp ON emp.id = ep.employee_id
     LEFT JOIN hr_persons per ON per.id = emp.person_id
@@ -3875,6 +3941,7 @@ export default {
   listEmployees,
   getEmployee,
   createEmployee,
+  seedOrgImport,
   updatePersonFields,
   updateEmployeeStatus,
   updateEmployeeFields,
