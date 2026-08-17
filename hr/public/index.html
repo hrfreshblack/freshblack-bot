@@ -488,6 +488,10 @@
       <label>Плановий headcount</label>
       <input type="number" id="deptHeadcount" min="0" step="1" value="0">
     </div>
+    <div class="field">
+      <label>ЦКП (для чого існує цей департамент)</label>
+      <textarea id="deptPurpose" rows="2"></textarea>
+    </div>
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('departmentOverlay')">Скасувати</button>
       <button id="btnSaveDepartment">Зберегти</button>
@@ -518,6 +522,10 @@
     </div>
     <div class="field">
       <label style="display:flex; align-items:center; gap:8px;"><input type="checkbox" id="posIsDeptHead" style="width:auto;"> Керівник департаменту</label>
+    </div>
+    <div class="field">
+      <label>ЦКП ролі (для чого існує ця посада)</label>
+      <textarea id="posPurpose" rows="2"></textarea>
     </div>
     <div class="field">
       <label>Коментар</label>
@@ -3691,11 +3699,13 @@ async function loadOrg() {
             <button class="secondary" style="font-size:11px; padding:4px 8px; margin-left:8px;" onclick="event.stopPropagation(); editDepartment(${dept.id})">✎</button>
           </div>
         </div>
+        ${dept.purpose ? `<div class="posMeta" style="margin:-4px 0 8px; font-style:italic;">ЦКП: ${escAttr(dept.purpose)}</div>` : ''}
         ${positions.map((p) => `
           <div class="posRow">
             <div>
               <div class="posTitle">${escAttr(p.title)} ${p.is_department_head ? '<span class="tag accent">керівник</span>' : ''}</div>
               <div class="posMeta">${p.current_employee_name ? escAttr(p.current_employee_name) : positionStatusLabel(p.status)}${p.reports_to_title ? ' · підпорядк.: ' + escAttr(p.reports_to_title) : ''}</div>
+              ${p.purpose ? `<div class="posMeta" style="font-style:italic;">ЦКП: ${escAttr(p.purpose)}</div>` : ''}
             </div>
             <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="editPosition(${p.id})">✎</button>
           </div>
@@ -3724,6 +3734,7 @@ document.getElementById('btnAddDepartment').onclick = () => {
   document.getElementById('deptId').value = '';
   document.getElementById('deptName').value = '';
   document.getElementById('deptHeadcount').value = 0;
+  document.getElementById('deptPurpose').value = '';
   document.getElementById('deptParent').innerHTML = '<option value="">— немає (верхній рівень) —</option>' + (window._orgDepartments || []).map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
   document.getElementById('departmentOverlay').classList.add('open');
 };
@@ -3735,6 +3746,7 @@ function editDepartment(id) {
   document.getElementById('deptId').value = dept.id;
   document.getElementById('deptName').value = dept.name;
   document.getElementById('deptHeadcount').value = dept.planned_headcount;
+  document.getElementById('deptPurpose').value = dept.purpose || '';
   document.getElementById('deptParent').innerHTML = '<option value="">— немає (верхній рівень) —</option>' + (window._orgDepartments || []).filter((d) => d.id !== id).map((d) => `<option value="${d.id}" ${d.id === dept.parent_department_id ? 'selected' : ''}>${escAttr(d.name)}</option>`).join('');
   document.getElementById('departmentOverlay').classList.add('open');
 }
@@ -3746,7 +3758,8 @@ document.getElementById('btnSaveDepartment').onclick = async () => {
   const body = {
     name,
     parent_department_id: document.getElementById('deptParent').value || null,
-    planned_headcount: document.getElementById('deptHeadcount').value || 0
+    planned_headcount: document.getElementById('deptHeadcount').value || 0,
+    purpose: document.getElementById('deptPurpose').value.trim()
   };
   const url = id ? '/api/departments/' + id : '/api/departments';
   const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -3767,6 +3780,7 @@ document.getElementById('btnAddPosition').onclick = () => {
   document.getElementById('posReportsTo').innerHTML = '<option value="">— немає —</option>' + (window._orgPositions || []).map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
   document.getElementById('posStatus').value = 'Vacant';
   document.getElementById('posIsDeptHead').checked = false;
+  document.getElementById('posPurpose').value = '';
   document.getElementById('posNote').value = '';
   document.getElementById('positionOverlay').classList.add('open');
 };
@@ -3781,6 +3795,7 @@ function editPosition(id) {
   document.getElementById('posReportsTo').innerHTML = '<option value="">— немає —</option>' + (window._orgPositions || []).filter((p) => p.id !== id).map((p) => `<option value="${p.id}" ${p.id === pos.reports_to_position_id ? 'selected' : ''}>${escAttr(p.title)}</option>`).join('');
   document.getElementById('posStatus').value = pos.status;
   document.getElementById('posIsDeptHead').checked = pos.is_department_head;
+  document.getElementById('posPurpose').value = pos.purpose || '';
   document.getElementById('posNote').value = pos.note || '';
   document.getElementById('positionOverlay').classList.add('open');
 }
@@ -3795,6 +3810,7 @@ document.getElementById('btnSavePosition').onclick = async () => {
     reports_to_position_id: document.getElementById('posReportsTo').value || null,
     status: document.getElementById('posStatus').value,
     is_department_head: document.getElementById('posIsDeptHead').checked,
+    purpose: document.getElementById('posPurpose').value.trim(),
     note: document.getElementById('posNote').value.trim()
   };
   const url = id ? '/api/positions/' + id : '/api/positions';

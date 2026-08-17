@@ -111,6 +111,9 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_departments_parent ON hr_departments(parent_department_id);
+    -- ЦКП контуру/відділу — те саме, що purpose на позиції, але на рівні
+    -- всього департаменту ("АДМІНІСТРАТИВНЕ ВІДДІЛЕННЯ: існує для того, щоб...").
+    ALTER TABLE hr_departments ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT '';
 
     -- Position — конкретна штатна одиниця ("посадова одиниця"), а не просто
     -- назва посади: одна и та ж назва ("Продавець-консультант") — кілька
@@ -131,6 +134,9 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_hr_positions_department ON hr_positions(department_id);
     CREATE INDEX IF NOT EXISTS idx_hr_positions_reports_to ON hr_positions(reports_to_position_id);
+    -- ЦКП ролі (Ціннісний Кінцевий Продукт) — коротко, для чого ця посада
+    -- взагалі існує, окремо від довільних приміток (note).
+    ALTER TABLE hr_positions ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT '';
 
     -- Person = "one person — one master record" (ТЗ п.3). У Release 1 ще
     -- немає Candidate/Recruitment — Person тут завжди веде до одного
@@ -948,16 +954,16 @@ async function listDepartments() {
   return rows;
 }
 
-async function createDepartment({ name, parent_department_id, planned_headcount }) {
+async function createDepartment({ name, parent_department_id, planned_headcount, purpose }) {
   const { rows } = await pool.query(
-    `INSERT INTO hr_departments (name, parent_department_id, planned_headcount)
-     VALUES ($1,$2,$3) RETURNING *`,
-    [name, parent_department_id || null, planned_headcount || 0]
+    `INSERT INTO hr_departments (name, parent_department_id, planned_headcount, purpose)
+     VALUES ($1,$2,$3,$4) RETURNING *`,
+    [name, parent_department_id || null, planned_headcount || 0, purpose || '']
   );
   return rows[0];
 }
 
-async function updateDepartment(id, { name, parent_department_id, planned_headcount, active }) {
+async function updateDepartment(id, { name, parent_department_id, planned_headcount, purpose, active }) {
   if (parent_department_id && Number(parent_department_id) === Number(id)) {
     throw new Error('Департамент не може бути власним батьківським');
   }
@@ -966,10 +972,11 @@ async function updateDepartment(id, { name, parent_department_id, planned_headco
        name = COALESCE($2, name),
        parent_department_id = $3,
        planned_headcount = COALESCE($4, planned_headcount),
-       active = COALESCE($5, active),
+       purpose = COALESCE($5, purpose),
+       active = COALESCE($6, active),
        updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [id, name ?? null, parent_department_id ?? null, planned_headcount ?? null, active ?? null]
+    [id, name ?? null, parent_department_id ?? null, planned_headcount ?? null, purpose ?? null, active ?? null]
   );
   return rows[0] || null;
 }
@@ -1000,19 +1007,19 @@ async function listPositions({ department_id = null } = {}) {
   return rows;
 }
 
-async function createPosition({ title, department_id, reports_to_position_id, status, is_department_head, note }) {
+async function createPosition({ title, department_id, reports_to_position_id, status, is_department_head, note, purpose }) {
   if (status && !POSITION_STATUSES.includes(status)) {
     throw new Error(`Unknown position status: ${status}`);
   }
   const { rows } = await pool.query(
-    `INSERT INTO hr_positions (title, department_id, reports_to_position_id, status, is_department_head, note)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [title, department_id, reports_to_position_id || null, status || 'Vacant', !!is_department_head, note || '']
+    `INSERT INTO hr_positions (title, department_id, reports_to_position_id, status, is_department_head, note, purpose)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [title, department_id, reports_to_position_id || null, status || 'Vacant', !!is_department_head, note || '', purpose || '']
   );
   return rows[0];
 }
 
-async function updatePosition(id, { title, department_id, reports_to_position_id, status, is_department_head, note, active }) {
+async function updatePosition(id, { title, department_id, reports_to_position_id, status, is_department_head, note, purpose, active }) {
   if (status && !POSITION_STATUSES.includes(status)) {
     throw new Error(`Unknown position status: ${status}`);
   }
@@ -1027,10 +1034,11 @@ async function updatePosition(id, { title, department_id, reports_to_position_id
        status = COALESCE($5, status),
        is_department_head = COALESCE($6, is_department_head),
        note = COALESCE($7, note),
-       active = COALESCE($8, active),
+       purpose = COALESCE($8, purpose),
+       active = COALESCE($9, active),
        updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [id, title ?? null, department_id ?? null, reports_to_position_id ?? null, status ?? null, is_department_head ?? null, note ?? null, active ?? null]
+    [id, title ?? null, department_id ?? null, reports_to_position_id ?? null, status ?? null, is_department_head ?? null, note ?? null, purpose ?? null, active ?? null]
   );
   return rows[0] || null;
 }
