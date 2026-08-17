@@ -1670,7 +1670,7 @@ async function renderEmployeeProfile() {
 
   document.getElementById('employeeProfileHeader').innerHTML = `
     <div style="display:flex; align-items:center; gap:14px;">
-      <div class="avatar" style="width:56px;height:56px;border-radius:50%;background:#2a2e38;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:var(--muted);">${(e.full_name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase()}</div>
+      <div class="avatar" style="width:56px;height:56px;border-radius:50%;background:#2a2e38;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:var(--muted); overflow:hidden;">${e.photo_url ? `<img src="${escAttr(e.photo_url)}" style="width:100%;height:100%;object-fit:cover;">` : (e.full_name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase()}</div>
       <div>
         <div style="font-size:20px; font-weight:700;">${escAttr(e.full_name)}</div>
         <div style="color:var(--muted); font-size:13px;">${e.current_period ? escAttr(e.current_period.position_title) + ' · ' + escAttr(e.current_period.department_name) : 'Посада не призначена'} ${employeeStatusTag(e.status)} ${e.tenure ? '· стаж ' + e.tenure : ''}</div>
@@ -1722,6 +1722,7 @@ function renderPersonalTab(e) {
   document.getElementById('profilePersonal').innerHTML = `
     <div class="fieldGrid">
       <div class="fieldItem"><label>ПІБ</label><input type="text" id="pFullName" value="${escAttr(e.full_name)}"></div>
+      <div class="fieldItem"><label>Фото (URL)</label><input type="text" id="pPhotoUrl" value="${escAttr(e.photo_url || '')}" placeholder="посилання на фото"></div>
       <div class="fieldItem"><label>Дата народження</label><input type="date" id="pBirthDate" value="${e.birth_date ? e.birth_date.slice(0, 10) : ''}"></div>
       <div class="fieldItem"><label>Стать</label>
         <select id="pGender">
@@ -1765,6 +1766,7 @@ function renderPersonalTab(e) {
 async function savePersonalTab() {
   const body = {
     full_name: document.getElementById('pFullName').value.trim(),
+    photo_url: document.getElementById('pPhotoUrl').value.trim(),
     birth_date: document.getElementById('pBirthDate').value || null,
     gender: document.getElementById('pGender').value,
     phone: document.getElementById('pPhone').value.trim(),
@@ -3701,13 +3703,14 @@ async function loadOrg() {
         </div>
         ${dept.purpose ? `<div class="posMeta" style="margin:-4px 0 8px; font-style:italic;">ЦКП: ${escAttr(dept.purpose)}</div>` : ''}
         ${positions.map((p) => `
-          <div class="posRow">
+          <div class="posRow${p.current_employee_id ? ' clickable' : ''}" ${p.current_employee_id ? `onclick="openEmployeeProfile(${p.current_employee_id})"` : ''}>
             <div>
               <div class="posTitle">${escAttr(p.title)} ${p.is_department_head ? '<span class="tag accent">керівник</span>' : ''}</div>
               <div class="posMeta">${p.current_employee_name ? escAttr(p.current_employee_name) : positionStatusLabel(p.status)}${p.reports_to_title ? ' · підпорядк.: ' + escAttr(p.reports_to_title) : ''}</div>
               ${p.purpose ? `<div class="posMeta" style="font-style:italic;">ЦКП: ${escAttr(p.purpose)}</div>` : ''}
+              ${p.note ? `<div class="posMeta">${escAttr(p.note)}</div>` : ''}
             </div>
-            <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="editPosition(${p.id})">✎</button>
+            <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="event.stopPropagation(); editPosition(${p.id})">✎</button>
           </div>
         `).join('')}
         ${children.length ? `<div class="deptChildren">${children.map(renderDept).join('')}</div>` : ''}
