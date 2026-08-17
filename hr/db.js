@@ -1176,65 +1176,98 @@ async function createEmployee({ full_name, birth_date, gender, phone, personal_e
   }
 }
 
-// Одноразовий (за суттю ідемпотентний) імпорт реального списку
-// співробітників (seed-org-import.js) — департаменти зі списку створюються,
-// якщо їх ще нема, кожен рядок стає окремою штатною одиницею (Position) +
-// Person + Employee, якщо людини з таким ПІБ ще немає в базі (щоб рестарт
-// сервера не плодив дублі). "Директор" зі списку резолвиться в
-// manager_employee_id (Employment Period) і reports_to_position_id
-// (Position), якщо ця людина теж є в цьому ж списку — інакше лишається
-// порожнім (напр. власник компанії чи людина з іншої юрособи, якої немає
-// серед співробітників). Дат прийому на роботу в списку не було — ставимо
-// дату імпорту, це свідомо неточне значення, яке Тетяна поправить вручну.
-async function seedOrgImport(departmentNames, employeeRows) {
-  const deptIdByName = {};
-  for (const name of departmentNames) {
-    const { rows } = await pool.query('SELECT id FROM hr_departments WHERE name = $1', [name]);
-    deptIdByName[name] = rows.length ? rows[0].id : (await createDepartment({ name })).id;
+// Одноразово: прибирає плоску структуру з попередньої (помилкової) версії
+// цього імпорту — топ-рівневі департаменти з переліком старих назв і все,
+// що на них тримається (посади, employment periods, employees, persons),
+// каскадно. Безпечно на кожному старті: якщо цих департаментів вже нема
+// (прибрані минулого разу), нічого не робить.
+async function cleanupLegacyFlatOrgImport(legacyDepartmentNames) {
+  const { rows: legacyDepts } = await pool.query(
+    `SELECT id FROM hr_departments WHERE name = ANY($1) AND parent_department_id IS NULL`,
+    [legacyDepartmentNames]
+  );
+  if (!legacyDepts.length) return 0;
+  const deptIds = legacyDepts.map((d) => d.id);
+
+  const { rows: positions } = await pool.query(`SELECT id FROM hr_positions WHERE department_id = ANY($1)`, [deptIds]);
+  const positionIds = positions.map((p) => p.id);
+  if (!positionIds.length) {
+    await pool.query(`DELETE FROM hr_departments WHERE id = ANY($1)`, [deptIds]);
+    return deptIds.length;
+  }
+
+  const { rows: periods } = await pool.query(`SELECT employee_id FROM hr_employment_periods WHERE position_id = ANY($1)`, [positionIds]);
+  const employeeIds = [...new Set(periods.map((p) => p.employee_id))];
+
+  await pool.query(`DELETE FROM hr_employment_periods WHERE position_id = ANY($1)`, [positionIds]);
+  if (employeeIds.length) {
+    const { rows: employees } = await pool.query(`SELECT person_id FROM hr_employees WHERE id = ANY($1)`, [employeeIds]);
+    const personIds = employees.map((e) => e.person_id);
+    await pool.query(`DELETE FROM hr_employees WHERE id = ANY($1)`, [employeeIds]);
+    if (personIds.length) await pool.query(`DELETE FROM hr_persons WHERE id = ANY($1)`, [personIds]);
+  }
+  await pool.query(`DELETE FROM hr_positions WHERE id = ANY($1)`, [positionIds]);
+  await pool.query(`DELETE FROM hr_departments WHERE id = ANY($1)`, [deptIds]);
+
+  return deptIds.length;
+}
+
+// Реальна орг-структура Fresh Black за Miro-схемою (контури й ЦКП) з
+// реальними людьми з переліку співробітників (seed-org-import.js).
+// Ідемпотентно за ПІБ — людину з таким full_name повторно не створює.
+// "reports_to"/"department" у вхідних даних — службові ключі, резолвляться
+// в id по ходу (масив вже впорядкований "спочатку батько, потім діти").
+// Дат прийому на роботу не було в переліку — ставимо дату імпорту, це
+// свідомо неточне значення, яке Тетяна поправить вручну в картці кожного
+// співробітника.
+async function seedOrgImport(departmentDefs, positionDefs) {
+  const deptIdByKey = {};
+  for (const dept of departmentDefs) {
+    const { rows } = await pool.query('SELECT id FROM hr_departments WHERE name = $1', [dept.name]);
+    deptIdByKey[dept.key] = rows.length
+      ? rows[0].id
+      : (await createDepartment({ name: dept.name, parent_department_id: dept.parent ? deptIdByKey[dept.parent] : null, purpose: dept.purpose || '' })).id;
   }
 
   let imported = 0;
   let skipped = 0;
-  const employeeIdByName = {};
-  const positionIdByName = {};
+  const positionIdByKey = {};
+  const employeeIdByKey = {};
   const today = new Date().toISOString().slice(0, 10);
 
-  // Скок Олександр Олександрович — "директор" майже для всіх у списку;
-  // створюємо його першим, щоб знати employee_id/position_id заздалегідь
-  // і не робити другий прохід по решті записів.
-  const sorted = [...employeeRows].sort((a, b) => (a.full_name === 'Скок Олександр Олександрович' ? -1 : 0) - (b.full_name === 'Скок Олександр Олександрович' ? -1 : 0));
+  for (const row of positionDefs) {
+    const departmentId = deptIdByKey[row.department];
+    const position = await createPosition({
+      title: row.title,
+      department_id: departmentId,
+      reports_to_position_id: row.reports_to ? positionIdByKey[row.reports_to] || null : null,
+      status: row.status || undefined,
+      purpose: row.purpose || '',
+      note: row.note || ''
+    });
+    positionIdByKey[row.key] = position.id;
 
-  for (const row of sorted) {
-    const { rows: existingPerson } = await pool.query('SELECT id FROM hr_persons WHERE full_name = $1', [row.full_name]);
+    if (!row.employee) continue;
+
+    const { rows: existingPerson } = await pool.query('SELECT id FROM hr_persons WHERE full_name = $1', [row.employee.full_name]);
     if (existingPerson.length) { skipped += 1; continue; }
 
-    // "Директор" у списку іноді — кілька імен через кому (людина оформлена
-    // одразу в двох юрособах, у кожної свій директор) — резолвимо лише
-    // перше ім'я, воно ж основне в рядку.
-    const primaryDirector = (row.director || '').split(',')[0].trim();
-
-    const departmentId = deptIdByName[row.department];
-    const position = await createPosition({
-      title: row.working_title || row.official_title || row.full_name,
-      department_id: departmentId,
-      reports_to_position_id: positionIdByName[primaryDirector] || null,
-      note: row.official_title ? `Офіційна посада: ${row.official_title}` : ''
-    });
-    positionIdByName[row.full_name] = position.id;
+    const managerPositionKey = row.reports_to;
+    const managerEmployeeId = managerPositionKey ? employeeIdByKey[managerPositionKey] || null : null;
 
     const employee = await createEmployee({
-      full_name: row.full_name,
-      telegram: row.telegram || '',
-      employee_number: row.employee_number || null,
+      full_name: row.employee.full_name,
+      telegram: row.employee.telegram || '',
+      employee_number: row.employee.employee_number || null,
       status: 'Active',
       position_id: position.id,
       department_id: departmentId,
-      manager_employee_id: employeeIdByName[primaryDirector] || null,
+      manager_employee_id: managerEmployeeId,
       start_date: today,
-      employment_type: row.employment_type || '',
+      employment_type: row.employee.employment_type || '',
       created_by: 'seed-org-import'
     });
-    employeeIdByName[row.full_name] = employee.id;
+    employeeIdByKey[row.key] = employee.id;
     imported += 1;
   }
 
@@ -3942,6 +3975,7 @@ export default {
   getEmployee,
   createEmployee,
   seedOrgImport,
+  cleanupLegacyFlatOrgImport,
   updatePersonFields,
   updateEmployeeStatus,
   updateEmployeeFields,

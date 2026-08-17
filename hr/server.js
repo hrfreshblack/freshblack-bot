@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import db from './db.js';
 import seedAccounts from './seed-accounts.js';
-import { DEPARTMENTS as SEED_DEPARTMENTS, EMPLOYEES as SEED_EMPLOYEES } from './seed-org-import.js';
+import { DEPARTMENTS as SEED_DEPARTMENTS, POSITIONS as SEED_POSITIONS, LEGACY_TOP_LEVEL_DEPARTMENTS } from './seed-org-import.js';
 import { signSsoToken, verifySsoToken } from './sso.js';
 
 const resumeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -2012,7 +2012,10 @@ app.get('/api/resumes/:id/download', async (req, res) => {
       await db.createAccountIfMissingWithHash(account);
     }
 
-    const orgImportResult = await db.seedOrgImport(SEED_DEPARTMENTS, SEED_EMPLOYEES);
+    const legacyRemoved = await db.cleanupLegacyFlatOrgImport(LEGACY_TOP_LEVEL_DEPARTMENTS);
+    if (legacyRemoved) console.log(`Removed legacy flat org structure: ${legacyRemoved} departments`);
+
+    const orgImportResult = await db.seedOrgImport(SEED_DEPARTMENTS, SEED_POSITIONS);
     console.log(`Org structure import: ${orgImportResult.imported} imported, ${orgImportResult.skipped} already existed`);
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);
