@@ -1505,32 +1505,46 @@ async function getVacancyRequest(id) {
 
 const VACANCY_REQUEST_NULLABLE_FIELDS = new Set(['hiring_manager_employee_id', 'desired_start_date']);
 
-// Без AI — та сама евристика, що й для резюме (ТЗ п.11): шукаємо в тексті
-// рядок "Label: значення" (label — один із відомих варіантів написання
-// поля), якщо значення порожнє — беремо наступний непорожній рядок. Завжди
-// можна доправити вручну в модалці після імпорту, це лише чернетка.
-const VACANCY_REQUEST_FIELD_LABELS = {
-  position_title: ['посада', 'назва посади'],
-  quantity: ['кількість', 'к-сть', 'кількість вакансій'],
-  priority: ['пріоритет'],
-  desired_start_date: ['бажана дата старту', 'дата старту', 'дата початку'],
-  request_reason: ['причина заявки', 'причина'],
-  responsibilities: ["обов'язки", 'обов’язки', 'обовязки'],
-  ideal_candidate_portrait: ['портрет ідеального кандидата', 'портрет кандидата'],
-  skills_professional: ['професійні навички'],
-  skills_technical: ['технічні навички'],
-  skills_additional: ['додаткові навички'],
-  product_knowledge: ['знання продукту'],
-  personal_qualities_required: ["обов'язкові особисті якості", 'особисті якості обов’язкові', 'особисті якості (обов\'язкові)'],
-  personal_qualities_desired: ['бажані особисті якості', 'особисті якості бажані', 'особисті якості (бажані)'],
-  compensation_trial: ['оплата на стажуванні', 'оплата стажування'],
-  compensation_probation: ['оплата на випробувальному'],
-  compensation_after_probation: ['оплата після випробувального'],
-  compensation_bonus_formula: ['формула бонусу', 'бонус'],
-  probation_goals: ['цілі випробувального'],
-  career_growth: ["кар'єрний ріст", 'кар’єрний ріст', 'кар\'єрне зростання'],
-  notes: ['нотатки', 'примітки']
-};
+// Без AI — евристика по секціях (не по окремих рядках), бо реальний
+// шаблон заявки (Word) не має вигляду "Мітка: значення" рівномірно —
+// десь мітка й значення в одному абзаці через двокрапку ("Назва
+// посади/роль: ..."), десь мітка сама по собі, а значення — у
+// наступному абзаці ("Портрет «Ідеального кандидата» (...)" і абзац
+// нижче), десь мітка приклеєна прямо до нумерованого списку без
+// жодного розділювача ("Завдання найближчим часом1. Вивчити..."). Для
+// кожного поля — перелік варіантів формулювання мітки (перевіряються
+// по черзі); коли після мітки в тому самому абзаці нічого не
+// лишається — значенням стають наступні абзаци аж до наступної
+// впізнаної мітки. Завжди можна доправити вручну в модалці, це лише
+// чернетка.
+const VACANCY_REQUEST_HEADINGS = [
+  { field: 'position_title', phrases: ['назва посади/роль', 'назва посади', 'посада'] },
+  { field: 'ideal_candidate_portrait', phrases: ['портрет «ідеального кандидата»', 'портрет "ідеального кандидата"', 'портрет ідеального кандидата', 'портрет'] },
+  { field: 'responsibilities', phrases: ['що фахівець має вміти та які завдання виконувати', "обов'язки", 'обов’язки'] },
+  { field: 'skills_professional', phrases: ["обов'язкові професійні навички", 'обов’язкові професійні навички'] },
+  { field: 'skills_technical', phrases: ["обов'язкові технічні навички", 'обов’язкові технічні навички'] },
+  { field: 'skills_additional', phrases: ['бажані додаткові навички'] },
+  { field: 'product_knowledge', phrases: ['знання продукту'] },
+  { field: 'personal_qualities_required', phrases: ["обов'язкові:", 'обов’язкові:'] },
+  { field: 'personal_qualities_desired', phrases: ['бажані:'] },
+  { field: 'compensation_probation', phrases: ['на випробувальний термін', 'оплата на випробувальному'] },
+  { field: 'compensation_after_probation', phrases: ['після випробувального терміну', 'оплата після випробувального'] },
+  { field: 'probation_goals', phrases: ['завдання найближчим часом', 'цілі випробувального'] },
+  { field: 'career_growth', phrases: ['перспективи роботи на посаді', "кар'єрний ріст", 'кар’єрний ріст'] },
+  { field: 'request_reason', phrases: ['причина заявки', 'причина'] },
+  { field: 'quantity', phrases: ['кількість', 'к-сть'] },
+  { field: 'priority', phrases: ['пріоритет'] },
+  { field: 'notes', phrases: ['підпорядкування', 'нотатки', 'примітки'] }
+];
+
+// Заголовки-розділювачі без власного поля (напр. просто групують кілька
+// підпунктів нижче) — самі нічого не збирають, але позначають межу, щоб
+// текст із НИХ не потрапив у значення попереднього поля.
+const VACANCY_REQUEST_BOUNDARY_HEADINGS = [
+  'основна інформація про посаду', 'опис навичок кандидата', 'особистісні якості',
+  'заробітна плата', 'найцікавіше в роботі на цій позиції', 'додаткові навички',
+  'підписи', 'заявка на відкриття вакансії'
+];
 
 const PRIORITY_ALIASES = {
   низький: 'Low', low: 'Low',
@@ -1539,27 +1553,54 @@ const PRIORITY_ALIASES = {
   терміново: 'Urgent', термінові: 'Urgent', urgent: 'Urgent', критично: 'Urgent'
 };
 
+// Якщо блок починається з фрази — прибирає її саму, необов'язкове
+// уточнення в дужках одразу після (напр. "(за потреби)") і розділювач
+// (двокрапка/тире), повертає залишок (може бути порожнім рядком —
+// означає "мітка сама по собі, значення далі").
+function stripHeadingPrefix(block, phrase) {
+  if (!block.toLowerCase().startsWith(phrase.toLowerCase())) return null;
+  let rest = block.slice(phrase.length);
+  rest = rest.replace(/^\s*\([^)]*\)/, '');
+  rest = rest.replace(/^\s*[:—–-]\s*/, '');
+  rest = rest.replace(/^\s*\([^)]*\)/, '');
+  return rest.trim();
+}
+
+function isKnownHeadingBlock(block) {
+  if (VACANCY_REQUEST_HEADINGS.some((h) => h.phrases.some((p) => stripHeadingPrefix(block, p) !== null))) return true;
+  return VACANCY_REQUEST_BOUNDARY_HEADINGS.some((p) => stripHeadingPrefix(block, p) !== null);
+}
+
 function parseVacancyRequestFieldsFromText(text) {
-  const lines = text.split('\n').map((l) => l.trim());
+  const blocks = text.split(/\n+/).map((b) => b.trim()).filter(Boolean);
   const found = {};
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    const m = line.match(/^([^:—-]{2,40})[:—-]\s*(.*)$/);
-    if (!m) continue;
-    const rawLabel = m[1].trim().toLowerCase();
-    let value = m[2].trim();
-    for (const [field, labels] of Object.entries(VACANCY_REQUEST_FIELD_LABELS)) {
-      if (found[field]) continue;
-      if (!labels.includes(rawLabel)) continue;
-      if (!value) {
-        const next = lines.slice(i + 1).find(Boolean);
-        value = next || '';
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    for (const heading of VACANCY_REQUEST_HEADINGS) {
+      if (found[heading.field]) continue;
+      let matchedRest = null;
+      for (const phrase of heading.phrases) {
+        const rest = stripHeadingPrefix(block, phrase);
+        if (rest !== null) { matchedRest = rest; break; }
       }
-      if (value) found[field] = value;
+      if (matchedRest === null) continue;
+
+      if (matchedRest) {
+        found[heading.field] = matchedRest;
+      } else {
+        const collected = [];
+        let j = i + 1;
+        while (j < blocks.length && collected.length < 6 && !isKnownHeadingBlock(blocks[j])) {
+          collected.push(blocks[j]);
+          j++;
+        }
+        if (collected.length) found[heading.field] = collected.join(' ');
+      }
       break;
     }
   }
+
   if (found.quantity) {
     const n = parseInt(found.quantity, 10);
     found.quantity = Number.isFinite(n) && n > 0 ? n : 1;
@@ -1567,14 +1608,6 @@ function parseVacancyRequestFieldsFromText(text) {
   if (found.priority) {
     found.priority = PRIORITY_ALIASES[found.priority.toLowerCase()] || '';
     if (!found.priority) delete found.priority;
-  }
-  if (found.desired_start_date) {
-    const ddmmyyyy = found.desired_start_date.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);
-    if (ddmmyyyy) {
-      found.desired_start_date = `${ddmmyyyy[3]}-${ddmmyyyy[2].padStart(2, '0')}-${ddmmyyyy[1].padStart(2, '0')}`;
-    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(found.desired_start_date)) {
-      delete found.desired_start_date;
-    }
   }
   return found;
 }
@@ -3975,6 +4008,7 @@ export default {
   getEmployee,
   createEmployee,
   seedOrgImport,
+  parseVacancyRequestFieldsFromText,
   cleanupLegacyFlatOrgImport,
   updatePersonFields,
   updateEmployeeStatus,
