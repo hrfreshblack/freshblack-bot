@@ -658,6 +658,100 @@ async function listStock({ search = '' } = {}) {
   }));
 }
 
+// Аналітика по ходових позиціях (для дашборду "Що продається / що
+// терміново поповнити"). Без AI/ML — прості формули з реальних рухів:
+//   швидкість (шт/день) = відвантажено за останні 30 днів / 30
+//   днів до вичерпання = поточний залишок / швидкість
+//   статус: "дефіцит" — залишок вже <= min_stock (або <= 0, якщо min_stock
+//     не задано); "терміново" — ще не дефіцит, але за поточним темпом
+//     скінчиться за 7 днів; інакше "ОК"
+//   пропозиція поповнити = скільки треба виготовити/замовити, щоб покрити
+//     або min_stock, або ~14 днів продажів (що більше) — орієнтир, не
+//     точний прогноз
+async function getProductAnalytics() {
+  const now = new Date();
+  const d30 = new Date(now.getTime() - 30 * 86400000);
+  const d60 = new Date(now.getTime() - 60 * 86400000);
+
+  const { rows: products } = await pool.query(`
+    SELECT p.code, p.name, p.short_name, p.unit, p.station, p.min_stock,
+           COALESCE(SUM(m.signed_qty), 0) AS balance
+    FROM products p
+    LEFT JOIN stock_movements m ON m.product_code = p.code
+    WHERE p.is_stock_item = true AND p.category NOT IN ('зелена кава', 'напівфабрикат') AND p.active = true
+    GROUP BY p.code, p.name, p.short_name, p.unit, p.station, p.min_stock
+  `);
+
+  const { rows: ship30Rows } = await pool.query(
+    `SELECT product_code, COALESCE(SUM(qty), 0) AS qty FROM stock_movements
+     WHERE movement_type = 'shipment' AND movement_date >= $1 GROUP BY product_code`,
+    [d30]
+  );
+  const { rows: shipPrevRows } = await pool.query(
+    `SELECT product_code, COALESCE(SUM(qty), 0) AS qty FROM stock_movements
+     WHERE movement_type = 'shipment' AND movement_date >= $1 AND movement_date < $2 GROUP BY product_code`,
+    [d60, d30]
+  );
+  const { rows: lastShipRows } = await pool.query(
+    `SELECT product_code, MAX(movement_date) AS last_date FROM stock_movements
+     WHERE movement_type = 'shipment' GROUP BY product_code`
+  );
+  const { rows: orders30Rows } = await pool.query(
+    `SELECT COUNT(DISTINCT order_number)::int AS count FROM order_lines
+     WHERE status = 'відвантажено' AND ship_date >= $1`,
+    [d30]
+  );
+
+  const ship30Map = Object.fromEntries(ship30Rows.map((r) => [r.product_code, Number(r.qty)]));
+  const shipPrevMap = Object.fromEntries(shipPrevRows.map((r) => [r.product_code, Number(r.qty)]));
+  const lastShipMap = Object.fromEntries(lastShipRows.map((r) => [r.product_code, r.last_date]));
+
+  const enriched = products.map((p) => {
+    const balance = Number(p.balance);
+    const minStock = Number(p.min_stock);
+    const qty30 = ship30Map[p.code] || 0;
+    const qtyPrev30 = shipPrevMap[p.code] || 0;
+    const velocity = qty30 / 30;
+    const daysLeft = velocity > 0 ? Math.round((balance / velocity) * 10) / 10 : null;
+    const lastShipDate = lastShipMap[p.code] || null;
+    const daysSinceLastShip = lastShipDate ? Math.round((now - new Date(lastShipDate)) / 86400000) : null;
+    const trendPct = qtyPrev30 > 0 ? Math.round(((qty30 - qtyPrev30) / qtyPrev30) * 1000) / 10 : null;
+
+    const isDeficitNow = balance <= 0 || (minStock > 0 && balance < minStock);
+    const isUrgentSoon = !isDeficitNow && velocity > 0 && daysLeft !== null && daysLeft <= 7;
+    const status = isDeficitNow ? 'deficit' : (isUrgentSoon ? 'urgent' : 'ok');
+
+    const targetStock = Math.max(minStock, Math.ceil(velocity * 14));
+    const suggestedQty = status !== 'ok' ? Math.max(0, Math.ceil(targetStock - balance)) : 0;
+
+    return {
+      code: p.code, name: p.name, short_name: p.short_name, unit: p.unit, station: p.station,
+      min_stock: minStock, balance, qty30, trendPct,
+      velocity: Math.round(velocity * 100) / 100, daysLeft, daysSinceLastShip, status, suggestedQty
+    };
+  });
+
+  const topMovers = enriched.filter((p) => p.qty30 > 0).sort((a, b) => b.qty30 - a.qty30).slice(0, 15);
+  const urgentList = enriched.filter((p) => p.status !== 'ok')
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'deficit' ? -1 : 1;
+      return (a.daysLeft ?? -1) - (b.daysLeft ?? -1);
+    });
+  const deadStock = enriched.filter((p) => p.balance > 0 && (p.daysSinceLastShip === null || p.daysSinceLastShip > 60))
+    .sort((a, b) => b.balance - a.balance).slice(0, 15);
+
+  return {
+    shippedQty30d: Math.round(enriched.reduce((s, p) => s + p.qty30, 0) * 10) / 10,
+    shippedOrders30d: orders30Rows[0]?.count || 0,
+    deficitCount: enriched.filter((p) => p.status === 'deficit').length,
+    urgentCount: enriched.filter((p) => p.status === 'urgent').length,
+    deadStockCount: enriched.filter((p) => p.balance > 0 && (p.daysSinceLastShip === null || p.daysSinceLastShip > 60)).length,
+    topMovers,
+    urgentList,
+    deadStock
+  };
+}
+
 async function listMovements(code, limit = 50) {
   const { rows } = await pool.query(
     'SELECT * FROM stock_movements WHERE product_code = $1 ORDER BY id DESC LIMIT $2',
@@ -2778,6 +2872,7 @@ export default {
   insertBackdatedInventoryBaseline,
   fixBackdatedInventoryMovement,
   listStock,
+  getProductAnalytics,
   listStations,
   createTask,
   listTasks,
