@@ -281,39 +281,84 @@
   </div>
 
   <div id="viewAnalytics" style="display:none;">
-    <div class="kpiRow" id="anKpis"></div>
-
-    <div class="analyticsBlock">
-      <h3 title="Топ-15 складських товарів за кількістю відвантаженого за останні 30 днів, із трендом до попередніх 30 днів">Ходові позиції (топ-15 за 30 днів)</h3>
-      <div class="tableWrap">
-        <table>
-          <thead><tr><th>Код</th><th>Назва</th><th>Відвантажено (30 дн)</th><th>Тренд</th><th>Залишок зараз</th></tr></thead>
-          <tbody id="anTopMoversBody"></tbody>
-        </table>
-      </div>
-      <div class="empty" id="anTopMoversEmpty" style="display:none;">За останні 30 днів відвантажень ще не було.</div>
+    <div class="chips" style="margin-bottom: 14px;">
+      <button id="anSubTabProducts" class="active" onclick="showAnalyticsSubTab('products')">Товари</button>
+      <button id="anSubTabMaterials" onclick="showAnalyticsSubTab('materials')">Розхідники</button>
     </div>
 
-    <div class="analyticsBlock">
-      <h3 title="Дефіцит — залишок вже нижче мінімального запасу (або від'ємний). Терміново — ще не дефіцит, але за поточним темпом продажів скінчиться за 7 днів. Пропозиція — скільки треба поповнити, щоб покрити мінімальний запас або ~14 днів продажів (що більше)">Термінові поповнення</h3>
-      <div class="tableWrap">
-        <table>
-          <thead><tr><th>Код</th><th>Назва</th><th>Залишок</th><th>Мін. запас</th><th>Швидкість (шт/день)</th><th>Днів лишилось</th><th>Стан</th><th>Поповнити на</th></tr></thead>
-          <tbody id="anUrgentBody"></tbody>
-        </table>
+    <div id="anSubViewProducts">
+      <div class="kpiRow" id="anKpis"></div>
+
+      <div class="analyticsBlock">
+        <h3 title="Топ-15 складських товарів за кількістю відвантаженого за останні 30 днів, із трендом до попередніх 30 днів">Ходові позиції (топ-15 за 30 днів)</h3>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>Код</th><th>Назва</th><th>Відвантажено (30 дн)</th><th>Тренд</th><th>Залишок зараз</th></tr></thead>
+            <tbody id="anTopMoversBody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="anTopMoversEmpty" style="display:none;">За останні 30 днів відвантажень ще не було.</div>
       </div>
-      <div class="empty" id="anUrgentEmpty" style="display:none;">Термінових поповнень немає.</div>
+
+      <div class="analyticsBlock">
+        <h3 title="Дефіцит — залишок вже нижче мінімального запасу (або від'ємний). Терміново — ще не дефіцит, але за поточним темпом продажів скінчиться за 7 днів. Пропозиція — скільки треба поповнити, щоб покрити мінімальний запас або ~14 днів продажів (що більше)">Термінові поповнення</h3>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>Код</th><th>Назва</th><th>Залишок</th><th>Мін. запас</th><th>Швидкість (шт/день)</th><th>Днів лишилось</th><th>Стан</th><th>Поповнити на</th></tr></thead>
+            <tbody id="anUrgentBody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="anUrgentEmpty" style="display:none;">Термінових поповнень немає.</div>
+      </div>
+
+      <div class="analyticsBlock">
+        <h3 title="Складські товари з залишком > 0, які не відвантажувались понад 60 днів (або не відвантажувались жодного разу) — кандидати переглянути, чи варто далі виробляти">Не рухається (60+ днів)</h3>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>Код</th><th>Назва</th><th>Залишок</th><th>Днів без відвантаження</th></tr></thead>
+            <tbody id="anDeadStockBody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="anDeadStockEmpty" style="display:none;">Такого немає — усе, що є на складі, рухається.</div>
+      </div>
     </div>
 
-    <div class="analyticsBlock">
-      <h3 title="Складські товари з залишком > 0, які не відвантажувались понад 60 днів (або не відвантажувались жодного разу) — кандидати переглянути, чи варто далі виробляти">Не рухається (60+ днів)</h3>
-      <div class="tableWrap">
-        <table>
-          <thead><tr><th>Код</th><th>Назва</th><th>Залишок</th><th>Днів без відвантаження</th></tr></thead>
-          <tbody id="anDeadStockBody"></tbody>
-        </table>
+    <div id="anSubViewMaterials" style="display:none;">
+      <div class="kpiRow" id="anMatKpis"></div>
+      <p style="color: var(--muted); margin: 0 0 14px;" id="anMatDataNote"></p>
+
+      <div class="analyticsBlock">
+        <h3 title="Наліпки, де фізична наявність позначена 'закінчується' або 'немає' — окремо видно, чи вже щось замовлено/у друці, чи ще ніхто не почав">Наліпки, що потребують уваги</h3>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>Назва</th><th>Розмір</th><th>Залишок</th><th>Наявність</th><th>Статус замовлення</th></tr></thead>
+            <tbody id="anStickersBody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="anStickersEmpty" style="display:none;">Наліпок, що потребують уваги, немає.</div>
       </div>
-      <div class="empty" id="anDeadStockEmpty" style="display:none;">Такого немає — усе, що є на складі, рухається.</div>
+
+      <div class="analyticsBlock">
+        <h3 title="Матеріали вже нижче мінімального запасу (дефіцит), або — там, де є дані про списання — скоро скінчаться за поточним темпом (терміново, з урахуванням реального 'Періоду замовлення' від постачальника, якщо він заданий)">Термінові поповнення (матеріали)</h3>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>Тип</th><th>Назва</th><th>Залишок</th><th>Мін. запас</th><th>Швидкість (/день)</th><th>Днів лишилось</th><th>Стан</th><th>Поповнити на</th></tr></thead>
+            <tbody id="anMatUrgentBody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="anMatUrgentEmpty" style="display:none;">Термінових поповнень серед матеріалів немає.</div>
+      </div>
+
+      <div class="analyticsBlock">
+        <h3 title="Топ-15 матеріалів за кількістю, списаною у виробництво за останні 30 днів — працює лише там, де рухи 'списання' вносяться регулярно">Найбільше витрачається (топ-15 за 30 днів)</h3>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>Тип</th><th>Назва</th><th>Списано (30 дн)</th><th>Тренд</th><th>Залишок зараз</th></tr></thead>
+            <tbody id="anMatTopBody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="anMatTopEmpty" style="display:none;">За останні 30 днів рухів списання ще не було.</div>
+      </div>
     </div>
   </div>
 
@@ -1226,6 +1271,92 @@ async function loadAnalytics() {
         <td>${p.name || p.short_name || ''}</td>
         <td class="balance">${fmt(p.balance)}</td>
         <td>${p.daysSinceLastShip == null ? 'ніколи' : fmt(p.daysSinceLastShip)}</td>
+      </tr>
+    `).join('');
+  }
+}
+
+let materialAnalyticsLoaded = false;
+
+function showAnalyticsSubTab(tab) {
+  document.getElementById('anSubViewProducts').style.display = tab === 'products' ? '' : 'none';
+  document.getElementById('anSubViewMaterials').style.display = tab === 'materials' ? '' : 'none';
+  document.getElementById('anSubTabProducts').classList.toggle('active', tab === 'products');
+  document.getElementById('anSubTabMaterials').classList.toggle('active', tab === 'materials');
+  if (tab === 'materials' && !materialAnalyticsLoaded) { materialAnalyticsLoaded = true; loadMaterialAnalytics(); }
+}
+
+function stickerAvailabilityTag(status) {
+  if (status === 'немає') return '<span class="tag bad">немає</span>';
+  if (status === 'закінчується') return '<span class="tag warn">закінчується</span>';
+  return '<span class="tag neutral">' + (status || '—') + '</span>';
+}
+
+async function loadMaterialAnalytics() {
+  const resp = await fetch('/api/analytics/materials');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  const a = data.analytics;
+
+  document.getElementById('anMatKpis').innerHTML = `
+    <div class="kpiCard"><div class="kpiValue" style="color:var(--bad, #e5484d);">${a.deficitCount}</div><div class="kpiLabel" title="Залишок вже нижче мінімального запасу (або від'ємний) — рахується лише для матеріалів, по яких хоч раз вносили рух або задано мін. запас">Матеріалів у дефіциті</div></div>
+    <div class="kpiCard"><div class="kpiValue" style="color:#e0a030;">${a.urgentCount}</div><div class="kpiLabel" title="Ще не дефіцит, але за поточним темпом списання скінчиться раніше, ніж прийде нове замовлення (Період замовлення, або 7 днів, якщо він не заданий)">Термінових поповнень</div></div>
+    <div class="kpiCard"><div class="kpiValue" style="color:#e5484d;">${a.stickersNotYetOrderedCount}</div><div class="kpiLabel" title="Наліпки з наявністю 'закінчується'/'немає', по яких ще НІЧОГО не замовлено/не в друці">Наліпки без замовлення</div></div>
+    <div class="kpiCard"><div class="kpiValue">${a.stickersNeedAttentionCount}</div><div class="kpiLabel" title="Усі наліпки з наявністю 'закінчується' або 'немає', незалежно від статусу замовлення">Наліпки потребують уваги (всього)</div></div>
+    <div class="kpiCard"><div class="kpiValue">${a.notYetTrackedCount}</div><div class="kpiLabel" title="Матеріали, по яких ще НІ РАЗУ не внесено жодного руху і не задано мін. запас — по них ще не можна сказати, дефіцит це чи ні">Ще не обліковано</div></div>
+  `;
+
+  document.getElementById('anMatDataNote').textContent = a.notYetTrackedCount > 0
+    ? `${a.notYetTrackedCount} матеріалів ще жодного разу не мали внесеного руху і без заданого мін. запасу — по них аналітика поки нічого не показує (не "ОК", а просто немає даних), доки не внесеш хоча б один рух (напр. інвентаризацію) або мін. запас. І доки рухи "списання у виробництво" не вносяться регулярно (авто-списання ще не підключене), швидкість і "днів лишилось" будуть порожні майже для всіх позицій — це очікувано, не помилка.`
+    : '';
+
+  const stickersBody = document.getElementById('anStickersBody');
+  const stickersEmpty = document.getElementById('anStickersEmpty');
+  if (!a.stickersNeedAttention.length) { stickersBody.innerHTML = ''; stickersEmpty.style.display = 'block'; }
+  else {
+    stickersEmpty.style.display = 'none';
+    stickersBody.innerHTML = a.stickersNeedAttention.map((s) => `
+      <tr>
+        <td>${s.name}</td>
+        <td>${s.size_label || '—'}</td>
+        <td class="balance">${fmt(s.balance)}</td>
+        <td>${stickerAvailabilityTag(s.availability_status)}</td>
+        <td>${s.process_status ? '<span class="tag ' + (s.process_status === 'отримано' ? 'ok' : 'warn') + '">' + s.process_status + '</span>' : '<span class="tag bad">не замовлено</span>'}</td>
+      </tr>
+    `).join('');
+  }
+
+  const matUrgentBody = document.getElementById('anMatUrgentBody');
+  const matUrgentEmpty = document.getElementById('anMatUrgentEmpty');
+  if (!a.urgentList.length) { matUrgentBody.innerHTML = ''; matUrgentEmpty.style.display = 'block'; }
+  else {
+    matUrgentEmpty.style.display = 'none';
+    matUrgentBody.innerHTML = a.urgentList.map((m) => `
+      <tr>
+        <td>${m.material_type || '—'}</td>
+        <td>${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</td>
+        <td class="balance">${fmt(m.balance)}</td>
+        <td>${fmt(m.min_stock)}</td>
+        <td>${m.velocity ? fmt(m.velocity) : '—'}</td>
+        <td>${m.daysLeft == null ? '—' : fmt(m.daysLeft)}</td>
+        <td>${analyticsStatusTag(m.status)}</td>
+        <td>${m.suggestedQty ? '+' + fmt(m.suggestedQty) + ' ' + (m.unit || '') : '—'}</td>
+      </tr>
+    `).join('');
+  }
+
+  const matTopBody = document.getElementById('anMatTopBody');
+  const matTopEmpty = document.getElementById('anMatTopEmpty');
+  if (!a.topConsumed.length) { matTopBody.innerHTML = ''; matTopEmpty.style.display = 'block'; }
+  else {
+    matTopEmpty.style.display = 'none';
+    matTopBody.innerHTML = a.topConsumed.map((m) => `
+      <tr>
+        <td>${m.material_type || '—'}</td>
+        <td>${m.name}${m.size_label ? ' (' + m.size_label + ')' : ''}</td>
+        <td>${fmt(m.qty30)} ${m.unit || ''}</td>
+        <td>${m.trendPct == null ? '—' : (m.trendPct > 0 ? '▲ +' : m.trendPct < 0 ? '▼ ' : '') + m.trendPct + '%'}</td>
+        <td class="balance">${fmt(m.balance)}</td>
       </tr>
     `).join('');
   }
