@@ -752,6 +752,137 @@ async function getProductAnalytics() {
   };
 }
 
+// Те саме, що getProductAnalytics(), але для розхідників (пакувальні
+// матеріали) — і окремо для наліпок, бо в них зовсім інша логіка обліку.
+//
+// Звичайні матеріали (пачка/плівка/коробка тощо): та сама формула
+// швидкість/днів-до-вичерпання/пропозиція, що й для товарів, але з двома
+// відмінностями, які тут справді важливі:
+//   - швидкість рахується з рухів "consumption" (списано у виробництво),
+//     а не з відвантажень — і поки що таких рухів реально майже немає
+//     (авто-списання розхідників при виконанні задачі ще не підключене,
+//     див. WAREHOUSE.md "Чого ще немає") — тому для більшості позицій
+//     швидкість буде 0, і статус визначатиметься лише простим порівнянням
+//     залишок/мін.запас, доки Тетяна не почне вносити рухи списання;
+//   - "терміново" рахується не за фіксованих 7 днів, а за реальним
+//     "Періодом замовлення" (reorder_period_days, скільки йде постачання
+//     від постачальника) там, де він заданий — бо на відміну від кави
+//     (яку самі смажать хоч сьогодні), пакування треба ЗАМОВЛЯТИ заздалегідь.
+//
+// Наліпки: тут немає жодних рухів списання по факту (кількість — просто
+// число, яке правиться вручну), тому аналітика для них — не швидкість, а
+// два реальні статуси, які Тетяна й так веде: "потребує уваги" — фізична
+// наявність закінчується/немає, а НЕ показує окремим прапорцем, чи вже
+// щось із цим роблять (process_status "замовлено"/"в друці") — щоб
+// відрізняти "ще ніхто не почав замовляти" від "уже в процесі".
+async function getMaterialAnalytics() {
+  const now = new Date();
+  const d30 = new Date(now.getTime() - 30 * 86400000);
+  const d60 = new Date(now.getTime() - 60 * 86400000);
+
+  const { rows: materials } = await pool.query(`
+    SELECT m.id, m.name, m.material_type, m.size_label, m.unit, m.min_stock, m.reorder_period_days,
+           COALESCE(SUM(mm.signed_qty), 0) AS balance, COUNT(mm.id) AS movement_count
+    FROM materials m
+    LEFT JOIN material_movements mm ON mm.material_id = m.id
+    WHERE m.active = true AND m.material_type != 'наліпка'
+    GROUP BY m.id
+  `);
+
+  const { rows: cons30Rows } = await pool.query(
+    `SELECT material_id, COALESCE(SUM(qty), 0) AS qty FROM material_movements
+     WHERE movement_type = 'consumption' AND movement_date >= $1 GROUP BY material_id`,
+    [d30]
+  );
+  const { rows: consPrevRows } = await pool.query(
+    `SELECT material_id, COALESCE(SUM(qty), 0) AS qty FROM material_movements
+     WHERE movement_type = 'consumption' AND movement_date >= $1 AND movement_date < $2 GROUP BY material_id`,
+    [d60, d30]
+  );
+  const { rows: lastConsRows } = await pool.query(
+    `SELECT material_id, MAX(movement_date) AS last_date FROM material_movements
+     WHERE movement_type = 'consumption' GROUP BY material_id`
+  );
+
+  const cons30Map = Object.fromEntries(cons30Rows.map((r) => [r.material_id, Number(r.qty)]));
+  const consPrevMap = Object.fromEntries(consPrevRows.map((r) => [r.material_id, Number(r.qty)]));
+  const lastConsMap = Object.fromEntries(lastConsRows.map((r) => [r.material_id, r.last_date]));
+
+  const enriched = materials.map((m) => {
+    const balance = Number(m.balance);
+    const minStock = Number(m.min_stock);
+    const leadDays = m.reorder_period_days ? Number(m.reorder_period_days) : null;
+    const qty30 = cons30Map[m.id] || 0;
+    const qtyPrev30 = consPrevMap[m.id] || 0;
+    const velocity = qty30 / 30;
+    const daysLeft = velocity > 0 ? Math.round((balance / velocity) * 10) / 10 : null;
+    const lastConsDate = lastConsMap[m.id] || null;
+    const daysSinceLastConsumption = lastConsDate ? Math.round((now - new Date(lastConsDate)) / 86400000) : null;
+    const trendPct = qtyPrev30 > 0 ? Math.round(((qty30 - qtyPrev30) / qtyPrev30) * 1000) / 10 : null;
+
+    // Матеріал, для якого НІКОЛИ не вносили жодного руху (навіть початкову
+    // "інвентаризацію") і не задавали мін. запас — це не "дефіцит", це
+    // "ще не почали обліковувати". Інакше кожен щойно довантажений з SAP
+    // розхідник (балас=0 просто тому, що по ньому нічого не записано)
+    // помилково зафарбовувався б як дефіцит.
+    const isTracked = Number(m.movement_count) > 0 || minStock > 0;
+    const isDeficitNow = isTracked && (balance <= 0 || (minStock > 0 && balance < minStock));
+    const urgentThresholdDays = leadDays || 7;
+    const isUrgentSoon = isTracked && !isDeficitNow && velocity > 0 && daysLeft !== null && daysLeft <= urgentThresholdDays;
+    const status = !isTracked ? 'no_data' : (isDeficitNow ? 'deficit' : (isUrgentSoon ? 'urgent' : 'ok'));
+
+    const targetStock = Math.max(minStock, Math.ceil(velocity * (leadDays || 14)));
+    const suggestedQty = (status === 'deficit' || status === 'urgent') ? Math.max(0, Math.ceil(targetStock - balance)) : 0;
+
+    return {
+      id: m.id, name: m.name, material_type: m.material_type, size_label: m.size_label, unit: m.unit,
+      min_stock: minStock, reorder_period_days: leadDays, balance, qty30, trendPct,
+      velocity: Math.round(velocity * 100) / 100, daysLeft, daysSinceLastConsumption, status, suggestedQty
+    };
+  });
+
+  const topConsumed = enriched.filter((m) => m.qty30 > 0).sort((a, b) => b.qty30 - a.qty30).slice(0, 15);
+  const urgentList = enriched.filter((m) => m.status === 'deficit' || m.status === 'urgent')
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'deficit' ? -1 : 1;
+      return (a.daysLeft ?? -1) - (b.daysLeft ?? -1);
+    });
+  const withoutMinStockCount = enriched.filter((m) => m.min_stock === 0).length;
+  const notYetTrackedCount = enriched.filter((m) => m.status === 'no_data').length;
+
+  const { rows: stickers } = await pool.query(`
+    SELECT m.id, m.name, m.size_label, m.unit, m.min_stock, COALESCE(SUM(mm.signed_qty), 0) AS balance,
+           m.availability_status, m.process_status
+    FROM materials m
+    LEFT JOIN material_movements mm ON mm.material_id = m.id
+    WHERE m.active = true AND m.material_type = 'наліпка'
+    GROUP BY m.id
+  `);
+  const stickersNeedAttention = stickers
+    .filter((s) => ['закінчується', 'немає'].includes(s.availability_status))
+    .map((s) => ({
+      id: s.id, name: s.name, size_label: s.size_label, balance: Number(s.balance), min_stock: Number(s.min_stock),
+      availability_status: s.availability_status, process_status: s.process_status,
+      inProgress: ['замовлено', 'в друці'].includes(s.process_status)
+    }))
+    .sort((a, b) => {
+      if (a.inProgress !== b.inProgress) return a.inProgress ? 1 : -1;
+      return a.availability_status === 'немає' ? -1 : 1;
+    });
+
+  return {
+    deficitCount: enriched.filter((m) => m.status === 'deficit').length,
+    urgentCount: enriched.filter((m) => m.status === 'urgent').length,
+    withoutMinStockCount,
+    notYetTrackedCount,
+    stickersNeedAttentionCount: stickersNeedAttention.length,
+    stickersNotYetOrderedCount: stickersNeedAttention.filter((s) => !s.inProgress).length,
+    topConsumed,
+    urgentList,
+    stickersNeedAttention
+  };
+}
+
 async function listMovements(code, limit = 50) {
   const { rows } = await pool.query(
     'SELECT * FROM stock_movements WHERE product_code = $1 ORDER BY id DESC LIMIT $2',
@@ -2873,6 +3004,7 @@ export default {
   fixBackdatedInventoryMovement,
   listStock,
   getProductAnalytics,
+  getMaterialAnalytics,
   listStations,
   createTask,
   listTasks,
