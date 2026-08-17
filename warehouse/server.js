@@ -236,6 +236,16 @@ app.get('/api/stock', requireRole('бухгалтерія', 'кладовщик'
   }
 });
 
+app.get('/api/analytics/products', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+  try {
+    const analytics = await db.getProductAnalytics();
+    res.json({ ok: true, analytics });
+  } catch (error) {
+    console.error('GET /api/analytics/products ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося порахувати аналітику' });
+  }
+});
+
 app.get('/api/green-coffee', requireRole('тімлід', 'станція'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();

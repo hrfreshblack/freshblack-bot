@@ -119,6 +119,13 @@
   .progressBar { height: 6px; border-radius: 999px; background: #1b1f28; overflow: hidden; margin: 6px 0; }
   .progressBar > div { height: 100%; background: var(--accent); }
 
+  .kpiRow { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 20px; }
+  .kpiCard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .kpiCard .kpiValue { font-size: 24px; font-weight: 700; }
+  .kpiCard .kpiLabel { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .analyticsBlock { margin-bottom: 24px; }
+  .analyticsBlock h3 { font-size: 14px; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .chips button {
     padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
@@ -209,6 +216,7 @@
   <nav class="tabs">
     <button id="tabProducts" onclick="showTab('products')">Товари</button>
     <button id="tabStock" onclick="showTab('stock')">Склад</button>
+    <button id="tabAnalytics" onclick="showTab('analytics')">Аналітика</button>
     <button id="tabInventory" onclick="showTab('inventory')">Інвентаризації</button>
     <button id="tabStations" onclick="showTab('stations')">Станції</button>
     <button id="tabGreenCoffee" onclick="showTab('greenCoffee')">Зелена кава</button>
@@ -270,6 +278,43 @@
     </table>
     </div>
     <div class="empty" id="stockEmpty" style="display:none;">Складських товарів ще немає.</div>
+  </div>
+
+  <div id="viewAnalytics" style="display:none;">
+    <div class="kpiRow" id="anKpis"></div>
+
+    <div class="analyticsBlock">
+      <h3 title="Топ-15 складських товарів за кількістю відвантаженого за останні 30 днів, із трендом до попередніх 30 днів">Ходові позиції (топ-15 за 30 днів)</h3>
+      <div class="tableWrap">
+        <table>
+          <thead><tr><th>Код</th><th>Назва</th><th>Відвантажено (30 дн)</th><th>Тренд</th><th>Залишок зараз</th></tr></thead>
+          <tbody id="anTopMoversBody"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="anTopMoversEmpty" style="display:none;">За останні 30 днів відвантажень ще не було.</div>
+    </div>
+
+    <div class="analyticsBlock">
+      <h3 title="Дефіцит — залишок вже нижче мінімального запасу (або від'ємний). Терміново — ще не дефіцит, але за поточним темпом продажів скінчиться за 7 днів. Пропозиція — скільки треба поповнити, щоб покрити мінімальний запас або ~14 днів продажів (що більше)">Термінові поповнення</h3>
+      <div class="tableWrap">
+        <table>
+          <thead><tr><th>Код</th><th>Назва</th><th>Залишок</th><th>Мін. запас</th><th>Швидкість (шт/день)</th><th>Днів лишилось</th><th>Стан</th><th>Поповнити на</th></tr></thead>
+          <tbody id="anUrgentBody"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="anUrgentEmpty" style="display:none;">Термінових поповнень немає.</div>
+    </div>
+
+    <div class="analyticsBlock">
+      <h3 title="Складські товари з залишком > 0, які не відвантажувались понад 60 днів (або не відвантажувались жодного разу) — кандидати переглянути, чи варто далі виробляти">Не рухається (60+ днів)</h3>
+      <div class="tableWrap">
+        <table>
+          <thead><tr><th>Код</th><th>Назва</th><th>Залишок</th><th>Днів без відвантаження</th></tr></thead>
+          <tbody id="anDeadStockBody"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="anDeadStockEmpty" style="display:none;">Такого немає — усе, що є на складі, рухається.</div>
+    </div>
   </div>
 
   <div id="viewInventory" style="display:none;">
@@ -1113,6 +1158,79 @@ async function loadStock() {
   `).join('');
 }
 
+// ---- Аналітика (ходові позиції / термінові поповнення) ----
+
+function analyticsStatusTag(status) {
+  if (status === 'deficit') return '<span class="tag bad">дефіцит</span>';
+  if (status === 'urgent') return '<span class="tag warn">терміново</span>';
+  return '<span class="tag ok">ОК</span>';
+}
+
+async function loadAnalytics() {
+  const resp = await fetch('/api/analytics/products');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  const a = data.analytics;
+
+  document.getElementById('anKpis').innerHTML = `
+    <div class="kpiCard"><div class="kpiValue">${fmt(a.shippedQty30d)}</div><div class="kpiLabel" title="Сума qty рухів типу 'відвантаження' за останні 30 днів по всіх складських товарах">Відвантажено (30 дн, шт)</div></div>
+    <div class="kpiCard"><div class="kpiValue">${a.shippedOrders30d}</div><div class="kpiLabel" title="Кількість унікальних замовлень зі статусом 'відвантажено', дата відвантаження — за останні 30 днів">Замовлень відвантажено (30 дн)</div></div>
+    <div class="kpiCard"><div class="kpiValue" style="color:var(--bad, #e5484d);">${a.deficitCount}</div><div class="kpiLabel" title="Залишок вже нижче мінімального запасу (або від'ємний)">Товарів у дефіциті</div></div>
+    <div class="kpiCard"><div class="kpiValue" style="color:#e0a030;">${a.urgentCount}</div><div class="kpiLabel" title="Ще не дефіцит, але за поточним темпом продажів скінчиться за 7 днів">Термінових поповнень</div></div>
+    <div class="kpiCard"><div class="kpiValue">${a.deadStockCount}</div><div class="kpiLabel" title="Залишок > 0, без відвантажень 60+ днів">Не рухається (60+ дн)</div></div>
+  `;
+
+  const topBody = document.getElementById('anTopMoversBody');
+  const topEmpty = document.getElementById('anTopMoversEmpty');
+  if (!a.topMovers.length) { topBody.innerHTML = ''; topEmpty.style.display = 'block'; }
+  else {
+    topEmpty.style.display = 'none';
+    topBody.innerHTML = a.topMovers.map((p) => `
+      <tr>
+        <td>${p.code}</td>
+        <td>${p.name || p.short_name || ''}</td>
+        <td>${fmt(p.qty30)} ${p.unit || ''}</td>
+        <td>${p.trendPct == null ? '—' : (p.trendPct > 0 ? '▲ +' : p.trendPct < 0 ? '▼ ' : '') + p.trendPct + '%'}</td>
+        <td class="balance">${fmt(p.balance)}</td>
+      </tr>
+    `).join('');
+  }
+
+  const urgentBody = document.getElementById('anUrgentBody');
+  const urgentEmpty = document.getElementById('anUrgentEmpty');
+  if (!a.urgentList.length) { urgentBody.innerHTML = ''; urgentEmpty.style.display = 'block'; }
+  else {
+    urgentEmpty.style.display = 'none';
+    urgentBody.innerHTML = a.urgentList.map((p) => `
+      <tr>
+        <td>${p.code}</td>
+        <td>${p.name || p.short_name || ''}</td>
+        <td class="balance">${fmt(p.balance)}</td>
+        <td>${fmt(p.min_stock)}</td>
+        <td>${p.velocity ? fmt(p.velocity) : '—'}</td>
+        <td>${p.daysLeft == null ? '—' : fmt(p.daysLeft)}</td>
+        <td>${analyticsStatusTag(p.status)}</td>
+        <td>${p.suggestedQty ? '+' + fmt(p.suggestedQty) + ' ' + (p.unit || '') : '—'}</td>
+      </tr>
+    `).join('');
+  }
+
+  const deadBody = document.getElementById('anDeadStockBody');
+  const deadEmpty = document.getElementById('anDeadStockEmpty');
+  if (!a.deadStock.length) { deadBody.innerHTML = ''; deadEmpty.style.display = 'block'; }
+  else {
+    deadEmpty.style.display = 'none';
+    deadBody.innerHTML = a.deadStock.map((p) => `
+      <tr>
+        <td>${p.code}</td>
+        <td>${p.name || p.short_name || ''}</td>
+        <td class="balance">${fmt(p.balance)}</td>
+        <td>${p.daysSinceLastShip == null ? 'ніколи' : fmt(p.daysSinceLastShip)}</td>
+      </tr>
+    `).join('');
+  }
+}
+
 // ---- Інвентаризації ----
 let currentInventoryDate = null;
 
@@ -1285,6 +1403,7 @@ let stationsLoaded = false;
 function showTab(tab) {
   document.getElementById('viewProducts').style.display = tab === 'products' ? '' : 'none';
   document.getElementById('viewStock').style.display = tab === 'stock' ? '' : 'none';
+  document.getElementById('viewAnalytics').style.display = tab === 'analytics' ? '' : 'none';
   document.getElementById('viewInventory').style.display = tab === 'inventory' ? '' : 'none';
   document.getElementById('viewStations').style.display = tab === 'stations' ? '' : 'none';
   document.getElementById('viewGreenCoffee').style.display = tab === 'greenCoffee' ? '' : 'none';
@@ -1295,6 +1414,7 @@ function showTab(tab) {
   document.getElementById('viewClients').style.display = tab === 'clients' ? '' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', tab === 'products');
   document.getElementById('tabStock').classList.toggle('active', tab === 'stock');
+  document.getElementById('tabAnalytics').classList.toggle('active', tab === 'analytics');
   document.getElementById('tabInventory').classList.toggle('active', tab === 'inventory');
   document.getElementById('tabStations').classList.toggle('active', tab === 'stations');
   document.getElementById('tabGreenCoffee').classList.toggle('active', tab === 'greenCoffee');
@@ -1305,6 +1425,7 @@ function showTab(tab) {
   document.getElementById('tabClients').classList.toggle('active', tab === 'clients');
   if (tab === 'products') loadProducts();
   if (tab === 'stock') loadStock();
+  if (tab === 'analytics') loadAnalytics();
   if (tab === 'inventory') initInventory();
   if (tab === 'stations') initStations();
   if (tab === 'greenCoffee') initGreenCoffee();
@@ -3029,13 +3150,13 @@ document.getElementById('btnCloseSpec').onclick = () => {
   document.getElementById('specOverlay').classList.remove('open');
 };
 
-const ALL_TABS = ['tabProducts', 'tabStock', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabNapivfabrykat', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
+const ALL_TABS = ['tabProducts', 'tabStock', 'tabAnalytics', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabNapivfabrykat', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
 const ROLE_TABS = {
   'адмін': ALL_TABS,
   'тімлід': ['tabStations', 'tabGreenCoffee', 'tabNapivfabrykat'],
   'станція': ['tabStations', 'tabGreenCoffee', 'tabNapivfabrykat'],
-  'бухгалтерія': ['tabStock', 'tabInventory', 'tabOrders'],
-  'кладовщик': ['tabStock', 'tabInventory', 'tabOrders']
+  'бухгалтерія': ['tabStock', 'tabAnalytics', 'tabInventory', 'tabOrders'],
+  'кладовщик': ['tabStock', 'tabAnalytics', 'tabInventory', 'tabOrders']
 };
 const ROLE_DEFAULT_TAB = {
   'адмін': 'products',
