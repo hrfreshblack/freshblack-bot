@@ -115,6 +115,15 @@
   .historyCard .historyMeta { color: var(--muted); font-size: 12px; margin-top: 2px; }
   .historyCard.current { border-color: var(--accent); }
 
+  .funnelBoard { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
+  .funnelColumn { flex: 0 0 220px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+  .funnelColumn h4 { margin: 0 0 8px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; display: flex; justify-content: space-between; }
+  .funnelCard { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; white-space: normal; }
+  .funnelCard:hover { border-color: var(--accent2); }
+  .funnelCard .funnelCandidate { font-weight: 700; font-size: 13px; }
+  .funnelCard .funnelVacancy { color: var(--accent2); font-size: 12px; margin-top: 2px; }
+  .funnelCard .funnelMeta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
   .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); align-items: center; justify-content: center; padding: 16px; z-index: 10; }
   .overlay.open { display: flex; }
   .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: 100%; max-width: 460px; max-height: 90vh; overflow-y: auto; }
@@ -246,6 +255,7 @@
       <button class="active" id="recrSubRequests" onclick="showRecruitmentSubTab('requests')">Заявки на вакансії</button>
       <button id="recrSubVacancies" onclick="showRecruitmentSubTab('vacancies')">Вакансії</button>
       <button id="recrSubCandidates" onclick="showRecruitmentSubTab('candidates')">Кандидати</button>
+      <button id="recrSubFunnel" onclick="showRecruitmentSubTab('funnel')">Воронка</button>
     </div>
 
     <div class="profilePanel active" id="recrPanelRequests">
@@ -273,8 +283,19 @@
         <button id="btnAddCandidate">+ Кандидат</button>
         <button class="secondary" id="btnUploadResumes">+ Завантажити резюме</button>
       </div>
-      <div class="tableWrap"><table><thead><tr><th>ПІБ</th><th>Телефон</th><th>Email</th><th>Джерело</th><th>Активні заявки</th></tr></thead><tbody id="candTableBody"></tbody></table></div>
+      <div class="tableWrap"><table><thead><tr><th>ПІБ</th><th>Телефон</th><th>Email</th><th>Джерело</th><th>Активні заявки</th><th>Поточна вакансія</th><th>На яку розглядаємо</th><th>Коментар</th></tr></thead><tbody id="candTableBody"></tbody></table></div>
       <div class="empty" id="candEmpty" style="display:none;">Кандидатів ще немає.</div>
+    </div>
+
+    <div class="profilePanel" id="recrPanelFunnel">
+      <div class="viewToolbar">
+        <select id="funnelVacancyFilter"><option value="">— усі вакансії —</option></select>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted);">
+          <input type="checkbox" id="funnelShowArchive" onchange="loadFunnel()"> показати архів (вихід на роботу / відмови / резерв)
+        </label>
+      </div>
+      <div class="funnelBoard" id="funnelBoard"></div>
+      <div class="empty" id="funnelEmpty" style="display:none;">Заявок ще немає.</div>
     </div>
   </div>
 
@@ -282,8 +303,10 @@
     <button class="secondary" onclick="showTab('recruitment')">← До вакансій</button>
     <div id="vacancyDetailHeader" style="margin:16px 0;"></div>
     <div class="viewToolbar">
+      <button class="secondary" onclick="openVacancyEdit(currentVacancyId)">✎ Редагувати</button>
       <button id="btnAddApplicationToVacancy">+ Кандидат на вакансію</button>
     </div>
+    <div id="vacancyDetailFields" style="margin-bottom:16px;"></div>
     <div class="tableWrap"><table><thead><tr><th>Кандидат</th><th>Телефон</th><th>Етап</th><th>Статус</th><th>Подано</th></tr></thead><tbody id="vacApplicationsBody"></tbody></table></div>
     <div class="empty" id="vacApplicationsEmpty" style="display:none;">Заявок на цю вакансію ще немає.</div>
   </div>
@@ -643,7 +666,12 @@
 <!-- Модалка: вакансія напряму -->
 <div class="overlay" id="vacancyDirectOverlay">
   <div class="modal">
-    <h2>Нова вакансія напряму</h2>
+    <h2 id="vacModalTitle">Нова вакансія напряму</h2>
+    <input type="hidden" id="vacId">
+    <div class="field">
+      <label>Заповнити з файлу (docx/pdf/txt)</label>
+      <input type="file" id="vacParseFileInput" accept=".pdf,.docx,.doc,.txt">
+    </div>
     <div class="field"><label>Назва</label><input type="text" id="vacTitle"></div>
     <div class="field"><label>Департамент</label><select id="vacDepartment"></select></div>
     <div class="field"><label>Керівник</label><select id="vacHiringManager"><option value="">— не вказано —</option></select></div>
@@ -651,6 +679,11 @@
     <div class="field"><label>Пріоритет</label>
       <select id="vacPriority"><option value="">—</option><option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option><option value="Urgent">Urgent</option></select>
     </div>
+    <div class="field"><label>Досвід роботи</label><textarea id="vacExperienceRequired" rows="2"></textarea></div>
+    <div class="field"><label>Заробітна плата</label><textarea id="vacSalaryRange" rows="2"></textarea></div>
+    <div class="field"><label>Обов'язки</label><textarea id="vacResponsibilities" rows="3"></textarea></div>
+    <div class="field"><label>Вимоги</label><textarea id="vacRequirements" rows="3"></textarea></div>
+    <div class="field"><label>Додаткові вимоги</label><textarea id="vacAdditionalRequirements" rows="2"></textarea></div>
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('vacancyDirectOverlay')">Скасувати</button>
       <button id="btnSaveVacancyDirect">Створити</button>
@@ -666,7 +699,7 @@
     <div class="field"><label>ПІБ</label><input type="text" id="candFullName"></div>
     <div class="field"><label>Телефон</label><input type="text" id="candPhone"></div>
     <div class="field"><label>Email</label><input type="text" id="candEmail"></div>
-    <div class="field"><label>Поточна посада</label><input type="text" id="candCurrentJobTitle"></div>
+    <div class="field"><label>Поточна вакансія</label><select id="candCurrentVacancy"><option value="">— не вказано —</option></select></div>
     <div class="field"><label>Бажана посада</label><input type="text" id="candDesiredRole"></div>
     <div class="field"><label>Бажана ЗП</label><input type="text" id="candDesiredSalary"></div>
     <div class="field"><label>Джерело</label>
@@ -1399,7 +1432,7 @@ async function loadDashboard() {
 
   document.getElementById('dashboardFunnel').innerHTML = breakdownCardHtml(
     'Воронка найму',
-    'Кількість активних заявок кандидатів на кожному етапі: New Candidate → Screening → Interview → Test Task → Reference Check → Offer → Hired.',
+    'Кількість активних заявок кандидатів на кожному етапі воронки: Новий/Відгук → Сорсинг/Первинний розгляд → Первинне інтерв\'ю → Основне інтерв\'ю → Тестове завдання → Офер → Офер прийнято.',
     m.funnel, { scaleByMax: true }
   );
 
@@ -3836,7 +3869,7 @@ function vacStatusTag(status) {
   return `<span class="tag ${cls}">${status}</span>`;
 }
 function appStatusTag(status) {
-  const cls = status === 'Active' ? 'ok' : status === 'Hired' ? 'accent' : status === 'Rejected' ? 'bad' : 'neutral';
+  const cls = status === 'Active' ? 'ok' : status === 'Hired' ? 'accent' : status === 'Rejected by Company' || status === 'Rejected by Candidate' ? 'bad' : status === 'Talent Pool' ? 'warn' : 'neutral';
   return `<span class="tag ${cls}">${status}</span>`;
 }
 function offerStatusTag(status) {
@@ -3863,14 +3896,59 @@ async function ensureRecruitmentRefsLoaded() {
 
 function showRecruitmentSubTab(tab) {
   window._recruitmentSubTab = tab;
-  ['requests', 'vacancies', 'candidates'].forEach((t) => {
+  ['requests', 'vacancies', 'candidates', 'funnel'].forEach((t) => {
     document.getElementById('recrPanel' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
     document.getElementById('recrSub' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
   });
   if (tab === 'requests') loadVacancyRequests();
   if (tab === 'vacancies') loadVacancies();
   if (tab === 'candidates') loadCandidates();
+  if (tab === 'funnel') loadFunnel();
 }
+
+// -- Funnel (Kanban) --
+
+async function loadFunnel() {
+  const vacResp = await apiFetch('/api/vacancies');
+  const vacData = await vacResp.json();
+  const vacancies = vacData.ok ? vacData.vacancies : [];
+  const filterSelect = document.getElementById('funnelVacancyFilter');
+  const currentFilter = filterSelect.value;
+  filterSelect.innerHTML = '<option value="">— усі вакансії —</option>' + vacancies.map((v) => `<option value="${v.id}">${escAttr(v.title)}</option>`).join('');
+  filterSelect.value = currentFilter;
+
+  const archived = document.getElementById('funnelShowArchive').checked;
+  const params = new URLSearchParams({ archived: archived ? '1' : '0' });
+  if (filterSelect.value) params.set('vacancy_id', filterSelect.value);
+  const resp = await apiFetch('/api/applications?' + params);
+  const data = await resp.json();
+  const board = document.getElementById('funnelBoard');
+  const empty = document.getElementById('funnelEmpty');
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити воронку'); return; }
+  const apps = data.applications;
+  if (!apps.length) { board.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+
+  const columns = archived ? window._dict.applicationStatuses.filter((s) => s !== 'Active') : window._dict.applicationStages;
+  const groupKey = archived ? 'status' : 'stage';
+
+  board.innerHTML = columns.map((col) => {
+    const cardsInCol = apps.filter((a) => a[groupKey] === col);
+    return `
+      <div class="funnelColumn">
+        <h4><span>${escAttr(col)}</span><span>${cardsInCol.length}</span></h4>
+        ${cardsInCol.map((a) => `
+          <div class="funnelCard" onclick="openApplicationDetail(${a.id}, null)">
+            <div class="funnelCandidate">${escAttr(a.candidate_name)}</div>
+            <div class="funnelVacancy">${escAttr(a.vacancy_title)}</div>
+            <div class="funnelMeta">${escAttr(a.candidate_phone || '')}${a.rejection_reason ? ' · ' + escAttr(a.rejection_reason) : ''}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }).join('');
+}
+document.getElementById('funnelVacancyFilter').addEventListener('change', loadFunnel);
 
 // -- Vacancy Requests --
 
@@ -4070,13 +4148,63 @@ document.getElementById('vacStatusFilter').addEventListener('change', loadVacanc
 
 document.getElementById('btnAddVacancyDirect').onclick = async () => {
   await ensureRecruitmentRefsLoaded();
+  document.getElementById('vacModalTitle').textContent = 'Нова вакансія напряму';
+  document.getElementById('btnSaveVacancyDirect').textContent = 'Створити';
+  document.getElementById('vacId').value = '';
+  document.getElementById('vacParseFileInput').value = '';
   document.getElementById('vacTitle').value = '';
   document.getElementById('vacDepartment').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}">${escAttr(d.name)}</option>`).join('');
   document.getElementById('vacHiringManager').innerHTML = '<option value="">— не вказано —</option>' + window._employeesCache.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
   document.getElementById('vacRecruiterUsername').value = '';
   document.getElementById('vacPriority').value = '';
+  document.getElementById('vacExperienceRequired').value = '';
+  document.getElementById('vacSalaryRange').value = '';
+  document.getElementById('vacResponsibilities').value = '';
+  document.getElementById('vacRequirements').value = '';
+  document.getElementById('vacAdditionalRequirements').value = '';
   document.getElementById('vacancyDirectOverlay').classList.add('open');
 };
+
+async function openVacancyEdit(id) {
+  await ensureRecruitmentRefsLoaded();
+  const resp = await apiFetch('/api/vacancies/' + id);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити вакансію'); return; }
+  const v = data.vacancy;
+  document.getElementById('vacModalTitle').textContent = 'Редагувати вакансію';
+  document.getElementById('btnSaveVacancyDirect').textContent = 'Зберегти';
+  document.getElementById('vacId').value = v.id;
+  document.getElementById('vacParseFileInput').value = '';
+  document.getElementById('vacTitle').value = v.title;
+  document.getElementById('vacDepartment').innerHTML = window._departmentsCache.map((d) => `<option value="${d.id}" ${d.id === v.department_id ? 'selected' : ''}>${escAttr(d.name)}</option>`).join('');
+  document.getElementById('vacHiringManager').innerHTML = '<option value="">— не вказано —</option>' + window._employeesCache.map((e) => `<option value="${e.id}" ${e.id === v.hiring_manager_employee_id ? 'selected' : ''}>${escAttr(e.full_name)}</option>`).join('');
+  document.getElementById('vacRecruiterUsername').value = v.recruiter_username || '';
+  document.getElementById('vacPriority').value = v.priority || '';
+  document.getElementById('vacExperienceRequired').value = v.experience_required || '';
+  document.getElementById('vacSalaryRange').value = v.salary_range || '';
+  document.getElementById('vacResponsibilities').value = v.responsibilities || '';
+  document.getElementById('vacRequirements').value = v.requirements || '';
+  document.getElementById('vacAdditionalRequirements').value = v.additional_requirements || '';
+  document.getElementById('vacancyDirectOverlay').classList.add('open');
+}
+
+document.getElementById('vacParseFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  const resp = await apiFetch('/api/vacancies/parse-file', { method: 'POST', body: formData });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося розібрати файл'); return; }
+  const f = data.parsedFields;
+  if (f.title) document.getElementById('vacTitle').value = f.title;
+  if (f.experience_required) document.getElementById('vacExperienceRequired').value = f.experience_required;
+  if (f.salary_range) document.getElementById('vacSalaryRange').value = f.salary_range;
+  if (f.responsibilities) document.getElementById('vacResponsibilities').value = f.responsibilities;
+  if (f.requirements) document.getElementById('vacRequirements').value = f.requirements;
+  if (f.additional_requirements) document.getElementById('vacAdditionalRequirements').value = f.additional_requirements;
+  showToast('Поля заповнено з файлу — перевір і доправ за потреби');
+});
 
 document.getElementById('btnSaveVacancyDirect').onclick = async () => {
   const title = document.getElementById('vacTitle').value.trim();
@@ -4086,14 +4214,22 @@ document.getElementById('btnSaveVacancyDirect').onclick = async () => {
     title, department_id,
     hiring_manager_employee_id: document.getElementById('vacHiringManager').value || null,
     recruiter_username: document.getElementById('vacRecruiterUsername').value.trim(),
-    priority: document.getElementById('vacPriority').value
+    priority: document.getElementById('vacPriority').value,
+    experience_required: document.getElementById('vacExperienceRequired').value.trim(),
+    salary_range: document.getElementById('vacSalaryRange').value.trim(),
+    responsibilities: document.getElementById('vacResponsibilities').value.trim(),
+    requirements: document.getElementById('vacRequirements').value.trim(),
+    additional_requirements: document.getElementById('vacAdditionalRequirements').value.trim()
   };
-  const resp = await apiFetch('/api/vacancies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const id = document.getElementById('vacId').value;
+  const url = id ? '/api/vacancies/' + id : '/api/vacancies';
+  const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await resp.json();
-  if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
   closeOverlay('vacancyDirectOverlay');
-  showToast('Вакансію створено');
+  showToast(id ? 'Збережено' : 'Вакансію створено');
   loadVacancies();
+  if (id && currentVacancyId === Number(id)) renderVacancyDetail();
 };
 
 let currentVacancyId = null;
@@ -4114,6 +4250,14 @@ async function renderVacancyDetail() {
     <div style="font-size:20px; font-weight:700;">${escAttr(v.title)}</div>
     <div style="color:var(--muted); font-size:13px;">${escAttr(v.department_name)} ${vacStatusTag(v.status)} ${v.priority ? '· ' + escAttr(v.priority) : ''} ${v.recruiter_username ? '· рекрутер: ' + escAttr(v.recruiter_username) : ''}</div>
   `;
+  const fieldsHtml = [
+    ['Досвід роботи', v.experience_required],
+    ['Заробітна плата', v.salary_range],
+    ['Обов\'язки', v.responsibilities],
+    ['Вимоги', v.requirements],
+    ['Додаткові вимоги', v.additional_requirements]
+  ].filter(([, val]) => val).map(([label, val]) => `<div class="fieldItem"><label>${label}</label>${escAttr(val)}</div>`).join('');
+  document.getElementById('vacancyDetailFields').innerHTML = fieldsHtml;
   const body = document.getElementById('vacApplicationsBody');
   const empty = document.getElementById('vacApplicationsEmpty');
   if (!v.applications.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
@@ -4182,6 +4326,9 @@ async function loadCandidates() {
       <td>${escAttr(c.personal_email || '—')}</td>
       <td>${escAttr(c.source || '—')}</td>
       <td>${c.active_applications_count}</td>
+      <td>${escAttr(c.primary_vacancy_title || '—')}</td>
+      <td>${escAttr(c.secondary_vacancy_title || '—')}</td>
+      <td>${escAttr(c.notes || '—')}</td>
     </tr>
   `).join('');
 }
@@ -4190,13 +4337,20 @@ document.getElementById('candSearch').addEventListener('input', () => {
   window._candSearchTimer = setTimeout(loadCandidates, 250);
 });
 
-document.getElementById('btnAddCandidate').onclick = () => {
+async function loadVacancyOptionsInto(selectEl, selectedVacancyId) {
+  const resp = await apiFetch('/api/vacancies');
+  const data = await resp.json();
+  const vacancies = data.ok ? data.vacancies : [];
+  selectEl.innerHTML = '<option value="">— не вказано —</option>' + vacancies.map((v) => `<option value="${v.id}" ${v.id === selectedVacancyId ? 'selected' : ''}>${escAttr(v.title)}${v.department_name ? ' · ' + escAttr(v.department_name) : ''}</option>`).join('');
+}
+
+document.getElementById('btnAddCandidate').onclick = async () => {
   document.getElementById('candModalTitle').textContent = 'Новий кандидат';
   document.getElementById('candId').value = '';
   document.getElementById('candFullName').value = '';
   document.getElementById('candPhone').value = '';
   document.getElementById('candEmail').value = '';
-  document.getElementById('candCurrentJobTitle').value = '';
+  await loadVacancyOptionsInto(document.getElementById('candCurrentVacancy'), null);
   document.getElementById('candDesiredRole').value = '';
   document.getElementById('candDesiredSalary').value = '';
   document.getElementById('candSource').value = '';
@@ -4215,7 +4369,8 @@ async function openCandidateEdit(id) {
   document.getElementById('candFullName').value = c.full_name;
   document.getElementById('candPhone').value = c.phone || '';
   document.getElementById('candEmail').value = c.personal_email || '';
-  document.getElementById('candCurrentJobTitle').value = c.current_job_title || '';
+  const primaryApp = (c.applications || []).filter((a) => a.status === 'Active').sort((a, b) => (a.applied_date < b.applied_date ? -1 : a.applied_date > b.applied_date ? 1 : a.id - b.id))[0];
+  await loadVacancyOptionsInto(document.getElementById('candCurrentVacancy'), primaryApp ? primaryApp.vacancy_id : null);
   document.getElementById('candDesiredRole').value = c.desired_role || '';
   document.getElementById('candDesiredSalary').value = c.desired_salary || '';
   document.getElementById('candSource').value = c.source || '';
@@ -4228,14 +4383,16 @@ document.getElementById('btnSaveCandidate').onclick = async () => {
   const full_name = document.getElementById('candFullName').value.trim();
   if (!full_name) { showToast('ПІБ обов’язкове'); return; }
   const id = document.getElementById('candId').value;
+  const vacancy_id = document.getElementById('candCurrentVacancy').value;
   const recruitFields = {
-    current_job_title: document.getElementById('candCurrentJobTitle').value.trim(),
     desired_role: document.getElementById('candDesiredRole').value.trim(),
     desired_salary: document.getElementById('candDesiredSalary').value.trim(),
     source: document.getElementById('candSource').value,
     resume_url: document.getElementById('candResumeUrl').value.trim(),
     notes: document.getElementById('candNotes').value.trim()
   };
+  let candidateId = id;
+  let duplicate = false;
   if (id) {
     const personalBody = {
       full_name,
@@ -4246,10 +4403,6 @@ document.getElementById('btnSaveCandidate').onclick = async () => {
     const resp = await apiFetch('/api/candidates/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(recruitFields) });
     const data = await resp.json();
     if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
-    closeOverlay('candidateOverlay');
-    showToast('Збережено');
-    if (currentCandidateId === Number(id)) renderCandidateDetail();
-    loadCandidates();
   } else {
     const body = { full_name,
       phone: document.getElementById('candPhone').value.trim(),
@@ -4259,10 +4412,16 @@ document.getElementById('btnSaveCandidate').onclick = async () => {
     const resp = await apiFetch('/api/candidates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await resp.json();
     if (!data.ok) { showToast(data.error || 'Не вдалося створити'); return; }
-    closeOverlay('candidateOverlay');
-    showToast(data.duplicate ? 'Кандидат з таким телефоном/email вже існує' : 'Кандидата додано');
-    loadCandidates();
+    candidateId = data.candidate.id;
+    duplicate = !!data.duplicate;
   }
+  if (vacancy_id) {
+    await apiFetch('/api/applications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidate_id: candidateId, vacancy_id }) });
+  }
+  closeOverlay('candidateOverlay');
+  showToast(id ? 'Збережено' : (duplicate ? 'Кандидат з таким телефоном/email вже існує' : 'Кандидата додано'));
+  if (id && currentCandidateId === Number(id)) renderCandidateDetail();
+  loadCandidates();
 };
 
 let currentCandidateId = null;
@@ -4435,9 +4594,16 @@ async function renderApplicationDetail() {
 }
 
 function toggleRejectionFields() {
-  const isRejected = document.getElementById('appStatusSelect').value === 'Rejected';
+  const status = document.getElementById('appStatusSelect').value;
+  const isRejected = status === 'Rejected by Company' || status === 'Rejected by Candidate';
   document.getElementById('appRejectionReasonWrap').style.display = isRejected ? '' : 'none';
   document.getElementById('appRejectionCommentWrap').style.display = isRejected ? '' : 'none';
+  if (isRejected) {
+    const reasons = status === 'Rejected by Company' ? window._dict.rejectionReasonsCompany : window._dict.rejectionReasonsCandidate;
+    const current = document.getElementById('appRejectionReason').value;
+    document.getElementById('appRejectionReason').innerHTML = reasons.map((s) => `<option value="${s}">${s}</option>`).join('');
+    if (reasons.includes(current)) document.getElementById('appRejectionReason').value = current;
+  }
 }
 document.getElementById('appStatusSelect').addEventListener('change', toggleRejectionFields);
 
@@ -4451,7 +4617,7 @@ async function saveApplicationStageStatus() {
   }
   if (status !== window._currentApplication.status) {
     const body = { status };
-    if (status === 'Rejected') {
+    if (status === 'Rejected by Company' || status === 'Rejected by Candidate') {
       body.rejection_reason = document.getElementById('appRejectionReason').value;
       body.rejection_comment = document.getElementById('appRejectionComment').value.trim();
       if (!body.rejection_reason) { showToast('Вкажи причину відмови'); return; }

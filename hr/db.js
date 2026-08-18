@@ -30,10 +30,14 @@ const RESERVATION_STATUSES = ['Not Reserved', 'In Progress', 'Reserved', 'Expiri
 // Recruitment / ATS (ТЗ розділи 9-19)
 const VACANCY_REQUEST_STATUSES = ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Converted to Vacancy', 'Cancelled'];
 const VACANCY_STATUSES = ['Open', 'On Hold', 'Filled', 'Cancelled', 'Closed'];
-const APPLICATION_STAGES = ['New Candidate', 'Screening', 'Interview', 'Test Task', 'Reference Check', 'Offer', 'Hired'];
-const APPLICATION_STATUSES = ['Active', 'Rejected', 'Withdrawn', 'Hired'];
+const APPLICATION_STAGES = ['Новий / Відгук', 'Сорсинг / Первинний розгляд', "Первинне інтерв'ю", "Основне інтерв'ю", 'Тестове завдання', 'Офер', 'Офер прийнято'];
+// Active — у процесі (на одному з APPLICATION_STAGES). Решта — фінальні/архівні:
+// Hired = вихід на роботу, Talent Pool = у базі/резерв (не підійшов на цю роль,
+// але корисний надалі), Rejected by Company/Candidate — хто ініціював відмову
+// (з обов'язковою причиною — див. REJECTION_REASONS_* нижче).
+const APPLICATION_STATUSES = ['Active', 'Hired', 'Rejected by Company', 'Rejected by Candidate', 'Talent Pool'];
 const REJECTION_REASONS_COMPANY = ['Недостатньо досвіду', 'Не підходить за компетенціями', 'Не пройшов тестове завдання', 'Завищені зарплатні очікування', 'Не підходить за soft skills', 'Вакансію закрито/заморожено', 'Інше'];
-const REJECTION_REASONS_CANDIDATE = ['Прийняв іншу пропозицію', 'Не влаштовують умови', 'Не влаштовує зарплата', 'Змінив рішення щодо пошуку роботи', 'Не виходить на зв`язок', 'Інше'];
+const REJECTION_REASONS_CANDIDATE = ['Прийняв іншу пропозицію', 'Не влаштовують умови', 'Не влаштовує зарплата', 'Далеко добиратись', 'Бронювання', 'Змінив рішення щодо пошуку роботи', 'Не виходить на зв`язок', 'Інше'];
 const OFFER_STATUSES = ['Draft', 'Sent', 'Accepted', 'Declined', 'Expired', 'Withdrawn'];
 const INTERVIEW_TYPES = ['HR Screening', 'Technical/Professional', 'Final', 'Test Task Review', 'Reference Check'];
 const INTERVIEW_STATUSES = ['Scheduled', 'Completed', 'Cancelled', 'No Show'];
@@ -294,6 +298,13 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_vacancies_status ON hr_vacancies(status);
+    -- Структуровані поля оголошення вакансії (заповнюються вручну або
+    -- розбираються з файлу через "+ Вакансія напряму" → завантажити файл).
+    ALTER TABLE hr_vacancies ADD COLUMN IF NOT EXISTS experience_required TEXT NOT NULL DEFAULT '';
+    ALTER TABLE hr_vacancies ADD COLUMN IF NOT EXISTS salary_range TEXT NOT NULL DEFAULT '';
+    ALTER TABLE hr_vacancies ADD COLUMN IF NOT EXISTS responsibilities TEXT NOT NULL DEFAULT '';
+    ALTER TABLE hr_vacancies ADD COLUMN IF NOT EXISTS requirements TEXT NOT NULL DEFAULT '';
+    ALTER TABLE hr_vacancies ADD COLUMN IF NOT EXISTS additional_requirements TEXT NOT NULL DEFAULT '';
 
     -- Candidate = hr_persons профіль + рекрутингові поля (ТЗ п.3 "one
     -- person — one master record", п.10 Candidate/Application). Той самий
@@ -322,7 +333,7 @@ async function initSchema() {
       id SERIAL PRIMARY KEY,
       candidate_id INTEGER NOT NULL REFERENCES hr_candidates(id),
       vacancy_id INTEGER NOT NULL REFERENCES hr_vacancies(id),
-      stage TEXT NOT NULL DEFAULT 'New Candidate',
+      stage TEXT NOT NULL DEFAULT 'Новий / Відгук',
       status TEXT NOT NULL DEFAULT 'Active',
       rejection_reason TEXT NOT NULL DEFAULT '',
       rejection_comment TEXT NOT NULL DEFAULT '',
@@ -336,6 +347,9 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_hr_applications_vacancy ON hr_applications(vacancy_id);
     CREATE INDEX IF NOT EXISTS idx_hr_applications_candidate ON hr_applications(candidate_id);
+    -- Таблиця вже існує на проді зі старим (англійським) дефолтом етапу —
+    -- CREATE TABLE IF NOT EXISTS його не міняє, тому оновлюємо окремо.
+    ALTER TABLE hr_applications ALTER COLUMN stage SET DEFAULT 'Новий / Відгук';
 
     -- Interview: спрощено на цьому зрізі — дата/тип/нотатки/рішення, без
     -- формального зваженого scorecard-шаблону (ТЗ п.16 Scorecard templates
@@ -1566,18 +1580,22 @@ function stripHeadingPrefix(block, phrase) {
   return rest.trim();
 }
 
-function isKnownHeadingBlock(block) {
-  if (VACANCY_REQUEST_HEADINGS.some((h) => h.phrases.some((p) => stripHeadingPrefix(block, p) !== null))) return true;
-  return VACANCY_REQUEST_BOUNDARY_HEADINGS.some((p) => stripHeadingPrefix(block, p) !== null);
+function isKnownHeadingBlock(block, headings = VACANCY_REQUEST_HEADINGS, boundaryHeadings = VACANCY_REQUEST_BOUNDARY_HEADINGS) {
+  if (headings.some((h) => h.phrases.some((p) => stripHeadingPrefix(block, p) !== null))) return true;
+  return boundaryHeadings.some((p) => stripHeadingPrefix(block, p) !== null);
 }
 
-function parseVacancyRequestFieldsFromText(text) {
+// Спільний "мітка -> значення" розбір по блоках (абзацах), використовується
+// і для заявки на вакансію, і для оголошення вакансії напряму (той самий
+// формат документа: десь мітка+значення в рядок, десь мітка сама по собі,
+// а значення в наступних абзацах аж до наступної впізнаної мітки).
+function parseHeadingBlocks(text, headings, boundaryHeadings) {
   const blocks = text.split(/\n+/).map((b) => b.trim()).filter(Boolean);
   const found = {};
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
-    for (const heading of VACANCY_REQUEST_HEADINGS) {
+    for (const heading of headings) {
       if (found[heading.field]) continue;
       let matchedRest = null;
       for (const phrase of heading.phrases) {
@@ -1591,7 +1609,7 @@ function parseVacancyRequestFieldsFromText(text) {
       } else {
         const collected = [];
         let j = i + 1;
-        while (j < blocks.length && collected.length < 6 && !isKnownHeadingBlock(blocks[j])) {
+        while (j < blocks.length && collected.length < 6 && !isKnownHeadingBlock(blocks[j], headings, boundaryHeadings)) {
           collected.push(blocks[j]);
           j++;
         }
@@ -1600,6 +1618,11 @@ function parseVacancyRequestFieldsFromText(text) {
       break;
     }
   }
+  return { found, blocks };
+}
+
+function parseVacancyRequestFieldsFromText(text) {
+  const { found } = parseHeadingBlocks(text, VACANCY_REQUEST_HEADINGS, VACANCY_REQUEST_BOUNDARY_HEADINGS);
 
   if (found.quantity) {
     const n = parseInt(found.quantity, 10);
@@ -1610,6 +1633,41 @@ function parseVacancyRequestFieldsFromText(text) {
     if (!found.priority) delete found.priority;
   }
   return found;
+}
+
+// Оголошення вакансії напряму ("+ Вакансія напряму" → завантажити файл) —
+// без фіксованого шаблону (на відміну від заявки на вакансію), тому
+// евристика ширша за формулюваннями міток. Назва посади зазвичай є першим
+// рядком документа без власної мітки (заголовок flyer'а) — якщо жодна
+// мітка "посада/вакансія" не знайшлась, беремо перший короткий блок.
+const VACANCY_HEADINGS = [
+  { field: 'title', phrases: ['назва вакансії', 'назва посади/роль', 'назва посади', 'вакансія', 'посада'] },
+  { field: 'experience_required', phrases: ['необхідний досвід роботи', 'необхідний досвід', 'досвід роботи', 'досвід'] },
+  { field: 'salary_range', phrases: ['заробітна плата', 'заробітня плата', 'зарплата', 'оплата праці', 'оплата', 'зп', 'дохід'] },
+  { field: 'responsibilities', phrases: ["функціональні обов'язки", 'функціональні обов’язки', "обов'язки", 'обов’язки', 'завдання', 'задачі'] },
+  { field: 'requirements', phrases: ['вимоги до кандидата', 'основні вимоги', 'вимоги'] },
+  { field: 'additional_requirements', phrases: ['додаткові вимоги', 'буде плюсом', 'додаткові побажання', 'бажані навички', 'бажано'] }
+];
+
+const VACANCY_BOUNDARY_HEADINGS = [
+  'умови роботи', 'ми пропонуємо', 'що ми пропонуємо', 'графік роботи', 'місце роботи', 'контакти', 'як відгукнутися', 'як відгукнутись'
+];
+
+function parseVacancyFieldsFromText(text) {
+  const { found, blocks } = parseHeadingBlocks(text, VACANCY_HEADINGS, VACANCY_BOUNDARY_HEADINGS);
+  if (!found.title && blocks.length && blocks[0].length <= 80 && !isKnownHeadingBlock(blocks[0], VACANCY_HEADINGS, VACANCY_BOUNDARY_HEADINGS)) {
+    found.title = blocks[0];
+  }
+  return found;
+}
+
+async function parseVacancyFileForFields({ buffer, filename, mimeType }) {
+  const { text } = await extractResumeText(buffer, mimeType, filename);
+  const parsed = parseVacancyFieldsFromText(text);
+  if (!parsed.title) {
+    parsed.title = filename.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+  }
+  return parsed;
 }
 
 // Файл (docx/pdf/txt) -> чернетка заявки на вакансію (Draft), сам файл
@@ -1745,26 +1803,39 @@ async function getVacancy(id) {
   return { ...rows[0], applications };
 }
 
-async function createVacancy({ position_id, department_id, hiring_manager_employee_id, recruiter_username, title, priority, target_date, profile_snapshot, override_reason }, created_by) {
+async function createVacancy({ position_id, department_id, hiring_manager_employee_id, recruiter_username, title, priority, target_date, profile_snapshot, override_reason,
+  experience_required, salary_range, responsibilities, requirements, additional_requirements }, created_by) {
   const { rows } = await pool.query(
-    `INSERT INTO hr_vacancies (position_id, department_id, hiring_manager_employee_id, recruiter_username, title, priority, target_date, profile_snapshot, override_reason)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-    [position_id || null, department_id, hiring_manager_employee_id || null, recruiter_username || '', title, priority || '', target_date || null, profile_snapshot || '', override_reason || '']
+    `INSERT INTO hr_vacancies (position_id, department_id, hiring_manager_employee_id, recruiter_username, title, priority, target_date, profile_snapshot, override_reason,
+       experience_required, salary_range, responsibilities, requirements, additional_requirements)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+    [position_id || null, department_id, hiring_manager_employee_id || null, recruiter_username || '', title, priority || '', target_date || null, profile_snapshot || '', override_reason || '',
+      experience_required || '', salary_range || '', responsibilities || '', requirements || '', additional_requirements || '']
   );
   await writeAudit({ actor: created_by, action: 'create', entity_type: 'vacancy', entity_id: rows[0].id, new_value: { title } });
   return rows[0];
 }
 
-async function updateVacancy(id, { recruiter_username, priority, target_date, profile_snapshot }) {
+async function updateVacancy(id, { recruiter_username, priority, target_date, profile_snapshot, title, hiring_manager_employee_id,
+  experience_required, salary_range, responsibilities, requirements, additional_requirements }) {
   const { rows } = await pool.query(
     `UPDATE hr_vacancies SET
        recruiter_username = COALESCE($2, recruiter_username),
        priority = COALESCE($3, priority),
        target_date = $4,
        profile_snapshot = COALESCE($5, profile_snapshot),
+       title = COALESCE($6, title),
+       hiring_manager_employee_id = COALESCE($7, hiring_manager_employee_id),
+       experience_required = COALESCE($8, experience_required),
+       salary_range = COALESCE($9, salary_range),
+       responsibilities = COALESCE($10, responsibilities),
+       requirements = COALESCE($11, requirements),
+       additional_requirements = COALESCE($12, additional_requirements),
        updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [id, recruiter_username ?? null, priority ?? null, target_date ?? null, profile_snapshot ?? null]
+    [id, recruiter_username ?? null, priority ?? null, target_date ?? null, profile_snapshot ?? null, title ?? null,
+      hiring_manager_employee_id ?? null,
+      experience_required ?? null, salary_range ?? null, responsibilities ?? null, requirements ?? null, additional_requirements ?? null]
   );
   return rows[0] || null;
 }
@@ -1854,7 +1925,11 @@ async function listCandidates({ search = '' } = {}) {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const { rows } = await pool.query(`
     SELECT c.*, per.full_name, per.phone, per.personal_email, per.telegram, per.city,
-      (SELECT COUNT(*)::int FROM hr_applications a WHERE a.candidate_id = c.id AND a.status = 'Active') AS active_applications_count
+      (SELECT COUNT(*)::int FROM hr_applications a WHERE a.candidate_id = c.id AND a.status = 'Active') AS active_applications_count,
+      (SELECT v.title FROM hr_applications a JOIN hr_vacancies v ON v.id = a.vacancy_id
+         WHERE a.candidate_id = c.id AND a.status = 'Active' ORDER BY a.applied_date ASC, a.id ASC LIMIT 1) AS primary_vacancy_title,
+      (SELECT v.title FROM hr_applications a JOIN hr_vacancies v ON v.id = a.vacancy_id
+         WHERE a.candidate_id = c.id AND a.status = 'Active' ORDER BY a.applied_date ASC, a.id ASC LIMIT 1 OFFSET 1) AS secondary_vacancy_title
     FROM hr_candidates c
     JOIN hr_persons per ON per.id = c.person_id
     ${where}
@@ -1922,6 +1997,28 @@ async function deleteCandidate(id, actor) {
 // Recruitment / ATS — Applications
 // ---------------------------------------------------------------------
 
+// Плоский список заявок для воронки (Kanban) — усі вакансії або одна
+// конкретна, активні (у процесі) або архівні (Hired/Talent Pool/Rejected).
+async function listApplications({ vacancy_id = '', archived = false } = {}) {
+  const conditions = [archived ? `a.status != 'Active'` : `a.status = 'Active'`];
+  const params = [];
+  if (vacancy_id) {
+    params.push(vacancy_id);
+    conditions.push(`a.vacancy_id = $${params.length}`);
+  }
+  const { rows } = await pool.query(`
+    SELECT a.*, per.full_name AS candidate_name, per.phone AS candidate_phone,
+      v.title AS vacancy_title
+    FROM hr_applications a
+    JOIN hr_candidates c ON c.id = a.candidate_id
+    JOIN hr_persons per ON per.id = c.person_id
+    JOIN hr_vacancies v ON v.id = a.vacancy_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY a.updated_at DESC
+  `, params);
+  return rows;
+}
+
 async function listApplicationsForVacancy(vacancyId) {
   const { rows } = await pool.query(`
     SELECT a.*, per.full_name AS candidate_name, per.phone AS candidate_phone, per.personal_email AS candidate_email
@@ -1985,8 +2082,14 @@ async function updateApplicationStatus(id, { status, rejection_reason, rejection
   if (!APPLICATION_STATUSES.includes(status)) {
     throw new Error(`Unknown application status: ${status}`);
   }
-  if (status === 'Rejected' && !rejection_reason) {
+  if ((status === 'Rejected by Company' || status === 'Rejected by Candidate') && !rejection_reason) {
     throw new Error('Для відмови потрібно вказати причину');
+  }
+  if (status === 'Rejected by Company' && rejection_reason && !REJECTION_REASONS_COMPANY.includes(rejection_reason)) {
+    throw new Error('Ця причина не з переліку причин відмови компанії');
+  }
+  if (status === 'Rejected by Candidate' && rejection_reason && !REJECTION_REASONS_CANDIDATE.includes(rejection_reason)) {
+    throw new Error('Ця причина не з переліку причин відмови кандидата');
   }
   const { rows: before } = await pool.query('SELECT status FROM hr_applications WHERE id = $1', [id]);
   if (!before[0]) return null;
@@ -2144,7 +2247,7 @@ async function updateOfferStatus(id, status, actor, approved_by) {
       `UPDATE hr_offers SET status = 'Accepted', employee_id = $2, approved_by = COALESCE($3, approved_by), updated_at = now() WHERE id = $1 RETURNING *`,
       [id, employee.id, approved_by ?? null]
     );
-    await client.query(`UPDATE hr_applications SET status = 'Hired', stage = 'Hired', updated_at = now() WHERE id = $1`, [offer.application_id]);
+    await client.query(`UPDATE hr_applications SET status = 'Hired', stage = 'Офер прийнято', updated_at = now() WHERE id = $1`, [offer.application_id]);
     await client.query(`UPDATE hr_vacancies SET status = 'Filled', updated_at = now() WHERE id = $1`, [application.vacancy_id]);
 
     await client.query('COMMIT');
@@ -3809,7 +3912,7 @@ async function getRecruitmentMetrics() {
   const { rows: screeningAudit } = await pool.query(`
     SELECT DISTINCT ON (entity_id) entity_id, created_at
     FROM hr_audit_log
-    WHERE entity_type = 'application' AND action = 'stage_change' AND new_value->>'stage' = 'Screening'
+    WHERE entity_type = 'application' AND action = 'stage_change' AND new_value->>'stage' = 'Сорсинг / Первинний розгляд'
     ORDER BY entity_id, created_at ASC
   `);
   const { rows: appsForScreening } = await pool.query(`SELECT id, created_at FROM hr_applications`);
@@ -3882,14 +3985,19 @@ async function getRecruitmentMetrics() {
   });
 
   // -- Причини відмов: company (ми відмовили) vs candidate (кандидат відмовився) --
+  // Групуємо по status, а не лише по тексту причини — 'Інше' присутнє в обох
+  // переліках причин (REJECTION_REASONS_COMPANY/CANDIDATE), тому текст сам по
+  // собі неоднозначний; status однозначно каже, хто ініціював відмову.
   const { rows: rejectionRows } = await pool.query(
-    `SELECT rejection_reason, COUNT(*)::int AS count FROM hr_applications WHERE rejection_reason != '' GROUP BY rejection_reason`
+    `SELECT status, rejection_reason, COUNT(*)::int AS count FROM hr_applications
+     WHERE status IN ('Rejected by Company', 'Rejected by Candidate') AND rejection_reason != ''
+     GROUP BY status, rejection_reason`
   );
   const companyRejectionReasons = {};
   const candidateDeclineReasons = {};
   rejectionRows.forEach((r) => {
-    if (REJECTION_REASONS_COMPANY.includes(r.rejection_reason)) companyRejectionReasons[r.rejection_reason] = r.count;
-    else if (REJECTION_REASONS_CANDIDATE.includes(r.rejection_reason)) candidateDeclineReasons[r.rejection_reason] = r.count;
+    if (r.status === 'Rejected by Company') companyRejectionReasons[r.rejection_reason] = r.count;
+    else if (r.status === 'Rejected by Candidate') candidateDeclineReasons[r.rejection_reason] = r.count;
   });
 
   // -- Ефективність по рекрутеру (за vacancy.recruiter_username) --
@@ -4009,6 +4117,8 @@ export default {
   createEmployee,
   seedOrgImport,
   parseVacancyRequestFieldsFromText,
+  parseVacancyFieldsFromText,
+  parseVacancyFileForFields,
   cleanupLegacyFlatOrgImport,
   updatePersonFields,
   updateEmployeeStatus,
@@ -4034,6 +4144,7 @@ export default {
   getCandidate,
   updateCandidateFields,
   deleteCandidate,
+  listApplications,
   listApplicationsForVacancy,
   getApplication,
   createApplication,
