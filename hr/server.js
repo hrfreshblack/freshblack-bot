@@ -645,6 +645,25 @@ app.post('/api/vacancies', requireRole('Recruiter'), async (req, res) => {
   }
 });
 
+// Реєструється ПЕРЕД '/api/vacancies/:id' — інакше Express матчить POST
+// сюди як updateVacancy(id='parse-file') і падає з "invalid input syntax
+// for type integer" (перевірено на живому запуску).
+app.post('/api/vacancies/parse-file', requireRole('Recruiter'), async (req, res) => {
+  try {
+    await uploadSingleFile(req, res);
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл обов’язковий' });
+      return;
+    }
+    const parsedFields = await db.parseVacancyFileForFields({ buffer: req.file.buffer, filename: req.file.originalname, mimeType: req.file.mimetype });
+    res.json({ ok: true, parsedFields });
+  } catch (error) {
+    console.error('POST /api/vacancies/parse-file ERROR:', error?.message || error);
+    const message = error?.message?.includes('File too large') ? 'Файл завеликий (максимум 15МБ)' : (error?.message || 'Не вдалося розібрати файл');
+    res.status(400).json({ ok: false, error: message });
+  }
+});
+
 app.post('/api/vacancies/:id', requireRole('Recruiter'), async (req, res) => {
   try {
     const vacancy = await db.updateVacancy(Number(req.params.id), req.body || {});
@@ -779,6 +798,18 @@ app.delete('/api/candidates/:id', requireRole('Recruiter'), async (req, res) => 
 });
 
 // ---- Recruitment / ATS: Applications ----
+
+app.get('/api/applications', async (req, res) => {
+  try {
+    const vacancy_id = Number(req.query.vacancy_id) || '';
+    const archived = req.query.archived === '1' || req.query.archived === 'true';
+    const applications = await db.listApplications({ vacancy_id, archived });
+    res.json({ ok: true, applications });
+  } catch (error) {
+    console.error('GET /api/applications ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати заявки' });
+  }
+});
 
 app.get('/api/applications/:id', async (req, res) => {
   try {
