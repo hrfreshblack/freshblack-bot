@@ -326,6 +326,12 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    -- Вільний текст (не FK) — рекрутер вводить вручну або обирає з підказки
+    -- (datalist) наших вакансій/посад; кандидат може по факту резюме
+    -- відгукнутись на одну посаду, а розглядатись зовсім на іншу (за
+    -- досвідом), тому саме два незалежні поля, а не одна прив'язка.
+    ALTER TABLE hr_candidates ADD COLUMN IF NOT EXISTS applied_position TEXT NOT NULL DEFAULT '';
+    ALTER TABLE hr_candidates ADD COLUMN IF NOT EXISTS considering_position TEXT NOT NULL DEFAULT '';
 
     -- Application: Candidate ↔ Vacancy (не сам Candidate — той самий
     -- кандидат може мати кілька заявок одночасно, ТЗ п.10).
@@ -1613,7 +1619,7 @@ function parseHeadingBlocks(text, headings, boundaryHeadings) {
           collected.push(blocks[j]);
           j++;
         }
-        if (collected.length) found[heading.field] = collected.join(' ');
+        if (collected.length) found[heading.field] = collected.join('\n');
       }
       break;
     }
@@ -1886,7 +1892,7 @@ async function findDuplicateCandidate({ phone, personal_email }) {
 // (ТЗ п.3 "one person — one master record"); повертаємо існуючого
 // кандидата з прапорцем duplicate: true, щоб UI попередив користувача.
 async function createCandidate({ full_name, phone, personal_email, telegram, city, current_job_title, desired_role,
-  desired_salary, source, owner_recruiter, resume_url, notes }, created_by) {
+  desired_salary, source, owner_recruiter, resume_url, notes, applied_position, considering_position }, created_by) {
   const duplicate = await findDuplicateCandidate({ phone, personal_email });
   if (duplicate) {
     return { candidate: duplicate, duplicate: true };
@@ -1900,9 +1906,10 @@ async function createCandidate({ full_name, phone, personal_email, telegram, cit
     );
     const person = personRows[0];
     const { rows: candRows } = await client.query(
-      `INSERT INTO hr_candidates (person_id, current_job_title, desired_role, desired_salary, source, owner_recruiter, resume_url, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [person.id, current_job_title || '', desired_role || '', desired_salary || '', source || '', owner_recruiter || '', resume_url || '', notes || '']
+      `INSERT INTO hr_candidates (person_id, current_job_title, desired_role, desired_salary, source, owner_recruiter, resume_url, notes, applied_position, considering_position)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [person.id, current_job_title || '', desired_role || '', desired_salary || '', source || '', owner_recruiter || '', resume_url || '', notes || '',
+        applied_position || '', considering_position || '']
     );
     await client.query('COMMIT');
     await writeAudit({ actor: created_by, action: 'create', entity_type: 'candidate', entity_id: candRows[0].id, new_value: { full_name } });
@@ -1926,10 +1933,9 @@ async function listCandidates({ search = '' } = {}) {
   const { rows } = await pool.query(`
     SELECT c.*, per.full_name, per.phone, per.personal_email, per.telegram, per.city,
       (SELECT COUNT(*)::int FROM hr_applications a WHERE a.candidate_id = c.id AND a.status = 'Active') AS active_applications_count,
-      (SELECT v.title FROM hr_applications a JOIN hr_vacancies v ON v.id = a.vacancy_id
-         WHERE a.candidate_id = c.id AND a.status = 'Active' ORDER BY a.applied_date ASC, a.id ASC LIMIT 1) AS primary_vacancy_title,
-      (SELECT v.title FROM hr_applications a JOIN hr_vacancies v ON v.id = a.vacancy_id
-         WHERE a.candidate_id = c.id AND a.status = 'Active' ORDER BY a.applied_date ASC, a.id ASC LIMIT 1 OFFSET 1) AS secondary_vacancy_title
+      (SELECT a.stage FROM hr_applications a
+         WHERE a.candidate_id = c.id AND a.status = 'Active' ORDER BY a.applied_date ASC, a.id ASC LIMIT 1) AS current_stage,
+      (SELECT v.salary_range FROM hr_vacancies v WHERE lower(v.title) = lower(c.considering_position) LIMIT 1) AS vacancy_salary_range
     FROM hr_candidates c
     JOIN hr_persons per ON per.id = c.person_id
     ${where}
@@ -1955,7 +1961,7 @@ async function getCandidate(id) {
 }
 
 async function updateCandidateFields(id, { current_job_title, desired_role, desired_salary, source, owner_recruiter,
-  resume_url, notes, talent_pool_segment, talent_pool_category, talent_pool_next_contact }) {
+  resume_url, notes, talent_pool_segment, talent_pool_category, talent_pool_next_contact, applied_position, considering_position }) {
   const { rows } = await pool.query(
     `UPDATE hr_candidates SET
        current_job_title = COALESCE($2, current_job_title),
@@ -1968,10 +1974,13 @@ async function updateCandidateFields(id, { current_job_title, desired_role, desi
        talent_pool_segment = COALESCE($9, talent_pool_segment),
        talent_pool_category = COALESCE($10, talent_pool_category),
        talent_pool_next_contact = $11,
+       applied_position = COALESCE($12, applied_position),
+       considering_position = COALESCE($13, considering_position),
        updated_at = now()
      WHERE id = $1 RETURNING *`,
     [id, current_job_title ?? null, desired_role ?? null, desired_salary ?? null, source ?? null, owner_recruiter ?? null,
-      resume_url ?? null, notes ?? null, talent_pool_segment ?? null, talent_pool_category ?? null, talent_pool_next_contact ?? null]
+      resume_url ?? null, notes ?? null, talent_pool_segment ?? null, talent_pool_category ?? null, talent_pool_next_contact ?? null,
+      applied_position ?? null, considering_position ?? null]
   );
   return rows[0] || null;
 }
