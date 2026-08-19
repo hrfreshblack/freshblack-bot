@@ -326,12 +326,25 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
-    -- Вільний текст (не FK) — рекрутер вводить вручну або обирає з підказки
-    -- (datalist) наших вакансій/посад; кандидат може по факту резюме
-    -- відгукнутись на одну посаду, а розглядатись зовсім на іншу (за
-    -- досвідом), тому саме два незалежні поля, а не одна прив'язка.
+    -- applied_position/considering_position (вільний текст) — перша версія
+    -- цих полів, замінена на строгий вибір із переліку наших вакансій нижче
+    -- (applied_vacancy_id/considering_vacancy_id). Колонки лишаються в схемі
+    -- (не видаляємо — це втрата даних), звідти нижче одноразово підтягуються
+    -- значення для вже введених вручну карток, де текст збігається з
+    -- реальною вакансією.
     ALTER TABLE hr_candidates ADD COLUMN IF NOT EXISTS applied_position TEXT NOT NULL DEFAULT '';
     ALTER TABLE hr_candidates ADD COLUMN IF NOT EXISTS considering_position TEXT NOT NULL DEFAULT '';
+    -- Кандидат може по факту відгукнутись резюме на одну вакансію, а
+    -- розглядатись зовсім на іншу (за досвідом) — тому два незалежні FK, а
+    -- не одна прив'язка. NULL = не вказано.
+    ALTER TABLE hr_candidates ADD COLUMN IF NOT EXISTS applied_vacancy_id INTEGER REFERENCES hr_vacancies(id);
+    ALTER TABLE hr_candidates ADD COLUMN IF NOT EXISTS considering_vacancy_id INTEGER REFERENCES hr_vacancies(id);
+    UPDATE hr_candidates c SET applied_vacancy_id = v.id
+      FROM hr_vacancies v
+      WHERE c.applied_vacancy_id IS NULL AND c.applied_position != '' AND lower(v.title) = lower(c.applied_position);
+    UPDATE hr_candidates c SET considering_vacancy_id = v.id
+      FROM hr_vacancies v
+      WHERE c.considering_vacancy_id IS NULL AND c.considering_position != '' AND lower(v.title) = lower(c.considering_position);
 
     -- Application: Candidate ↔ Vacancy (не сам Candidate — той самий
     -- кандидат може мати кілька заявок одночасно, ТЗ п.10).
@@ -1892,7 +1905,7 @@ async function findDuplicateCandidate({ phone, personal_email }) {
 // (ТЗ п.3 "one person — one master record"); повертаємо існуючого
 // кандидата з прапорцем duplicate: true, щоб UI попередив користувача.
 async function createCandidate({ full_name, phone, personal_email, telegram, city, current_job_title, desired_role,
-  desired_salary, source, owner_recruiter, resume_url, notes, applied_position, considering_position }, created_by) {
+  desired_salary, source, owner_recruiter, resume_url, notes, applied_vacancy_id, considering_vacancy_id }, created_by) {
   const duplicate = await findDuplicateCandidate({ phone, personal_email });
   if (duplicate) {
     return { candidate: duplicate, duplicate: true };
@@ -1906,10 +1919,10 @@ async function createCandidate({ full_name, phone, personal_email, telegram, cit
     );
     const person = personRows[0];
     const { rows: candRows } = await client.query(
-      `INSERT INTO hr_candidates (person_id, current_job_title, desired_role, desired_salary, source, owner_recruiter, resume_url, notes, applied_position, considering_position)
+      `INSERT INTO hr_candidates (person_id, current_job_title, desired_role, desired_salary, source, owner_recruiter, resume_url, notes, applied_vacancy_id, considering_vacancy_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [person.id, current_job_title || '', desired_role || '', desired_salary || '', source || '', owner_recruiter || '', resume_url || '', notes || '',
-        applied_position || '', considering_position || '']
+        applied_vacancy_id || null, considering_vacancy_id || null]
     );
     await client.query('COMMIT');
     await writeAudit({ actor: created_by, action: 'create', entity_type: 'candidate', entity_id: candRows[0].id, new_value: { full_name } });
@@ -1935,9 +1948,13 @@ async function listCandidates({ search = '' } = {}) {
       (SELECT COUNT(*)::int FROM hr_applications a WHERE a.candidate_id = c.id AND a.status = 'Active') AS active_applications_count,
       (SELECT a.stage FROM hr_applications a
          WHERE a.candidate_id = c.id AND a.status = 'Active' ORDER BY a.applied_date ASC, a.id ASC LIMIT 1) AS current_stage,
-      (SELECT v.salary_range FROM hr_vacancies v WHERE lower(v.title) = lower(c.considering_position) LIMIT 1) AS vacancy_salary_range
+      av.title AS applied_vacancy_title,
+      cv.title AS considering_vacancy_title,
+      cv.salary_range AS vacancy_salary_range
     FROM hr_candidates c
     JOIN hr_persons per ON per.id = c.person_id
+    LEFT JOIN hr_vacancies av ON av.id = c.applied_vacancy_id
+    LEFT JOIN hr_vacancies cv ON cv.id = c.considering_vacancy_id
     ${where}
     ORDER BY c.created_at DESC
   `, params);
@@ -1946,8 +1963,13 @@ async function listCandidates({ search = '' } = {}) {
 
 async function getCandidate(id) {
   const { rows } = await pool.query(`
-    SELECT c.*, per.*, c.id AS id, c.created_at AS created_at
-    FROM hr_candidates c JOIN hr_persons per ON per.id = c.person_id
+    SELECT c.*, per.*, c.id AS id, c.created_at AS created_at,
+      av.title AS applied_vacancy_title,
+      cv.title AS considering_vacancy_title
+    FROM hr_candidates c
+    JOIN hr_persons per ON per.id = c.person_id
+    LEFT JOIN hr_vacancies av ON av.id = c.applied_vacancy_id
+    LEFT JOIN hr_vacancies cv ON cv.id = c.considering_vacancy_id
     WHERE c.id = $1
   `, [id]);
   if (!rows[0]) return null;
@@ -1961,7 +1983,7 @@ async function getCandidate(id) {
 }
 
 async function updateCandidateFields(id, { current_job_title, desired_role, desired_salary, source, owner_recruiter,
-  resume_url, notes, talent_pool_segment, talent_pool_category, talent_pool_next_contact, applied_position, considering_position }) {
+  resume_url, notes, talent_pool_segment, talent_pool_category, talent_pool_next_contact, applied_vacancy_id, considering_vacancy_id }) {
   const { rows } = await pool.query(
     `UPDATE hr_candidates SET
        current_job_title = COALESCE($2, current_job_title),
@@ -1974,13 +1996,13 @@ async function updateCandidateFields(id, { current_job_title, desired_role, desi
        talent_pool_segment = COALESCE($9, talent_pool_segment),
        talent_pool_category = COALESCE($10, talent_pool_category),
        talent_pool_next_contact = $11,
-       applied_position = COALESCE($12, applied_position),
-       considering_position = COALESCE($13, considering_position),
+       applied_vacancy_id = $12,
+       considering_vacancy_id = $13,
        updated_at = now()
      WHERE id = $1 RETURNING *`,
     [id, current_job_title ?? null, desired_role ?? null, desired_salary ?? null, source ?? null, owner_recruiter ?? null,
       resume_url ?? null, notes ?? null, talent_pool_segment ?? null, talent_pool_category ?? null, talent_pool_next_contact ?? null,
-      applied_position ?? null, considering_position ?? null]
+      applied_vacancy_id || null, considering_vacancy_id || null]
   );
   return rows[0] || null;
 }

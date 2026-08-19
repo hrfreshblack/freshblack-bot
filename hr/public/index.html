@@ -704,12 +704,9 @@
     <div class="field"><label>ПІБ</label><input type="text" id="candFullName"></div>
     <div class="field"><label>Телефон</label><input type="text" id="candPhone"></div>
     <div class="field"><label>Email</label><input type="text" id="candEmail"></div>
-    <div class="field"><label>Поточна посада</label><input type="text" id="candCurrentJobTitle"></div>
-    <div class="field"><label>Бажана посада</label><input type="text" id="candDesiredRole"></div>
     <div class="field"><label>Бажана ЗП</label><input type="text" id="candDesiredSalary"></div>
-    <div class="field"><label>На яку відгукнувся</label><input type="text" id="candAppliedPosition" list="ourPositionsList" placeholder="Ввести вручну або обрати зі списку"></div>
-    <div class="field"><label>На яку розглядаємо</label><input type="text" id="candConsideringPosition" list="ourPositionsList" placeholder="Ввести вручну або обрати зі списку"></div>
-    <datalist id="ourPositionsList"></datalist>
+    <div class="field"><label>На яку відгукнувся</label><select id="candAppliedVacancy"><option value="">— не вказано —</option></select></div>
+    <div class="field"><label>На яку розглядаємо</label><select id="candConsideringVacancy"><option value="">— не вказано —</option></select></div>
     <div class="field"><label>Джерело</label>
       <select id="candSource"><option value="">—</option><option>Work.ua</option><option>Robota.ua</option><option>Referral</option><option>LinkedIn</option><option>Telegram</option><option>Інше</option></select>
     </div>
@@ -4360,8 +4357,8 @@ async function loadCandidates() {
       <td>${escAttr(c.personal_email || '—')}</td>
       <td>${escAttr(c.source || '—')}</td>
       <td>${c.current_stage ? escAttr(c.current_stage) : '—'}</td>
-      <td>${escAttr(c.applied_position || '—')}</td>
-      <td>${escAttr(c.considering_position || '—')}</td>
+      <td>${escAttr(c.applied_vacancy_title || '—')}</td>
+      <td>${escAttr(c.considering_vacancy_title || '—')}</td>
       <td>${escAttr(c.vacancy_salary_range || '—')}</td>
       <td>${escAttr(c.desired_salary || '—')}</td>
       <td>${escAttr(c.notes || '—')}</td>
@@ -4373,14 +4370,14 @@ document.getElementById('candSearch').addEventListener('input', () => {
   window._candSearchTimer = setTimeout(loadCandidates, 250);
 });
 
-async function loadOurPositionsDatalist() {
-  const [vacResp, posResp] = await Promise.all([apiFetch('/api/vacancies'), apiFetch('/api/positions')]);
-  const vacData = await vacResp.json();
-  const posData = await posResp.json();
-  const titles = new Set();
-  (vacData.ok ? vacData.vacancies : []).forEach((v) => titles.add(v.title));
-  (posData.ok ? posData.positions : []).forEach((p) => titles.add(p.title));
-  document.getElementById('ourPositionsList').innerHTML = [...titles].map((t) => `<option value="${escAttr(t)}"></option>`).join('');
+async function loadCandidateVacancySelects(selectedAppliedId, selectedConsideringId) {
+  const resp = await apiFetch('/api/vacancies');
+  const data = await resp.json();
+  const vacancies = data.ok ? data.vacancies : [];
+  const optionsHtml = (selectedId) => '<option value="">— не вказано —</option>' +
+    vacancies.map((v) => `<option value="${v.id}" ${v.id === selectedId ? 'selected' : ''}>${escAttr(v.title)}${v.department_name ? ' · ' + escAttr(v.department_name) : ''}</option>`).join('');
+  document.getElementById('candAppliedVacancy').innerHTML = optionsHtml(selectedAppliedId || null);
+  document.getElementById('candConsideringVacancy').innerHTML = optionsHtml(selectedConsideringId || null);
 }
 
 document.getElementById('btnAddCandidate').onclick = async () => {
@@ -4389,11 +4386,7 @@ document.getElementById('btnAddCandidate').onclick = async () => {
   document.getElementById('candFullName').value = '';
   document.getElementById('candPhone').value = '';
   document.getElementById('candEmail').value = '';
-  document.getElementById('candCurrentJobTitle').value = '';
-  document.getElementById('candAppliedPosition').value = '';
-  document.getElementById('candConsideringPosition').value = '';
-  loadOurPositionsDatalist();
-  document.getElementById('candDesiredRole').value = '';
+  await loadCandidateVacancySelects(null, null);
   document.getElementById('candDesiredSalary').value = '';
   document.getElementById('candSource').value = '';
   document.getElementById('candResumeUrl').value = '';
@@ -4411,11 +4404,7 @@ async function openCandidateEdit(id) {
   document.getElementById('candFullName').value = c.full_name;
   document.getElementById('candPhone').value = c.phone || '';
   document.getElementById('candEmail').value = c.personal_email || '';
-  document.getElementById('candCurrentJobTitle').value = c.current_job_title || '';
-  document.getElementById('candAppliedPosition').value = c.applied_position || '';
-  document.getElementById('candConsideringPosition').value = c.considering_position || '';
-  loadOurPositionsDatalist();
-  document.getElementById('candDesiredRole').value = c.desired_role || '';
+  await loadCandidateVacancySelects(c.applied_vacancy_id, c.considering_vacancy_id);
   document.getElementById('candDesiredSalary').value = c.desired_salary || '';
   document.getElementById('candSource').value = c.source || '';
   document.getElementById('candResumeUrl').value = c.resume_url || '';
@@ -4428,10 +4417,8 @@ document.getElementById('btnSaveCandidate').onclick = async () => {
   if (!full_name) { showToast('ПІБ обов’язкове'); return; }
   const id = document.getElementById('candId').value;
   const recruitFields = {
-    current_job_title: document.getElementById('candCurrentJobTitle').value.trim(),
-    applied_position: document.getElementById('candAppliedPosition').value.trim(),
-    considering_position: document.getElementById('candConsideringPosition').value.trim(),
-    desired_role: document.getElementById('candDesiredRole').value.trim(),
+    applied_vacancy_id: document.getElementById('candAppliedVacancy').value || null,
+    considering_vacancy_id: document.getElementById('candConsideringVacancy').value || null,
     desired_salary: document.getElementById('candDesiredSalary').value.trim(),
     source: document.getElementById('candSource').value,
     resume_url: document.getElementById('candResumeUrl').value.trim(),
@@ -4495,10 +4482,8 @@ async function renderCandidateDetail() {
     <div style="color:var(--muted); font-size:13px;">${escAttr(c.phone || '—')} · ${escAttr(c.personal_email || '—')}</div>
   `;
   document.getElementById('candidateDetailFields').innerHTML = `
-    <div class="fieldItem"><label>Поточна посада</label>${escAttr(c.current_job_title || '—')}</div>
-    <div class="fieldItem"><label>На яку відгукнувся</label>${escAttr(c.applied_position || '—')}</div>
-    <div class="fieldItem"><label>Бажана посада</label>${escAttr(c.desired_role || '—')}</div>
-    <div class="fieldItem"><label>На яку розглядаємо</label>${escAttr(c.considering_position || '—')}</div>
+    <div class="fieldItem"><label>На яку відгукнувся</label>${escAttr(c.applied_vacancy_title || '—')}</div>
+    <div class="fieldItem"><label>На яку розглядаємо</label>${escAttr(c.considering_vacancy_title || '—')}</div>
     <div class="fieldItem"><label>Бажана ЗП</label>${escAttr(c.desired_salary || '—')}</div>
     <div class="fieldItem"><label>Джерело</label>${escAttr(c.source || '—')}</div>
     <div class="fieldItem"><label>Резюме</label>${c.resume_url ? '<a href="' + escAttr(c.resume_url) + '" target="_blank" style="color:var(--accent2);">посилання</a>' : '—'}</div>
