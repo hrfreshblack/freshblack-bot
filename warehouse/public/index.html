@@ -620,6 +620,7 @@
         <option value="в роботі">в роботі</option>
         <option value="відвантажено">відвантажено</option>
         <option value="скасовано">скасовано</option>
+        <option value="списання">списання</option>
       </select>
       <div class="menuWrap">
         <button class="secondary" id="btnOrderMenu">⋯</button>
@@ -2011,12 +2012,13 @@ async function loadRecipes() {
 function orderStatusTag(status) {
   if (status === 'відвантажено') return '<span class="tag ok">відвантажено</span>';
   if (status === 'скасовано') return '<span class="tag bad">скасовано</span>';
+  if (status === 'списання') return '<span class="tag bad">списання</span>';
   if (status === 'в роботі') return '<span class="tag warn">в роботі</span>';
   if (status === 'змішаний') return '<span class="tag warn">змішаний</span>';
   return '<span class="tag neutral">нове</span>';
 }
 
-const ORDER_STATUS_OPTIONS = ['нове', 'в роботі', 'відвантажено', 'скасовано'];
+const ORDER_STATUS_OPTIONS = ['нове', 'в роботі', 'відвантажено', 'скасовано', 'списання'];
 const DELIVERY_METHOD_OPTIONS = ['Водій', 'Самовивіз', 'Нова пошта', 'Поштомат'];
 const DELIVERY_METHODS_REQUIRING_TTN = ['Нова пошта', 'Поштомат'];
 
@@ -2125,7 +2127,7 @@ async function renderOrderDetail(orderNumber) {
               <select id="lineStatus_${l.id}" style="font-size:11px;">
                 ${ORDER_STATUS_OPTIONS.map((s) => `<option value="${s}" ${l.status === s ? 'selected' : ''}>${s}</option>`).join('')}
               </select>
-              <input type="text" id="lineStatusNote_${l.id}" placeholder="коментар (напр. причина скасування)" style="font-size:11px; width:160px;" value="${(l.status_note || '').replace(/"/g, '&quot;')}">
+              <input type="text" id="lineStatusNote_${l.id}" placeholder="коментар (причина скасування/списання)" style="font-size:11px; width:160px;" value="${(l.status_note || '').replace(/"/g, '&quot;')}">
               <button class="secondary" style="font-size:11px; padding:4px 6px;" onclick="saveLineStatus(${l.id}, '${orderNumber}')">Змінити статус позиції</button>
             </div>
             <div style="display:flex; gap:4px; margin-top:6px; flex-wrap: wrap; align-items:center;">
@@ -2195,6 +2197,10 @@ async function renderOrderDetail(orderNumber) {
 async function saveLineStatus(lineId, orderNumber) {
   const status = document.getElementById('lineStatus_' + lineId).value;
   const note = document.getElementById('lineStatusNote_' + lineId).value.trim();
+  if (status === 'списання' && !note) {
+    showToast('Для статусу "списання" вкажи причину в коментарі');
+    return;
+  }
   const resp = await fetch('/api/order-lines/' + lineId + '/status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

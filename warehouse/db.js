@@ -1576,7 +1576,7 @@ async function listBlendRecipes() {
   return Array.from(byId.values());
 }
 
-const ORDER_STATUSES = ['нове', 'в роботі', 'відвантажено', 'скасовано'];
+const ORDER_STATUSES = ['нове', 'в роботі', 'відвантажено', 'скасовано', 'списання'];
 
 // Так само, як insertProductsIfMissing — ніколи не перезаписує вже наявного
 // клієнта (додано вручну "Групу партнера" чи ні), безпечно на кожен імпорт.
@@ -1927,14 +1927,21 @@ async function deleteOrderLineOverride(id) {
   return rowCount;
 }
 
-// Перехід у "відвантажено" списує зі складу (рух shipment) кожен рядок, який
-// ще не був відвантажений раніше — інакше повторний клік на той самий статус
-// списав би вдруге. Перехід з "відвантажено" в інший статус рух не скасовує
-// (немає single unambiguous "скасувати відвантаження" — за потреби це окремий
-// рух "повернення" вручну).
+// Статуси, які фізично забирають товар зі складу (на відміну від
+// "скасовано", де товар лишається/повертається на склад). Перехід У один
+// з них (з поза-межового статусу) списує склад одним рухом відповідного
+// типу; перехід З нього назад у не-складський статус повертає товар рухом
+// "return". Перехід МІЖ двома складськими статусами (напр. відвантажено →
+// списання — рідкісний випадок, коли вже відвантажений товар потім таки
+// списують) руху не створює: товар уже пішов зі складу один раз.
+const STOCK_OUT_MOVEMENT_BY_STATUS = { 'відвантажено': 'shipment', 'списання': 'writeoff' };
+
 async function updateOrderStatus(orderNumber, status, note) {
   if (!ORDER_STATUSES.includes(status)) {
     throw new Error(`Unknown status: ${status}`);
+  }
+  if (status === 'списання' && !(note || '').trim()) {
+    throw new Error('Для статусу "списання" обов’язково вказати причину в коментарі');
   }
 
   const { rows: linesBefore } = await pool.query(
@@ -1947,23 +1954,25 @@ async function updateOrderStatus(orderNumber, status, note) {
     [status, note || '', orderNumber]
   );
 
-  if (status === 'відвантажено') {
+  const isOut = STOCK_OUT_MOVEMENT_BY_STATUS[status];
+  if (isOut) {
     for (const line of linesBefore) {
-      if (line.status === 'відвантажено') continue;
+      if (STOCK_OUT_MOVEMENT_BY_STATUS[line.status]) continue;
       await addMovement({
         product_code: line.product_code,
-        movement_type: 'shipment',
+        movement_type: isOut,
         qty: line.qty,
-        movement_date: line.ship_date || null,
-        note: `Замовлення №${orderNumber}`
+        movement_date: isOut === 'shipment' ? (line.ship_date || null) : null,
+        note: isOut === 'shipment' ? `Замовлення №${orderNumber}` : `Списання по замовленню №${orderNumber}: ${note.trim()}`
       });
     }
   } else {
-    // Замовлення виходить зі стану "відвантажено" (скасовано/повернено в
-    // роботу) — товар, який уже був списаний, повертається на склад
-    // рухом "повернення". Якщо рядок ще не був відвантажений, чіпати нічого.
+    // Замовлення виходить зі складського статусу (скасовано/повернено в
+    // роботу) — товар, який уже був списаний зі складу (відвантажено чи
+    // списано), повертається рухом "повернення". Рядки, які ще не пішли
+    // зі складу, не чіпаємо.
     for (const line of linesBefore) {
-      if (line.status !== 'відвантажено') continue;
+      if (!STOCK_OUT_MOVEMENT_BY_STATUS[line.status]) continue;
       await addMovement({
         product_code: line.product_code,
         movement_type: 'return',
@@ -1978,11 +1987,15 @@ async function updateOrderStatus(orderNumber, status, note) {
 }
 
 // Те саме, але для ОДНОГО рядка замовлення — замовлення часто їде не всі
-// позиції одразу, тож статус (відвантажено/скасовано) треба вміти міняти
-// окремо по кожному товару в замовленні, а не тільки цілим замовленням.
+// позиції одразу, тож статус (відвантажено/скасовано/списання) треба вміти
+// міняти окремо по кожному товару в замовленні, а не тільки цілим
+// замовленням.
 async function updateOrderLineStatus(lineId, status, note) {
   if (!ORDER_STATUSES.includes(status)) {
     throw new Error(`Unknown status: ${status}`);
+  }
+  if (status === 'списання' && !(note || '').trim()) {
+    throw new Error('Для статусу "списання" обов’язково вказати причину в коментарі');
   }
 
   const { rows } = await pool.query(
@@ -1997,16 +2010,18 @@ async function updateOrderLineStatus(lineId, status, note) {
     [status, note || '', lineId]
   );
 
-  if (status === 'відвантажено' && line.status !== 'відвантажено') {
+  const wasOut = STOCK_OUT_MOVEMENT_BY_STATUS[line.status];
+  const isOut = STOCK_OUT_MOVEMENT_BY_STATUS[status];
+  if (isOut && !wasOut) {
     await addMovement({
       product_code: line.product_code,
-      movement_type: 'shipment',
+      movement_type: isOut,
       qty: line.qty,
-      movement_date: line.ship_date || null,
-      note: `Замовлення №${line.order_number}`
+      movement_date: isOut === 'shipment' ? (line.ship_date || null) : null,
+      note: isOut === 'shipment' ? `Замовлення №${line.order_number}` : `Списання по замовленню №${line.order_number}: ${note.trim()}`
     });
-    await completeTasksForOrderLine(lineId);
-  } else if (status !== 'відвантажено' && line.status === 'відвантажено') {
+    if (isOut === 'shipment') await completeTasksForOrderLine(lineId);
+  } else if (!isOut && wasOut) {
     await addMovement({
       product_code: line.product_code,
       movement_type: 'return',
@@ -2035,16 +2050,16 @@ async function updateOrderLineDelivery(lineId, deliveryMethod, ttn) {
 
 // Форс-мажорна заміна товару в конкретній позиції (напр. закінчився один
 // обсмаж і відвантажують інший замість нього). Дозволена лише поки позицію
-// ще не відвантажено — інакше залишиться рух складу, прив'язаний до
-// старого коду товару; щоб замінити вже відвантажену позицію, спершу
-// поверни їй статус (це поверне товар на склад рухом "повернення"), тоді
-// заміни товар, тоді відвантаж заново.
+// ще не відвантажено чи списано — інакше залишиться рух складу, прив'язаний
+// до старого коду товару; щоб замінити вже відвантажену/списану позицію,
+// спершу поверни їй статус (це поверне товар на склад рухом "повернення"),
+// тоді заміни товар, тоді відвантаж/спиши заново.
 async function substituteOrderLineProduct(lineId, newProductCode, newQty, note) {
   const { rows: lineRows } = await pool.query('SELECT * FROM order_lines WHERE id = $1', [lineId]);
   const line = lineRows[0];
   if (!line) throw new Error('Позицію не знайдено');
-  if (line.status === 'відвантажено') {
-    throw new Error('Позиція вже відвантажена — спершу зміни статус назад, тоді заміни товар');
+  if (STOCK_OUT_MOVEMENT_BY_STATUS[line.status]) {
+    throw new Error('Позиція вже відвантажена або списана — спершу зміни статус назад, тоді заміни товар');
   }
 
   const { rows: productRows } = await pool.query('SELECT code, name FROM products WHERE code = $1', [newProductCode]);
