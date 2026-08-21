@@ -706,6 +706,7 @@
     <div class="field"><label>Email</label><input type="text" id="candEmail"></div>
     <div class="field"><label>Бажана ЗП</label><input type="text" id="candDesiredSalary"></div>
     <div class="field"><label>На яку відгукнувся</label><select id="candAppliedVacancy"><option value="">— не вказано —</option></select></div>
+    <div class="field"><label>Тип звернення</label><select id="candContactMethod"><option value="">— не вказано —</option></select></div>
     <div class="field"><label>На яку розглядаємо</label><select id="candConsideringVacancy"><option value="">— не вказано —</option></select></div>
     <div class="field"><label>Джерело</label>
       <select id="candSource"><option value="">—</option><option>Work.ua</option><option>Robota.ua</option><option>Referral</option><option>LinkedIn</option><option>Telegram</option><option>Інше</option></select>
@@ -4380,6 +4381,12 @@ async function loadCandidateVacancySelects(selectedAppliedId, selectedConsiderin
   document.getElementById('candConsideringVacancy').innerHTML = optionsHtml(selectedConsideringId || null);
 }
 
+function fillCandidateContactMethodOptions(selectedValue) {
+  const methods = (window._dict && window._dict.candidateContactMethods) || [];
+  document.getElementById('candContactMethod').innerHTML = '<option value="">— не вказано —</option>' +
+    methods.map((m) => `<option value="${m}" ${m === selectedValue ? 'selected' : ''}>${m}</option>`).join('');
+}
+
 document.getElementById('btnAddCandidate').onclick = async () => {
   document.getElementById('candModalTitle').textContent = 'Новий кандидат';
   document.getElementById('candId').value = '';
@@ -4387,6 +4394,7 @@ document.getElementById('btnAddCandidate').onclick = async () => {
   document.getElementById('candPhone').value = '';
   document.getElementById('candEmail').value = '';
   await loadCandidateVacancySelects(null, null);
+  fillCandidateContactMethodOptions('');
   document.getElementById('candDesiredSalary').value = '';
   document.getElementById('candSource').value = '';
   document.getElementById('candResumeUrl').value = '';
@@ -4405,6 +4413,7 @@ async function openCandidateEdit(id) {
   document.getElementById('candPhone').value = c.phone || '';
   document.getElementById('candEmail').value = c.personal_email || '';
   await loadCandidateVacancySelects(c.applied_vacancy_id, c.considering_vacancy_id);
+  fillCandidateContactMethodOptions(c.contact_method || '');
   document.getElementById('candDesiredSalary').value = c.desired_salary || '';
   document.getElementById('candSource').value = c.source || '';
   document.getElementById('candResumeUrl').value = c.resume_url || '';
@@ -4419,6 +4428,7 @@ document.getElementById('btnSaveCandidate').onclick = async () => {
   const recruitFields = {
     applied_vacancy_id: document.getElementById('candAppliedVacancy').value || null,
     considering_vacancy_id: document.getElementById('candConsideringVacancy').value || null,
+    contact_method: document.getElementById('candContactMethod').value,
     desired_salary: document.getElementById('candDesiredSalary').value.trim(),
     source: document.getElementById('candSource').value,
     resume_url: document.getElementById('candResumeUrl').value.trim(),
@@ -4483,6 +4493,7 @@ async function renderCandidateDetail() {
   `;
   document.getElementById('candidateDetailFields').innerHTML = `
     <div class="fieldItem"><label>На яку відгукнувся</label>${escAttr(c.applied_vacancy_title || '—')}</div>
+    <div class="fieldItem"><label>Тип звернення</label>${escAttr(c.contact_method || '—')}</div>
     <div class="fieldItem"><label>На яку розглядаємо</label>${escAttr(c.considering_vacancy_title || '—')}</div>
     <div class="fieldItem"><label>Бажана ЗП</label>${escAttr(c.desired_salary || '—')}</div>
     <div class="fieldItem"><label>Джерело</label>${escAttr(c.source || '—')}</div>
