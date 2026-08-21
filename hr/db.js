@@ -39,6 +39,7 @@ const APPLICATION_STATUSES = ['Active', 'Hired', 'Rejected by Company', 'Rejecte
 const REJECTION_REASONS_COMPANY = ['Недостатньо досвіду', 'Не підходить за компетенціями', 'Не пройшов тестове завдання', 'Завищені зарплатні очікування', 'Не підходить за soft skills', 'Вакансію закрито/заморожено', 'Інше'];
 const REJECTION_REASONS_CANDIDATE = ['Прийняв іншу пропозицію', 'Не влаштовують умови', 'Не влаштовує зарплата', 'Далеко добиратись', 'Бронювання', 'Змінив рішення щодо пошуку роботи', 'Не виходить на зв`язок', 'Інше'];
 const OFFER_STATUSES = ['Draft', 'Sent', 'Accepted', 'Declined', 'Expired', 'Withdrawn'];
+const CANDIDATE_CONTACT_METHODS = ['Відгук', 'Холодний пошук по базі резюме', 'Рекомендація', 'Інше'];
 const INTERVIEW_TYPES = ['HR Screening', 'Technical/Professional', 'Final', 'Test Task Review', 'Reference Check'];
 const INTERVIEW_STATUSES = ['Scheduled', 'Completed', 'Cancelled', 'No Show'];
 
@@ -345,6 +346,11 @@ async function initSchema() {
     UPDATE hr_candidates c SET considering_vacancy_id = v.id
       FROM hr_vacancies v
       WHERE c.considering_vacancy_id IS NULL AND c.considering_position != '' AND lower(v.title) = lower(c.considering_position);
+    -- Як кандидат потрапив на цю вакансію — сам відгукнувся, знайдений
+    -- холодним пошуком по базі резюме, чи прийшов за рекомендацією.
+    -- Окремо від "Джерело" (Work.ua/LinkedIn/... — загальний канал, звідки
+    -- взагалі з'явився контакт кандидата) — це про конкретно цю вакансію.
+    ALTER TABLE hr_candidates ADD COLUMN IF NOT EXISTS contact_method TEXT NOT NULL DEFAULT '';
 
     -- Application: Candidate ↔ Vacancy (не сам Candidate — той самий
     -- кандидат може мати кілька заявок одночасно, ТЗ п.10).
@@ -1905,7 +1911,7 @@ async function findDuplicateCandidate({ phone, personal_email }) {
 // (ТЗ п.3 "one person — one master record"); повертаємо існуючого
 // кандидата з прапорцем duplicate: true, щоб UI попередив користувача.
 async function createCandidate({ full_name, phone, personal_email, telegram, city, current_job_title, desired_role,
-  desired_salary, source, owner_recruiter, resume_url, notes, applied_vacancy_id, considering_vacancy_id }, created_by) {
+  desired_salary, source, owner_recruiter, resume_url, notes, applied_vacancy_id, considering_vacancy_id, contact_method }, created_by) {
   const duplicate = await findDuplicateCandidate({ phone, personal_email });
   if (duplicate) {
     return { candidate: duplicate, duplicate: true };
@@ -1919,19 +1925,35 @@ async function createCandidate({ full_name, phone, personal_email, telegram, cit
     );
     const person = personRows[0];
     const { rows: candRows } = await client.query(
-      `INSERT INTO hr_candidates (person_id, current_job_title, desired_role, desired_salary, source, owner_recruiter, resume_url, notes, applied_vacancy_id, considering_vacancy_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      `INSERT INTO hr_candidates (person_id, current_job_title, desired_role, desired_salary, source, owner_recruiter, resume_url, notes, applied_vacancy_id, considering_vacancy_id, contact_method)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [person.id, current_job_title || '', desired_role || '', desired_salary || '', source || '', owner_recruiter || '', resume_url || '', notes || '',
-        applied_vacancy_id || null, considering_vacancy_id || null]
+        applied_vacancy_id || null, considering_vacancy_id || null, contact_method || '']
     );
     await client.query('COMMIT');
     await writeAudit({ actor: created_by, action: 'create', entity_type: 'candidate', entity_id: candRows[0].id, new_value: { full_name } });
+    await ensureApplicationsForCandidateVacancies(candRows[0].id, applied_vacancy_id, considering_vacancy_id, created_by);
     return { candidate: { ...candRows[0], full_name, phone: phone || '', personal_email: personal_email || '' }, duplicate: false };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
+  }
+}
+
+// "На яку відгукнувся"/"На яку розглядаємо" на картці кандидата — це
+// реальна прив'язка до вакансії (не просто підказка), тому вибір там має
+// створювати заявку (hr_applications), інакше кандидат обраний на вакансію,
+// але не показується в її переліку заявок і не бачиться у воронці/аналітиці.
+// createApplication сама ідемпотентна (унікальна пара candidate+vacancy),
+// тож повторне збереження тієї самої вакансії не плодить дублів.
+async function ensureApplicationsForCandidateVacancies(candidateId, appliedVacancyId, consideringVacancyId, actor) {
+  const vacancyIds = new Set();
+  if (appliedVacancyId) vacancyIds.add(Number(appliedVacancyId));
+  if (consideringVacancyId) vacancyIds.add(Number(consideringVacancyId));
+  for (const vacancyId of vacancyIds) {
+    await createApplication({ candidate_id: candidateId, vacancy_id: vacancyId }, actor);
   }
 }
 
@@ -1983,7 +2005,7 @@ async function getCandidate(id) {
 }
 
 async function updateCandidateFields(id, { current_job_title, desired_role, desired_salary, source, owner_recruiter,
-  resume_url, notes, talent_pool_segment, talent_pool_category, talent_pool_next_contact, applied_vacancy_id, considering_vacancy_id }) {
+  resume_url, notes, talent_pool_segment, talent_pool_category, talent_pool_next_contact, applied_vacancy_id, considering_vacancy_id, contact_method }, actor) {
   const { rows } = await pool.query(
     `UPDATE hr_candidates SET
        current_job_title = COALESCE($2, current_job_title),
@@ -1998,13 +2020,16 @@ async function updateCandidateFields(id, { current_job_title, desired_role, desi
        talent_pool_next_contact = $11,
        applied_vacancy_id = $12,
        considering_vacancy_id = $13,
+       contact_method = COALESCE($14, contact_method),
        updated_at = now()
      WHERE id = $1 RETURNING *`,
     [id, current_job_title ?? null, desired_role ?? null, desired_salary ?? null, source ?? null, owner_recruiter ?? null,
       resume_url ?? null, notes ?? null, talent_pool_segment ?? null, talent_pool_category ?? null, talent_pool_next_contact ?? null,
-      applied_vacancy_id || null, considering_vacancy_id || null]
+      applied_vacancy_id || null, considering_vacancy_id || null, contact_method ?? null]
   );
-  return rows[0] || null;
+  if (!rows[0]) return null;
+  await ensureApplicationsForCandidateVacancies(id, applied_vacancy_id, considering_vacancy_id, actor);
+  return rows[0];
 }
 
 // Видалення дозволене лише для кандидата без жодної заявки на вакансію —
@@ -4126,6 +4151,7 @@ export default {
   REJECTION_REASONS_COMPANY,
   REJECTION_REASONS_CANDIDATE,
   OFFER_STATUSES,
+  CANDIDATE_CONTACT_METHODS,
   INTERVIEW_TYPES,
   INTERVIEW_STATUSES,
   createAccountIfMissingWithHash,

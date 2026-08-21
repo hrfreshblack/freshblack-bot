@@ -180,6 +180,7 @@ app.get('/api/dictionaries', (req, res) => {
     rejectionReasonsCompany: db.REJECTION_REASONS_COMPANY,
     rejectionReasonsCandidate: db.REJECTION_REASONS_CANDIDATE,
     offerStatuses: db.OFFER_STATUSES,
+    candidateContactMethods: db.CANDIDATE_CONTACT_METHODS,
     interviewTypes: db.INTERVIEW_TYPES,
     interviewStatuses: db.INTERVIEW_STATUSES,
     onboardingMilestones: db.ONBOARDING_MILESTONES,
@@ -756,7 +757,7 @@ app.post('/api/candidates/upload-resume', requireRole('Recruiter'), async (req, 
 
 app.post('/api/candidates/:id', requireRole('Recruiter'), async (req, res) => {
   try {
-    const candidate = await db.updateCandidateFields(Number(req.params.id), req.body || {});
+    const candidate = await db.updateCandidateFields(Number(req.params.id), req.body || {}, req.account.username);
     if (!candidate) {
       res.status(404).json({ ok: false, error: 'Кандидата не знайдено' });
       return;
