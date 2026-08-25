@@ -434,6 +434,11 @@ async function initSchema() {
 }
 
 const PRODUCT_STATUSES = ['активний', 'немає в наявності', 'знято з виробництва'];
+// "зелена кава"/"напівфабрикат" НЕ входять сюди навмисно — ці категорії
+// керуються спеціальними потоками (партія обсмажки/фотосепарація, лоти
+// зеленої кави з source_green_coffee_code) і мають власні вкладки; вільна
+// зміна категорії на них через звичайний товар зламала б ці залежності.
+const PRODUCT_EDITABLE_CATEGORIES = ['готова продукція', 'квакер', 'позиції з сайту'];
 
 async function upsertProduct(product) {
   const { rows } = await pool.query(
@@ -467,7 +472,10 @@ async function upsertProduct(product) {
 
 // Часткове оновлення без ризику затерти інші поля (наприклад, зміна лише
 // статусу з таблиці не повинна очистити назву чи станцію).
-async function updateProductFields(code, { status, station, min_stock, unit, is_stock_item } = {}) {
+async function updateProductFields(code, { status, station, min_stock, unit, is_stock_item, category } = {}) {
+  if (category !== undefined && category !== null && !PRODUCT_EDITABLE_CATEGORIES.includes(category)) {
+    throw new Error(`Категорію можна змінити лише на: ${PRODUCT_EDITABLE_CATEGORIES.join(', ')}`);
+  }
   const { rows } = await pool.query(
     `UPDATE products SET
        status = COALESCE($2, status),
@@ -475,10 +483,11 @@ async function updateProductFields(code, { status, station, min_stock, unit, is_
        min_stock = COALESCE($4, min_stock),
        unit = COALESCE($5, unit),
        is_stock_item = COALESCE($6, is_stock_item),
+       category = COALESCE($7, category),
        updated_at = now()
      WHERE code = $1
      RETURNING *`,
-    [code, status ?? null, station ?? null, min_stock ?? null, unit ?? null, is_stock_item ?? null]
+    [code, status ?? null, station ?? null, min_stock ?? null, unit ?? null, is_stock_item ?? null, category ?? null]
   );
   return rows[0] || null;
 }
@@ -604,13 +613,13 @@ async function listProducts({ search = '', activeOnly = true } = {}) {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const { rows } = await pool.query(
-    `SELECT p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active, p.status,
+    `SELECT p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active, p.status, p.category,
             COALESCE(SUM(m.signed_qty), 0) AS balance,
             MAX(m.movement_date) AS last_movement_date
      FROM products p
      LEFT JOIN stock_movements m ON m.product_code = p.code
      ${where}
-     GROUP BY p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active, p.status
+     GROUP BY p.code, p.name, p.short_name, p.unit, p.station, p.is_stock_item, p.min_stock, p.active, p.status, p.category
      ORDER BY lower(p.name) ASC`,
     params
   );
@@ -891,51 +900,127 @@ async function listMovements(code, limit = 50) {
   return rows;
 }
 
-// Дати, коли проводилась інвентаризація (рух типу inventory_adjustment), з
-// кількістю порахованих позицій — щоб було видно всі минулі підрахунки.
+// Вкладки Інвентаризації — той самий підрахунок (inventory_adjustment),
+// але розкладений по категоріях товарів/розхідників, щоб було легше
+// заповнювати й дивитись розбіжність по конкретному переліку, а не по
+// всьому одразу впереміш. 'product' — джерело products/stock_movements
+// (код — це products.code), 'material' — джерело materials/material_movements
+// (код — синтетичний id матеріалу, бо в матеріалів немає SAP-коду як ключа).
+const INVENTORY_SECTIONS = {
+  stock: { kind: 'product', categories: ['готова продукція'] },
+  site: { kind: 'product', categories: ['позиції з сайту'] },
+  green: { kind: 'product', categories: ['зелена кава'] },
+  roasted: { kind: 'product', categories: ['напівфабрикат', 'квакер'] },
+  materials: { kind: 'material', sticker: false },
+  stickers: { kind: 'material', sticker: true }
+};
+const INVENTORY_SECTION_KEYS = Object.keys(INVENTORY_SECTIONS);
+
+function inventorySectionConfig(section) {
+  const config = INVENTORY_SECTIONS[section];
+  if (!config) throw new Error(`Unknown inventory section: ${section}`);
+  return config;
+}
+
+// Дати, коли проводилась інвентаризація (рух типу inventory_adjustment) — в
+// продуктах чи в матеріалах, з кількістю порахованих позицій — щоб було
+// видно всі минулі підрахунки незалежно від вкладки.
 async function listInventoryDates() {
-  const { rows } = await pool.query(
-    `SELECT movement_date, count(*)::int AS item_count
-     FROM stock_movements WHERE movement_type = 'inventory_adjustment'
-     GROUP BY movement_date ORDER BY movement_date DESC`
-  );
+  const { rows } = await pool.query(`
+    SELECT movement_date, SUM(item_count)::int AS item_count FROM (
+      SELECT movement_date, count(*)::int AS item_count
+      FROM stock_movements WHERE movement_type = 'inventory_adjustment'
+      GROUP BY movement_date
+      UNION ALL
+      SELECT movement_date, count(*)::int AS item_count
+      FROM material_movements WHERE movement_type = 'inventory_adjustment'
+      GROUP BY movement_date
+    ) combined
+    GROUP BY movement_date ORDER BY movement_date DESC
+  `);
   return rows;
 }
 
-// Деталі одного підрахунку: порахована кількість і розбіжність із тим, що
-// система очікувала побачити (signed_qty цього руху — це вже готова різниця,
-// бо addMovement для inventory_adjustment рахує її як qty - залишок_до_цього).
-async function listInventoryDetail(movementDate) {
+const MATERIAL_NAME_EXPR = `(mat.name || CASE WHEN mat.size_label != '' THEN ' (' || mat.size_label || ')' ELSE '' END)`;
+
+// Деталі одного підрахунку по одній вкладці: порахована кількість і
+// розбіжність із тим, що система очікувала побачити (signed_qty цього руху
+// вже готова різниця, бо addMovement для inventory_adjustment рахує її як
+// qty - залишок_до_цього).
+async function listInventoryDetail(movementDate, section) {
+  const config = inventorySectionConfig(section);
+  if (config.kind === 'product') {
+    const { rows } = await pool.query(
+      `SELECT m.id, m.product_code AS code, p.name, m.qty AS counted_qty, m.signed_qty AS discrepancy, m.note
+       FROM stock_movements m
+       JOIN products p ON p.code = m.product_code
+       WHERE m.movement_type = 'inventory_adjustment' AND m.movement_date = $1 AND p.category = ANY($2)
+       ORDER BY lower(p.name) ASC`,
+      [movementDate, config.categories]
+    );
+    return rows.map((r) => ({ ...r, counted_qty: Number(r.counted_qty), discrepancy: Number(r.discrepancy) }));
+  }
   const { rows } = await pool.query(
-    `SELECT m.id, m.product_code, p.name, m.qty AS counted_qty, m.signed_qty AS discrepancy, m.note
-     FROM stock_movements m
-     JOIN products p ON p.code = m.product_code
-     WHERE m.movement_type = 'inventory_adjustment' AND m.movement_date = $1
-     ORDER BY lower(p.name) ASC`,
-    [movementDate]
+    `SELECT mm.id, mat.id AS code, ${MATERIAL_NAME_EXPR} AS name, mm.qty AS counted_qty, mm.signed_qty AS discrepancy, mm.note
+     FROM material_movements mm
+     JOIN materials mat ON mat.id = mm.material_id
+     WHERE mm.movement_type = 'inventory_adjustment' AND mm.movement_date = $1 AND (mat.material_type = 'наліпка') = $2
+     ORDER BY lower(mat.name) ASC`,
+    [movementDate, config.sticker]
   );
   return rows.map((r) => ({ ...r, counted_qty: Number(r.counted_qty), discrepancy: Number(r.discrepancy) }));
 }
 
-// Порівняння для кожного порахованого товару: залишок на момент першої
-// інвентаризації, скільки відвантажено/надійшло з тієї дати і поточний
-// розрахунковий залишок — щоб бачити зміну між підрахунками (ТЗ §12).
-async function listInventoryComparison() {
+// Порівняння для кожного порахованого товару/матеріалу в межах вкладки:
+// залишок на момент першої інвентаризації, скільки відвантажено/надійшло з
+// тієї дати і поточний розрахунковий залишок — щоб бачити зміну між
+// підрахунками (ТЗ §12).
+async function listInventoryComparison(section) {
+  const config = inventorySectionConfig(section);
+  if (config.kind === 'product') {
+    const { rows } = await pool.query(
+      `SELECT p.code, p.name,
+              first_inv.qty AS baseline_qty, first_inv.movement_date AS baseline_date,
+              COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('shipment','writeoff','component_used','roasted_out') THEN m.qty ELSE 0 END), 0) AS issued_since,
+              COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('production_in','return','supplier_received') THEN m.qty ELSE 0 END), 0) AS received_since,
+              COALESCE(SUM(m.signed_qty), 0) AS current_balance
+       FROM products p
+       JOIN LATERAL (
+         SELECT qty, movement_date FROM stock_movements
+         WHERE product_code = p.code AND movement_type = 'inventory_adjustment'
+         ORDER BY movement_date ASC, id ASC LIMIT 1
+       ) first_inv ON true
+       LEFT JOIN stock_movements m ON m.product_code = p.code
+       WHERE p.category = ANY($1)
+       GROUP BY p.code, p.name, first_inv.qty, first_inv.movement_date
+       ORDER BY lower(p.name) ASC`,
+      [config.categories]
+    );
+    return rows.map((r) => ({
+      ...r,
+      baseline_qty: Number(r.baseline_qty),
+      issued_since: Number(r.issued_since),
+      received_since: Number(r.received_since),
+      current_balance: Number(r.current_balance)
+    }));
+  }
   const { rows } = await pool.query(
-    `SELECT p.code, p.name,
+    `SELECT mat.id AS code, ${MATERIAL_NAME_EXPR} AS name,
             first_inv.qty AS baseline_qty, first_inv.movement_date AS baseline_date,
-            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('shipment','writeoff','component_used','roasted_out') THEN m.qty ELSE 0 END), 0) AS issued_since,
-            COALESCE(SUM(CASE WHEN m.movement_date > first_inv.movement_date AND m.movement_type IN ('production_in','return','supplier_received') THEN m.qty ELSE 0 END), 0) AS received_since,
-            COALESCE(SUM(m.signed_qty), 0) AS current_balance
-     FROM products p
+            COALESCE(SUM(CASE WHEN mm.movement_date > first_inv.movement_date AND mm.movement_type IN ('consumption','writeoff','adjustment_minus') THEN mm.qty ELSE 0 END), 0) AS issued_since,
+            COALESCE(SUM(CASE WHEN mm.movement_date > first_inv.movement_date AND mm.movement_type IN ('receipt','return','adjustment_plus') THEN mm.qty ELSE 0 END), 0) AS received_since,
+            COALESCE(SUM(mm.signed_qty), 0) AS current_balance
+     FROM materials mat
      JOIN LATERAL (
-       SELECT qty, movement_date FROM stock_movements
-       WHERE product_code = p.code AND movement_type = 'inventory_adjustment'
+       SELECT qty, movement_date FROM material_movements
+       WHERE material_id = mat.id AND movement_type = 'inventory_adjustment'
        ORDER BY movement_date ASC, id ASC LIMIT 1
      ) first_inv ON true
-     LEFT JOIN stock_movements m ON m.product_code = p.code
-     GROUP BY p.code, p.name, first_inv.qty, first_inv.movement_date
-     ORDER BY lower(p.name) ASC`
+     LEFT JOIN material_movements mm ON mm.material_id = mat.id
+     WHERE (mat.material_type = 'наліпка') = $1
+     GROUP BY mat.id, mat.name, mat.size_label, first_inv.qty, first_inv.movement_date
+     ORDER BY lower(mat.name) ASC`,
+    [config.sticker]
   );
   return rows.map((r) => ({
     ...r,
@@ -2985,6 +3070,8 @@ export default {
   listInventoryDates,
   listInventoryDetail,
   listInventoryComparison,
+  INVENTORY_SECTIONS,
+  INVENTORY_SECTION_KEYS,
   addMovement,
   insertBlendRecipesIfMissing,
   listBlendRecipes,
@@ -3062,6 +3149,7 @@ export default {
   deleteProductSpec,
   ORDER_STATUSES,
   PRODUCT_STATUSES,
+  PRODUCT_EDITABLE_CATEGORIES,
   TASK_STATUSES,
   PRODUCT_SPEC_ROLES,
   MATERIAL_SIGNED_TYPES,

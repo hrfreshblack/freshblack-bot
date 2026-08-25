@@ -19,6 +19,7 @@ import seedGreenCoffee from './seed-green-coffee.js';
 import seedGreenCoffeeSap from './seed-green-coffee-sap.js';
 import { STATION_NAME_ALIASES, stationNotes, stationOperations, stationEmployees } from './seed-stations.js';
 import { parseOrderFile } from './parse-order-file.js';
+import { buildInventoryWorkbook } from './export-inventory.js';
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is not set.');
@@ -212,8 +213,8 @@ app.post('/api/products', requireRole(), async (req, res) => {
 
 app.post('/api/products/:code', requireRole(), async (req, res) => {
   try {
-    const { status, station, min_stock, unit, is_stock_item } = req.body || {};
-    const product = await db.updateProductFields(req.params.code, { status, station, min_stock, unit, is_stock_item });
+    const { status, station, min_stock, unit, is_stock_item, category } = req.body || {};
+    const product = await db.updateProductFields(req.params.code, { status, station, min_stock, unit, is_stock_item, category });
     if (!product) {
       res.status(404).json({ ok: false, error: 'Товар не знайдено' });
       return;
@@ -965,21 +966,39 @@ app.get('/api/inventory/dates', requireRole('бухгалтерія', 'клад�
 
 app.get('/api/inventory/dates/:date', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
-    const detail = await db.listInventoryDetail(req.params.date);
+    const section = String(req.query.section || 'stock');
+    const detail = await db.listInventoryDetail(req.params.date, section);
     res.json({ ok: true, detail });
   } catch (error) {
     console.error('GET /api/inventory/dates/:date ERROR:', error?.message || error);
-    res.status(500).json({ ok: false, error: 'Не вдалося отримати деталі інвентаризації' });
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося отримати деталі інвентаризації' });
   }
 });
 
 app.get('/api/inventory/comparison', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
-    const comparison = await db.listInventoryComparison();
+    const section = String(req.query.section || 'stock');
+    const comparison = await db.listInventoryComparison(section);
     res.json({ ok: true, comparison });
   } catch (error) {
     console.error('GET /api/inventory/comparison ERROR:', error?.message || error);
-    res.status(500).json({ ok: false, error: 'Не вдалося отримати порівняння' });
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося отримати порівняння' });
+  }
+});
+
+app.get('/api/inventory/export/:date', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+  try {
+    const sectionsData = {};
+    for (const section of db.INVENTORY_SECTION_KEYS) {
+      sectionsData[section] = await db.listInventoryDetail(req.params.date, section);
+    }
+    const buffer = await buildInventoryWorkbook(sectionsData);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="inventory_${req.params.date}.xlsx"`);
+    res.send(Buffer.from(buffer));
+  } catch (error) {
+    console.error('GET /api/inventory/export/:date ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося сформувати файл' });
   }
 });
 

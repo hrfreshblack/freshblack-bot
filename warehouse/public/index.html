@@ -245,6 +245,7 @@
           <th>Одиниця</th>
           <th>Складський</th>
           <th>Статус</th>
+          <th>Категорія</th>
           <th></th>
         </tr>
       </thead>
@@ -363,7 +364,18 @@
   </div>
 
   <div id="viewInventory" style="display:none;">
-    <div class="chips" id="inventoryDateChips"></div>
+    <div class="chips" id="inventorySectionChips">
+      <button id="invSec_stock" class="active" onclick="selectInventorySection('stock')">Склад</button>
+      <button id="invSec_materials" onclick="selectInventorySection('materials')">Розхідники</button>
+      <button id="invSec_stickers" onclick="selectInventorySection('stickers')">Наліпки</button>
+      <button id="invSec_green" onclick="selectInventorySection('green')">Зелена кава</button>
+      <button id="invSec_roasted" onclick="selectInventorySection('roasted')">Смажена кава / Напівфабрикат</button>
+      <button id="invSec_site" onclick="selectInventorySection('site')">Позиції з сайту</button>
+    </div>
+    <div class="chips" id="inventoryDateChips" style="margin-top: 10px;"></div>
+    <div class="viewToolbar" style="margin-top: 10px;">
+      <button class="secondary" id="btnExportInventory">⬇ Скачати в Excel (усі вкладки цього дня)</button>
+    </div>
     <p style="color: var(--muted); margin: 12px 0;">Розбіжність = порахована кількість мінус те, що система очікувала побачити (від'ємна — знайшли менше, додатна — більше).</p>
     <div class="tableWrap">
     <table id="inventoryDetailTable">
@@ -1087,6 +1099,19 @@ function productStatusTag(status) {
 }
 
 const PRODUCT_STATUSES = ['активний', 'немає в наявності', 'знято з виробництва'];
+const PRODUCT_EDITABLE_CATEGORIES = ['готова продукція', 'квакер', 'позиції з сайту'];
+
+async function saveProductCategory(code, value) {
+  const resp = await fetch('/api/products/' + encodeURIComponent(code), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ category: value })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Збережено');
+  loadProducts();
+}
 
 async function saveProductStatus(code, value) {
   const resp = await fetch('/api/products/' + encodeURIComponent(code), {
@@ -1148,6 +1173,11 @@ async function loadProducts() {
           ${PRODUCT_STATUSES.map((s) => `<option value="${s}" ${s === row.status ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
       </td>
+      <td>${isAdmin && PRODUCT_EDITABLE_CATEGORIES.includes(row.category)
+        ? `<select onchange="saveProductCategory('${row.code}', this.value)" style="font-size:12px;">
+             ${PRODUCT_EDITABLE_CATEGORIES.map((c) => `<option value="${c}" ${c === row.category ? 'selected' : ''}>${c}</option>`).join('')}
+           </select>`
+        : (row.category || '—')}</td>
       <td class="row-actions" style="display:flex; gap:6px;">
         <button class="secondary" onclick="openSpec('${row.code}', '${escAttr(row.name || row.code)}')">Специфікація</button>
       </td>
@@ -1365,10 +1395,19 @@ async function loadMaterialAnalytics() {
 
 // ---- Інвентаризації ----
 let currentInventoryDate = null;
+let currentInventorySection = 'stock';
+const INVENTORY_SECTIONS = ['stock', 'materials', 'stickers', 'green', 'roasted', 'site'];
 
 async function initInventory() {
   await loadInventoryDates();
   await loadInventoryComparison();
+}
+
+function selectInventorySection(section) {
+  currentInventorySection = section;
+  INVENTORY_SECTIONS.forEach((s) => document.getElementById('invSec_' + s).classList.toggle('active', s === section));
+  if (currentInventoryDate) loadInventoryDetail(currentInventoryDate);
+  loadInventoryComparison();
 }
 
 async function loadInventoryDates() {
@@ -1383,7 +1422,7 @@ async function loadInventoryDates() {
     document.getElementById('inventoryDetailEmpty').style.display = 'block';
     return;
   }
-  if (!currentInventoryDate) currentInventoryDate = data.dates[0].movement_date;
+  if (!currentInventoryDate) currentInventoryDate = String(data.dates[0].movement_date).slice(0, 10);
 
   container.innerHTML = data.dates.map((d) => {
     const dateStr = String(d.movement_date).slice(0, 10);
@@ -1400,7 +1439,7 @@ function selectInventoryDate(dateStr) {
 }
 
 async function loadInventoryDetail(dateStr) {
-  const resp = await fetch('/api/inventory/dates/' + encodeURIComponent(dateStr));
+  const resp = await fetch('/api/inventory/dates/' + encodeURIComponent(dateStr) + '?section=' + currentInventorySection);
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
 
@@ -1415,7 +1454,7 @@ async function loadInventoryDetail(dateStr) {
 
   body.innerHTML = data.detail.map((r) => `
     <tr>
-      <td>${r.product_code}</td>
+      <td>${r.code}</td>
       <td>${r.name}</td>
       <td class="balance">${fmt(r.counted_qty)}</td>
       <td class="${r.discrepancy < 0 ? 'tag bad' : r.discrepancy > 0 ? 'tag warn' : 'tag ok'}" style="display:inline-block; margin:4px 0;">${r.discrepancy > 0 ? '+' : ''}${fmt(r.discrepancy)}</td>
@@ -1425,7 +1464,7 @@ async function loadInventoryDetail(dateStr) {
 }
 
 async function loadInventoryComparison() {
-  const resp = await fetch('/api/inventory/comparison');
+  const resp = await fetch('/api/inventory/comparison?section=' + currentInventorySection);
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
 
@@ -1441,6 +1480,11 @@ async function loadInventoryComparison() {
     </tr>
   `).join('');
 }
+
+document.getElementById('btnExportInventory').onclick = () => {
+  if (!currentInventoryDate) { showToast('Спершу обери дату інвентаризації'); return; }
+  window.location.href = '/api/inventory/export/' + encodeURIComponent(currentInventoryDate);
+};
 
 function openMovement(code, name) {
   currentCode = code;
