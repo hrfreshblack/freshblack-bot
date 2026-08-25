@@ -376,6 +376,7 @@
     <div class="chips" id="inventoryDateChips" style="margin-top: 10px;"></div>
     <div class="viewToolbar" style="margin-top: 10px;">
       <button class="secondary" id="btnExportInventory">⬇ Скачати в Excel (усі вкладки цього дня)</button>
+      <button class="secondary" id="btnImportInventory">⬆ Залити інвентаризацію з файлу</button>
     </div>
     <p style="color: var(--muted); margin: 12px 0;">Розбіжність = порахована кількість мінус те, що система очікувала побачити (від'ємна — знайшли менше, додатна — більше).</p>
     <div class="tableWrap">
@@ -757,6 +758,26 @@
     <div class="modal-actions">
       <button class="secondary" id="btnCancelMovement">Скасувати</button>
       <button id="btnSaveMovement">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: імпорт інвентаризації з файлу -->
+<div class="overlay" id="inventoryImportOverlay">
+  <div class="modal">
+    <h2>Залити інвентаризацію з файлу</h2>
+    <p style="color: var(--muted); font-size: 13px; margin-bottom: 12px;">Файл — той самий вигляд, що й "Скачати в Excel": окремий аркуш на вкладку (Склад / Розхідники / Наліпки / Зелена кава / Смажена кава / Позиції з сайту), колонки Код / Назва / Порахували / Коментар. Найпростіше — скачати поточний стан, вписати "Порахували" і залити назад. Позицію, якої ще нема в системі, система додасть сама.</p>
+    <div class="field">
+      <label>Дата підрахунку</label>
+      <input type="date" id="inventoryImportDate">
+    </div>
+    <div class="field">
+      <label>Файл (.xlsx)</label>
+      <input type="file" id="inventoryImportFile" accept=".xlsx">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelInventoryImport">Скасувати</button>
+      <button id="btnSaveInventoryImport">Залити</button>
     </div>
   </div>
 </div>
@@ -1549,6 +1570,50 @@ async function loadInventoryComparison() {
 document.getElementById('btnExportInventory').onclick = () => {
   if (!currentInventoryDate) { showToast('Спершу обери дату інвентаризації'); return; }
   window.location.href = '/api/inventory/export/' + encodeURIComponent(currentInventoryDate);
+};
+
+document.getElementById('btnImportInventory').onclick = () => {
+  document.getElementById('inventoryImportFile').value = '';
+  document.getElementById('inventoryImportDate').value = currentInventoryDate || new Date().toISOString().slice(0, 10);
+  document.getElementById('inventoryImportOverlay').classList.add('open');
+};
+
+document.getElementById('btnCancelInventoryImport').onclick = () => {
+  document.getElementById('inventoryImportOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveInventoryImport').onclick = async () => {
+  const fileInput = document.getElementById('inventoryImportFile');
+  const movement_date = document.getElementById('inventoryImportDate').value;
+  if (!fileInput.files.length) { showToast('Обери файл'); return; }
+  if (!movement_date) { showToast('Вкажи дату підрахунку'); return; }
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('movement_date', movement_date);
+
+  const btn = document.getElementById('btnSaveInventoryImport');
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/inventory/import', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (!data.ok) { showToast(data.error || 'Не вдалося залити файл'); return; }
+
+    document.getElementById('inventoryImportOverlay').classList.remove('open');
+    let msg = `Імпортовано ${data.imported} позицій` + (data.newItems ? `, з них нових — ${data.newItems}` : '') + (data.skipped ? `. Пропущено ${data.skipped} рядків (немає коду/кількості)` : '') + '.';
+    if (data.unmatchedSheets && data.unmatchedSheets.length) {
+      msg += ` Не розпізнано аркуші: ${data.unmatchedSheets.join(', ')}.`;
+    }
+    showToast(msg);
+
+    currentInventoryDate = movement_date;
+    await loadInventoryDates();
+    await loadInventoryComparison();
+  } catch (error) {
+    showToast('Не вдалося залити файл');
+  } finally {
+    btn.disabled = false;
+  }
 };
 
 function openMovement(code, name) {

@@ -1031,6 +1031,96 @@ async function listInventoryComparison(section) {
   }));
 }
 
+// Масовий імпорт інвентаризації з файлу (parseInventoryFile) — по кожній
+// вкладці заводить inventory_adjustment-рух на кожну позицію з файлу.
+// Товар/матеріал, якого ще нема в каталозі, створюється автоматично (товар —
+// за кодом SAP, матеріал — за sap_code або назвою). Якщо на цю ж дату для
+// тієї ж позиції вже є підрахунок (повторне заливання того ж файлу чи
+// виправленого файлу) — оновлює його замість дубля.
+async function importInventoryCounts(sectionsData, { movement_date, created_by } = {}) {
+  const summary = { imported: 0, newItems: 0, skipped: 0, bySection: {}, unknownSections: [] };
+
+  for (const [section, rows] of Object.entries(sectionsData)) {
+    if (!INVENTORY_SECTIONS[section]) {
+      summary.unknownSections.push(section);
+      continue;
+    }
+    const config = INVENTORY_SECTIONS[section];
+    let sectionImported = 0;
+    let sectionNew = 0;
+    let sectionSkipped = 0;
+
+    for (const row of rows) {
+      const qty = Number(row.qty);
+      if (!Number.isFinite(qty) || qty < 0) { sectionSkipped++; continue; }
+      const note = row.note || '';
+
+      if (config.kind === 'product') {
+        const code = String(row.code || '').trim();
+        if (!code) { sectionSkipped++; continue; }
+
+        const existing = await getProduct(code);
+        if (!existing) {
+          await insertProductsIfMissing([{ code, name: row.name || '', category: config.categories[0], is_stock_item: true, min_stock: 0 }]);
+          sectionNew++;
+        } else if (!existing.is_stock_item) {
+          await updateProductFields(code, { is_stock_item: true });
+        }
+
+        const { rows: sameDay } = await pool.query(
+          `SELECT id FROM stock_movements WHERE product_code = $1 AND movement_type = 'inventory_adjustment' AND movement_date = $2 LIMIT 1`,
+          [code, movement_date || new Date().toISOString().slice(0, 10)]
+        );
+        if (sameDay.length) {
+          await updateActivityLogEntry('product', sameDay[0].id, { movement_type: 'inventory_adjustment', qty, note, movement_date });
+        } else {
+          await addMovement({ product_code: code, movement_type: 'inventory_adjustment', qty, note, movement_date, created_by });
+        }
+      } else {
+        const code = String(row.code || '').trim();
+        const name = String(row.name || '').trim();
+        if (!code && !name) { sectionSkipped++; continue; }
+
+        let materialId = null;
+        if (code) {
+          const { rows: found } = await pool.query(`SELECT id FROM materials WHERE sap_code = $1 AND sap_code != ''`, [code]);
+          if (found.length) materialId = found[0].id;
+        }
+        if (!materialId && name) {
+          const { rows: found } = await pool.query(`SELECT id FROM materials WHERE lower(name) = lower($1)`, [name]);
+          if (found.length) materialId = found[0].id;
+        }
+        if (!materialId) {
+          const { rows: created } = await pool.query(
+            `INSERT INTO materials (name, material_type, unit, sap_code) VALUES ($1,$2,$3,$4) RETURNING id`,
+            [name || code, config.sticker ? 'наліпка' : '', 'шт', code]
+          );
+          materialId = created[0].id;
+          sectionNew++;
+        }
+
+        const { rows: sameDay } = await pool.query(
+          `SELECT id FROM material_movements WHERE material_id = $1 AND movement_type = 'inventory_adjustment' AND movement_date = $2 LIMIT 1`,
+          [materialId, movement_date || new Date().toISOString().slice(0, 10)]
+        );
+        if (sameDay.length) {
+          await updateActivityLogEntry('material', sameDay[0].id, { movement_type: 'inventory_adjustment', qty, note, movement_date });
+        } else {
+          await addMaterialMovement({ material_id: materialId, movement_type: 'inventory_adjustment', qty, note, movement_date, created_by });
+        }
+      }
+      sectionImported++;
+    }
+
+    summary.bySection[section] = { imported: sectionImported, newItems: sectionNew, skipped: sectionSkipped };
+    summary.imported += sectionImported;
+    summary.newItems += sectionNew;
+    summary.skipped += sectionSkipped;
+  }
+
+  return summary;
+}
+
 async function addMovement({ product_code, movement_type, qty, note, movement_date, created_by }) {
   if (!SIGNED_TYPES.hasOwnProperty(movement_type) && !ABSOLUTE_TYPES.has(movement_type)) {
     throw new Error(`Unknown movement_type: ${movement_type}`);
@@ -1077,8 +1167,8 @@ async function insertProductsIfMissing(products) {
   let inserted = 0;
   for (const product of products) {
     const { rowCount } = await pool.query(
-      `INSERT INTO products (code, name, short_name, unit, station, is_stock_item, min_stock, active, status, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+      `INSERT INTO products (code, name, short_name, unit, station, category, is_stock_item, min_stock, active, status, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
        ON CONFLICT (code) DO NOTHING`,
       [
         product.code,
@@ -1086,6 +1176,7 @@ async function insertProductsIfMissing(products) {
         product.short_name || '',
         product.unit || '',
         product.station || '',
+        product.category || 'готова продукція',
         product.is_stock_item !== false,
         product.min_stock || 0,
         product.active !== false,
@@ -3183,6 +3274,7 @@ export default {
   listInventoryDates,
   listInventoryDetail,
   listInventoryComparison,
+  importInventoryCounts,
   INVENTORY_SECTIONS,
   INVENTORY_SECTION_KEYS,
   addMovement,

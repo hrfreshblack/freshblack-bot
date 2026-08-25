@@ -19,6 +19,7 @@ import seedGreenCoffee from './seed-green-coffee.js';
 import seedGreenCoffeeSap from './seed-green-coffee-sap.js';
 import { STATION_NAME_ALIASES, stationNotes, stationOperations, stationEmployees } from './seed-stations.js';
 import { parseOrderFile } from './parse-order-file.js';
+import { parseInventoryFile } from './parse-inventory-file.js';
 import { buildInventoryWorkbook } from './export-inventory.js';
 
 if (!process.env.DATABASE_URL) {
@@ -999,6 +1000,26 @@ app.get('/api/inventory/export/:date', requireRole('бухгалтерія', 'к
   } catch (error) {
     console.error('GET /api/inventory/export/:date ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося сформувати файл' });
+  }
+});
+
+app.post('/api/inventory/import', requireRole('бухгалтерія', 'кладовщик'), upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл не додано' });
+      return;
+    }
+    const movement_date = String(req.body?.movement_date || '').trim() || null;
+    const { sections, unmatchedSheets } = await parseInventoryFile(req.file.buffer);
+    if (!Object.keys(sections).length) {
+      res.status(400).json({ ok: false, error: 'Жодного аркуша не розпізнано. Назви аркушів мають містити назву вкладки: Склад / Розхідники / Наліпки / Зелена кава / Смажена кава / Позиції з сайту.' });
+      return;
+    }
+    const summary = await db.importInventoryCounts(sections, { movement_date, created_by: req.account.username });
+    res.json({ ok: true, ...summary, unmatchedSheets });
+  } catch (error) {
+    console.error('POST /api/inventory/import ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося розпізнати файл' });
   }
 });
 
