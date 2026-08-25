@@ -225,6 +225,7 @@
     <button id="tabRecipes" onclick="showTab('recipes')">Рецептури блендів</button>
     <button id="tabOrders" onclick="showTab('orders')">Замовлення</button>
     <button id="tabClients" onclick="showTab('clients')">Клієнти</button>
+    <button id="tabActivityLog" onclick="showTab('activityLog')">Журнал дій</button>
   </nav>
 </header>
 
@@ -687,6 +688,41 @@
     </div>
     <div class="empty" id="clientsEmpty" style="display:none;">Клієнтів ще немає — з'являться після імпорту замовлень.</div>
   </div>
+
+  <div id="viewActivityLog" style="display:none;">
+    <div class="viewToolbar">
+      <input type="search" id="alSearch" placeholder="Пошук за назвою товару/матеріалу…">
+      <select id="alKindFilter">
+        <option value="">Усі типи запису</option>
+        <option value="product">Товари</option>
+        <option value="material">Розхідники/наліпки</option>
+      </select>
+      <select id="alActorFilter"><option value="">Усі користувачі</option></select>
+    </div>
+    <p style="color: var(--muted); margin: 0 0 14px;">Усі рухи складу товарів і розхідників в одній стрічці, найновіші зверху — хто, коли і що саме зробив. Можна виправити тип/кількість/дату/коментар заднім числом або видалити помилковий запис повністю (кнопки праворуч).</p>
+    <div class="tableWrap">
+    <table id="activityLogTable">
+      <thead>
+        <tr>
+          <th>Коли</th>
+          <th>Хто</th>
+          <th>Тип</th>
+          <th>Позиція</th>
+          <th>Рух</th>
+          <th>Кількість</th>
+          <th>Дата руху</th>
+          <th>Коментар</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="activityLogBody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="activityLogEmpty" style="display:none;">Рухів ще немає.</div>
+    <div style="margin-top: 12px;">
+      <button class="secondary" id="btnLoadMoreActivityLog" style="display:none;">Показати ще</button>
+    </div>
+  </div>
 </main>
 
 <!-- Модалка: рух -->
@@ -889,6 +925,35 @@
     <div class="modal-actions">
       <button class="secondary" id="btnCancelMaterialMovement">Скасувати</button>
       <button id="btnSaveMaterialMovement">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: виправити рух (Журнал дій) -->
+<div class="overlay" id="activityLogEditOverlay">
+  <div class="modal">
+    <h2>Виправити рух</h2>
+    <input type="hidden" id="alEditKind">
+    <input type="hidden" id="alEditId">
+    <div class="field">
+      <label>Тип руху</label>
+      <select id="alEditType"></select>
+    </div>
+    <div class="field">
+      <label>Кількість</label>
+      <input type="number" id="alEditQty" min="0" step="any">
+    </div>
+    <div class="field">
+      <label>Дата руху</label>
+      <input type="date" id="alEditDate">
+    </div>
+    <div class="field">
+      <label>Коментар</label>
+      <input type="text" id="alEditNote">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnCancelActivityLogEdit">Скасувати</button>
+      <button id="btnSaveActivityLogEdit">Зберегти</button>
     </div>
   </div>
 </div>
@@ -1510,7 +1575,7 @@ document.getElementById('btnSaveMovement').onclick = async () => {
   const resp = await fetch('/api/movements', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ product_code: currentCode, movement_type, qty, note, movement_date })
+    body: JSON.stringify({ product_code: currentCode, movement_type, qty, note, movement_date, created_by: window._me.username })
   });
   const data = await resp.json();
 
@@ -1588,6 +1653,7 @@ function showTab(tab) {
   document.getElementById('viewRecipes').style.display = tab === 'recipes' ? '' : 'none';
   document.getElementById('viewOrders').style.display = tab === 'orders' ? '' : 'none';
   document.getElementById('viewClients').style.display = tab === 'clients' ? '' : 'none';
+  document.getElementById('viewActivityLog').style.display = tab === 'activityLog' ? '' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', tab === 'products');
   document.getElementById('tabStock').classList.toggle('active', tab === 'stock');
   document.getElementById('tabAnalytics').classList.toggle('active', tab === 'analytics');
@@ -1599,6 +1665,7 @@ function showTab(tab) {
   document.getElementById('tabRecipes').classList.toggle('active', tab === 'recipes');
   document.getElementById('tabOrders').classList.toggle('active', tab === 'orders');
   document.getElementById('tabClients').classList.toggle('active', tab === 'clients');
+  document.getElementById('tabActivityLog').classList.toggle('active', tab === 'activityLog');
   if (tab === 'products') loadProducts();
   if (tab === 'stock') loadStock();
   if (tab === 'analytics') loadAnalytics();
@@ -1610,6 +1677,7 @@ function showTab(tab) {
   if (tab === 'recipes' && !recipesLoaded) loadRecipes();
   if (tab === 'orders') loadOrders();
   if (tab === 'clients') loadClients();
+  if (tab === 'activityLog') initActivityLog();
 }
 
 // ---- Зелена кава → Обсмажка → Фотосепарація → напівфабрикат/квакер ----
@@ -2478,6 +2546,144 @@ document.getElementById('clientSearch').addEventListener('input', () => {
   window._clientSearchTimer = setTimeout(loadClients, 250);
 });
 
+// ---- Журнал дій (адмін) ----
+const ACTIVITY_LOG_TYPE_LABELS = {
+  production_in: 'Приймання виробництва',
+  supplier_received: 'Отримано від постачальника',
+  shipment: 'Відвантаження',
+  return: 'Повернення',
+  writeoff: 'Списання',
+  adjustment_plus: 'Коригування плюс',
+  adjustment_minus: 'Коригування мінус',
+  inventory_adjustment: 'Інвентаризація',
+  inventory_baseline: 'Початковий залишок (інвентаризація)',
+  roasted_out: 'Пішло на обсмажку',
+  component_used: 'Списано як компонент',
+  receipt: 'Приймання від постачальника',
+  consumption: 'Списання у виробництво'
+};
+let activityLogOffset = 0;
+const ACTIVITY_LOG_PAGE_SIZE = 100;
+let activityLogActorsLoaded = false;
+
+async function initActivityLog() {
+  activityLogOffset = 0;
+  if (!activityLogActorsLoaded) {
+    activityLogActorsLoaded = true;
+    const resp = await fetch('/api/activity-log/actors');
+    const data = await resp.json();
+    if (data.ok) {
+      document.getElementById('alActorFilter').innerHTML = '<option value="">Усі користувачі</option>' +
+        data.actors.map((a) => `<option value="${a}">${a}</option>`).join('');
+    }
+  }
+  await loadActivityLog(false);
+}
+
+async function loadActivityLog(append) {
+  const search = document.getElementById('alSearch').value.trim();
+  const kind = document.getElementById('alKindFilter').value;
+  const actor = document.getElementById('alActorFilter').value;
+  if (!append) activityLogOffset = 0;
+
+  const params = new URLSearchParams({ limit: ACTIVITY_LOG_PAGE_SIZE, offset: activityLogOffset, kind, actor, search });
+  const resp = await fetch('/api/activity-log?' + params);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+
+  const body = document.getElementById('activityLogBody');
+  const empty = document.getElementById('activityLogEmpty');
+  const loadMoreBtn = document.getElementById('btnLoadMoreActivityLog');
+
+  if (!append && !data.entries.length) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    loadMoreBtn.style.display = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+
+  if (!append) window._activityLogCache = {};
+  data.entries.forEach((e) => { window._activityLogCache[e.kind + '_' + e.id] = e; });
+
+  const rowsHtml = data.entries.map((e) => `
+    <tr>
+      <td>${new Date(e.created_at).toLocaleString('uk-UA')}</td>
+      <td>${e.created_by || '—'}</td>
+      <td>${e.kind === 'product' ? 'Товар' : 'Розхідник'}</td>
+      <td>${escAttr(e.item_name)}</td>
+      <td>${ACTIVITY_LOG_TYPE_LABELS[e.movement_type] || e.movement_type}</td>
+      <td class="balance">${fmt(e.qty)}</td>
+      <td>${e.movement_date ? new Date(e.movement_date).toLocaleDateString('uk-UA') : '—'}</td>
+      <td>${escAttr(e.note || '—')}</td>
+      <td class="row-actions" style="display:flex; gap:6px; white-space:nowrap;">
+        <button class="secondary" onclick="openActivityLogEdit('${e.kind}', ${e.id})">✎</button>
+        <button class="secondary" style="color: var(--bad);" onclick="deleteActivityLogEntryUI('${e.kind}', ${e.id})">🗑</button>
+      </td>
+    </tr>
+  `).join('');
+
+  body.innerHTML = append ? body.innerHTML + rowsHtml : rowsHtml;
+  loadMoreBtn.style.display = data.entries.length === ACTIVITY_LOG_PAGE_SIZE ? '' : 'none';
+  activityLogOffset += data.entries.length;
+}
+
+document.getElementById('btnLoadMoreActivityLog').onclick = () => loadActivityLog(true);
+document.getElementById('alSearch').addEventListener('input', () => {
+  clearTimeout(window._alSearchTimer);
+  window._alSearchTimer = setTimeout(() => loadActivityLog(false), 250);
+});
+document.getElementById('alKindFilter').addEventListener('change', () => loadActivityLog(false));
+document.getElementById('alActorFilter').addEventListener('change', () => loadActivityLog(false));
+
+function openActivityLogEdit(kind, id) {
+  const entry = window._activityLogCache[kind + '_' + id];
+  if (!entry) return;
+  document.getElementById('alEditKind').value = entry.kind;
+  document.getElementById('alEditId').value = entry.id;
+  const sourceSelect = document.getElementById(entry.kind === 'product' ? 'movementType' : 'materialMovementType');
+  document.getElementById('alEditType').innerHTML = sourceSelect.innerHTML;
+  document.getElementById('alEditType').value = entry.movement_type;
+  document.getElementById('alEditQty').value = entry.qty;
+  document.getElementById('alEditDate').value = entry.movement_date ? String(entry.movement_date).slice(0, 10) : '';
+  document.getElementById('alEditNote').value = entry.note || '';
+  document.getElementById('activityLogEditOverlay').classList.add('open');
+}
+
+document.getElementById('btnCancelActivityLogEdit').onclick = () => {
+  document.getElementById('activityLogEditOverlay').classList.remove('open');
+};
+
+document.getElementById('btnSaveActivityLogEdit').onclick = async () => {
+  const kind = document.getElementById('alEditKind').value;
+  const id = document.getElementById('alEditId').value;
+  const body = {
+    movement_type: document.getElementById('alEditType').value,
+    qty: document.getElementById('alEditQty').value,
+    movement_date: document.getElementById('alEditDate').value || null,
+    note: document.getElementById('alEditNote').value.trim()
+  };
+  const resp = await fetch('/api/activity-log/' + kind + '/' + id, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  document.getElementById('activityLogEditOverlay').classList.remove('open');
+  showToast('Виправлено');
+  loadActivityLog(false);
+};
+
+async function deleteActivityLogEntryUI(kind, id) {
+  if (!confirm('Видалити цей рух повністю? Дію не можна скасувати.')) return;
+  const resp = await fetch('/api/activity-log/' + kind + '/' + id, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  showToast('Видалено');
+  loadActivityLog(false);
+}
+
 // ---- Станції ----
 let currentStationFilter = '';
 
@@ -3053,7 +3259,7 @@ async function saveStickerQty(id) {
   const resp = await fetch('/api/material-movements', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ material_id: id, movement_type: 'inventory_adjustment', qty, note: 'Оновлено з підвкладки Наліпки' })
+    body: JSON.stringify({ material_id: id, movement_type: 'inventory_adjustment', qty, note: 'Оновлено з підвкладки Наліпки', created_by: window._me.username })
   });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
@@ -3213,7 +3419,7 @@ document.getElementById('btnSaveMaterialMovement').onclick = async () => {
   const resp = await fetch('/api/material-movements', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ material_id: currentMaterialId, movement_type, qty, note, movement_date })
+    body: JSON.stringify({ material_id: currentMaterialId, movement_type, qty, note, movement_date, created_by: window._me.username })
   });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
@@ -3331,7 +3537,7 @@ document.getElementById('btnCloseSpec').onclick = () => {
   document.getElementById('specOverlay').classList.remove('open');
 };
 
-const ALL_TABS = ['tabProducts', 'tabStock', 'tabAnalytics', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabNapivfabrykat', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients'];
+const ALL_TABS = ['tabProducts', 'tabStock', 'tabAnalytics', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabNapivfabrykat', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients', 'tabActivityLog'];
 const ROLE_TABS = {
   'адмін': ALL_TABS,
   'тімлід': ['tabStations', 'tabGreenCoffee', 'tabNapivfabrykat'],

@@ -1026,6 +1026,67 @@ app.post('/api/movements', requireRole('кладовщик'), async (req, res) =
   }
 });
 
+// Журнал дій — лише адмін: об'єднана стрічка рухів товарів і матеріалів
+// (хто, коли, що саме зробив), з можливістю виправити чи видалити рух
+// заднім числом (напр. комірник переплутав тип руху).
+app.get('/api/activity-log', requireRole(), async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const offset = Number(req.query.offset) || 0;
+    const kind = String(req.query.kind || '');
+    const actor = String(req.query.actor || '');
+    const search = String(req.query.search || '').trim();
+    const entries = await db.listActivityLog({ limit, offset, kind, actor, search });
+    res.json({ ok: true, entries });
+  } catch (error) {
+    console.error('GET /api/activity-log ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати журнал дій' });
+  }
+});
+
+app.get('/api/activity-log/actors', requireRole(), async (req, res) => {
+  try {
+    const actors = await db.listActivityLogActors();
+    res.json({ ok: true, actors });
+  } catch (error) {
+    console.error('GET /api/activity-log/actors ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати перелік користувачів' });
+  }
+});
+
+app.post('/api/activity-log/:kind/:id', requireRole(), async (req, res) => {
+  try {
+    const { movement_type, qty, note, movement_date } = req.body || {};
+    if (!movement_type || qty === undefined || qty === null) {
+      res.status(400).json({ ok: false, error: 'Потрібні тип руху і кількість' });
+      return;
+    }
+    const entry = await db.updateActivityLogEntry(req.params.kind, Number(req.params.id), { movement_type, qty, note, movement_date });
+    if (!entry) {
+      res.status(404).json({ ok: false, error: 'Рух не знайдено' });
+      return;
+    }
+    res.json({ ok: true, entry });
+  } catch (error) {
+    console.error('POST /api/activity-log/:kind/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося виправити рух' });
+  }
+});
+
+app.delete('/api/activity-log/:kind/:id', requireRole(), async (req, res) => {
+  try {
+    const rowCount = await db.deleteActivityLogEntry(req.params.kind, Number(req.params.id));
+    if (!rowCount) {
+      res.status(404).json({ ok: false, error: 'Рух не знайдено' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE /api/activity-log/:kind/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити рух' });
+  }
+});
+
 app.get('/api/accounts', requireRole(), async (req, res) => {
   try {
     const accounts = await db.listAccounts();

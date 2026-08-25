@@ -3037,6 +3037,115 @@ async function cleanupExpiredSessions() {
   return rowCount;
 }
 
+// ---------------------------------------------------------------------
+// Журнал дій (Activity Log) — адмінська вкладка "хто що зробив по складу",
+// об'єднує stock_movements (товари) і material_movements (розхідники/
+// наліпки) в одну стрічку, найновіші зверху. created_by вже записувався в
+// обидві таблиці й раніше — тут лише вперше показуємо це в інтерфейсі й
+// додаємо можливість виправити чи видалити конкретний рух заднім числом
+// (напр. комірник переплутав "від постачальника" з "від виробництва").
+// created_by/created_at НЕ змінюються при редагуванні — це саме історія
+// того, хто ввів запис спочатку, а не хто його востаннє поправив.
+const MOVEMENT_KIND_TABLE = { product: 'stock_movements', material: 'material_movements' };
+
+async function listActivityLog({ limit = 100, offset = 0, kind = '', actor = '', search = '' } = {}) {
+  const conditions = [];
+  const params = [];
+  if (kind) {
+    params.push(kind);
+    conditions.push(`kind = $${params.length}`);
+  }
+  if (actor) {
+    params.push(actor);
+    conditions.push(`created_by = $${params.length}`);
+  }
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    conditions.push(`lower(item_name) LIKE $${params.length}`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(limit);
+  params.push(offset);
+
+  const { rows } = await pool.query(`
+    WITH combined AS (
+      SELECT 'product' AS kind, m.id, m.product_code AS item_code, p.name AS item_name,
+             m.movement_type, m.qty, m.signed_qty, m.note, m.movement_date, m.created_by, m.created_at
+      FROM stock_movements m JOIN products p ON p.code = m.product_code
+      UNION ALL
+      SELECT 'material' AS kind, mm.id, mm.material_id::text AS item_code, ${MATERIAL_NAME_EXPR} AS item_name,
+             mm.movement_type, mm.qty, mm.signed_qty, mm.note, mm.movement_date, mm.created_by, mm.created_at
+      FROM material_movements mm JOIN materials mat ON mat.id = mm.material_id
+    )
+    SELECT * FROM combined
+    ${where}
+    ORDER BY created_at DESC
+    LIMIT $${params.length - 1} OFFSET $${params.length}
+  `, params);
+
+  return rows.map((r) => ({ ...r, qty: Number(r.qty), signed_qty: Number(r.signed_qty) }));
+}
+
+async function listActivityLogActors() {
+  const { rows } = await pool.query(`
+    SELECT DISTINCT created_by FROM (
+      SELECT created_by FROM stock_movements WHERE created_by != ''
+      UNION
+      SELECT created_by FROM material_movements WHERE created_by != ''
+    ) actors
+    ORDER BY created_by ASC
+  `);
+  return rows.map((r) => r.created_by);
+}
+
+// Перерахунок signed_qty при виправленні: для звичайних (signed) типів —
+// напряму з таблиці множників; для абсолютних (inventory_adjustment/
+// inventory_baseline) — як різниця нового qty й суми ВСІХ ІНШИХ рухів цієї
+// позиції (без цього рядка) — те саме, що рахує addMovement при вставці
+// нового руху, просто "баланс до цього руху" тут береться за виключенням
+// самого себе, а не хронологічно "до".
+async function updateActivityLogEntry(kind, id, { movement_type, qty, note, movement_date }) {
+  const table = MOVEMENT_KIND_TABLE[kind];
+  if (!table) throw new Error(`Unknown activity log kind: ${kind}`);
+  const signedTypes = kind === 'product' ? SIGNED_TYPES : MATERIAL_SIGNED_TYPES;
+  const absoluteTypes = kind === 'product' ? ABSOLUTE_TYPES : MATERIAL_ABSOLUTE_TYPES;
+  if (!signedTypes.hasOwnProperty(movement_type) && !absoluteTypes.has(movement_type)) {
+    throw new Error(`Unknown movement_type: ${movement_type}`);
+  }
+  const numericQty = Number(qty);
+  if (!Number.isFinite(numericQty) || numericQty < 0) {
+    throw new Error('Кількість має бути невід’ємним числом');
+  }
+
+  const ownerColumn = kind === 'product' ? 'product_code' : 'material_id';
+  const { rows: existing } = await pool.query(`SELECT ${ownerColumn} AS owner FROM ${table} WHERE id = $1`, [id]);
+  if (!existing[0]) return null;
+
+  let signedQty;
+  if (absoluteTypes.has(movement_type)) {
+    const { rows: balRows } = await pool.query(
+      `SELECT COALESCE(SUM(signed_qty), 0) AS balance FROM ${table} WHERE ${ownerColumn} = $1 AND id != $2`,
+      [existing[0].owner, id]
+    );
+    signedQty = numericQty - Number(balRows[0].balance);
+  } else {
+    signedQty = signedTypes[movement_type] * numericQty;
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE ${table} SET movement_type = $1, qty = $2, signed_qty = $3, note = $4, movement_date = $5 WHERE id = $6 RETURNING *`,
+    [movement_type, numericQty, signedQty, note || '', movement_date || null, id]
+  );
+  return rows[0] || null;
+}
+
+async function deleteActivityLogEntry(kind, id) {
+  const table = MOVEMENT_KIND_TABLE[kind];
+  if (!table) throw new Error(`Unknown activity log kind: ${kind}`);
+  const { rowCount } = await pool.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
+  return rowCount;
+}
+
 export default {
   initSchema,
   upsertProduct,
@@ -3067,6 +3176,10 @@ export default {
   getBalance,
   listProducts,
   listMovements,
+  listActivityLog,
+  listActivityLogActors,
+  updateActivityLogEntry,
+  deleteActivityLogEntry,
   listInventoryDates,
   listInventoryDetail,
   listInventoryComparison,
