@@ -1972,7 +1972,8 @@ async function listCandidates({ search = '' } = {}) {
          WHERE a.candidate_id = c.id AND a.status = 'Active' ORDER BY a.applied_date ASC, a.id ASC LIMIT 1) AS current_stage,
       av.title AS applied_vacancy_title,
       cv.title AS considering_vacancy_title,
-      cv.salary_range AS vacancy_salary_range
+      cv.salary_range AS vacancy_salary_range,
+      COALESCE((SELECT MIN(r.created_at) FROM hr_candidate_resumes r WHERE r.candidate_id = c.id), c.created_at) AS resume_uploaded_at
     FROM hr_candidates c
     JOIN hr_persons per ON per.id = c.person_id
     LEFT JOIN hr_vacancies av ON av.id = c.applied_vacancy_id
