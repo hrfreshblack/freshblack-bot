@@ -288,7 +288,7 @@
         <button id="btnAddCandidate">+ Кандидат</button>
         <button class="secondary" id="btnUploadResumes">+ Завантажити резюме</button>
       </div>
-      <div class="tableWrap"><table><thead><tr><th>ПІБ</th><th>Телефон</th><th>Email</th><th>Джерело</th><th>Статус</th><th>На яку відгукнувся</th><th>На яку розглядаємо</th><th>ЗП по вакансії</th><th>Побажання по ЗП</th><th>Коментар</th></tr></thead><tbody id="candTableBody"></tbody></table></div>
+      <div class="tableWrap"><table><thead><tr><th>Дата</th><th>ПІБ</th><th>Телефон</th><th>Email</th><th>Джерело</th><th>Статус</th><th>На яку відгукнувся</th><th>На яку розглядаємо</th><th>ЗП по вакансії</th><th>Побажання по ЗП</th><th>Коментар</th></tr></thead><tbody id="candTableBody"></tbody></table></div>
       <div class="empty" id="candEmpty" style="display:none;">Кандидатів ще немає.</div>
     </div>
 
@@ -4353,6 +4353,7 @@ async function loadCandidates() {
   empty.style.display = 'none';
   body.innerHTML = data.candidates.map((c) => `
     <tr class="clickable" onclick="openCandidateDetail(${c.id})">
+      <td>${new Date(c.resume_uploaded_at).toLocaleDateString('uk-UA')}</td>
       <td>${escAttr(c.full_name)}</td>
       <td>${escAttr(c.phone || '—')}</td>
       <td>${escAttr(c.personal_email || '—')}</td>
