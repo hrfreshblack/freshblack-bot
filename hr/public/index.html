@@ -105,6 +105,24 @@
   .profileTabs button { background: none; border: none; color: var(--muted); padding: 8px 14px; font-size: 13px; font-weight: 600; border-bottom: 2px solid transparent; border-radius: 0; }
   .profileTabs button.active { color: var(--text); border-bottom-color: var(--accent); }
   .profilePanel { display: none; }
+
+  .orgChartWrap { overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); height: 70vh; position: relative; }
+  .orgChartCanvas { position: relative; width: 3200px; height: 2400px; }
+  .orgChartCanvas svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  #btnOrgChartConnect.active { outline: 2px solid var(--accent); }
+  .orgChartCanvas.connectMode .orgNode { cursor: pointer; }
+  .orgNode { position: absolute; width: 220px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 20px 10px 8px; cursor: grab; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+  .orgNode.vacancy { border-style: dashed; border-color: var(--accent); }
+  .orgNode.selected { box-shadow: 0 0 0 2px var(--accent); }
+  .orgNode input, .orgNode textarea { width: 100%; background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 3px 4px; font-family: inherit; color: var(--text); resize: vertical; }
+  .orgNode input:hover, .orgNode textarea:hover, .orgNode input:focus, .orgNode textarea:focus { border-color: var(--border); background: var(--bg); }
+  .orgNode .orgNodeTitle { font-weight: 700; font-size: 13px; }
+  .orgNode .orgNodeSubtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .orgNode .orgNodeCkp { font-size: 11px; font-style: italic; color: var(--muted); margin-top: 4px; }
+  .orgNode .orgNodeDelete { position: absolute; top: 2px; right: 4px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; padding: 2px 6px; }
+  .orgNode .orgNodeDelete:hover { color: var(--bad); }
+  .orgNodeVacToggle { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); margin-top: 6px; cursor: pointer; }
+  .orgNodeVacToggle input { width: auto; }
   .profilePanel.active { display: block; }
   .fieldGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
   .fieldGrid .fieldItem label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.03em; }
@@ -247,12 +265,34 @@
   </div>
 
   <div id="viewOrg" style="display:none;">
-    <div class="viewToolbar">
-      <button id="btnAddDepartment">+ Департамент</button>
-      <button class="secondary" id="btnAddPosition">+ Посада</button>
+    <div class="profileTabs">
+      <button class="active" id="orgSubList" onclick="showOrgSubTab('list')">Список</button>
+      <button id="orgSubChart" onclick="showOrgSubTab('chart')">Схема</button>
     </div>
-    <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Дерево департаментів → посади → хто зараз їх займає. Графічний Chart View з drag&drop — наступний крок; зараз це List/Department View з ТЗ п.8.</p>
-    <div class="deptTree" id="orgTree"></div>
+
+    <div class="profilePanel active" id="orgPanelList">
+      <div class="viewToolbar">
+        <button id="btnAddDepartment">+ Департамент</button>
+        <button class="secondary" id="btnAddPosition">+ Посада</button>
+      </div>
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Дерево департаментів → посади → хто зараз їх займає.</p>
+      <div class="deptTree" id="orgTree"></div>
+    </div>
+
+    <div class="profilePanel" id="orgPanelChart">
+      <div class="viewToolbar">
+        <button id="btnOrgChartAddNode">+ Блок</button>
+        <button class="secondary" id="btnOrgChartAddVacancy">+ Вакансія</button>
+        <button class="secondary" id="btnOrgChartConnect">🔗 З'єднати</button>
+        <span id="orgChartSaveStatus" style="color: var(--muted); font-size:12px;"></span>
+      </div>
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 10px;">Довільна схема — сама розставляєш блоки (перетягуванням), пишеш у них ім'я/посаду/ЦКП, тиснеш "🔗 З'єднати" і клацаєш два блоки, щоб провести лінію підпорядкування, і позначаєш відкриті вакансії. Все зберігається автоматично.</p>
+      <div class="orgChartWrap" id="orgChartWrap">
+        <div class="orgChartCanvas" id="orgChartCanvas">
+          <svg id="orgChartSvg"></svg>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="viewRecruitment" style="display:none;">
@@ -1384,7 +1424,7 @@ function showTab(tab) {
   document.getElementById('tabRecruitmentMetrics').classList.toggle('active', tab === 'recruitmentMetrics');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'people') loadPeople();
-  if (tab === 'org') loadOrg();
+  if (tab === 'org') showOrgSubTab(window._orgSubTab || 'list');
   if (tab === 'recruitment') showRecruitmentSubTab(window._recruitmentSubTab || 'requests');
   if (tab === 'onboardingTemplates') loadOnboardingTemplates();
   if (tab === 'okr') loadOkrView();
@@ -3789,6 +3829,263 @@ async function loadOrg() {
   const roots = byParent['root'] || [];
   document.getElementById('orgTree').innerHTML = roots.map(renderDept).join('') || '<p style="color:var(--muted);">Ще немає жодного департаменту — почни з кнопки "+ Департамент".</p>';
 }
+
+// ---- Organization Structure: Chart View (довільна схема, drag&drop) ----
+
+function showOrgSubTab(tab) {
+  window._orgSubTab = tab;
+  ['list', 'chart'].forEach((t) => {
+    document.getElementById('orgPanel' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
+    document.getElementById('orgSub' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
+  });
+  if (tab === 'list') loadOrg();
+  if (tab === 'chart') loadOrgChart();
+}
+
+window._orgChart = { nodes: [], connectors: [] };
+window._orgChartSelectedNode = null;
+window._orgChartConnectMode = false;
+window._orgChartConnectFrom = null;
+window._orgChartDrag = null;
+window._orgChartJustDragged = false;
+window._orgChartSaveTimer = null;
+
+function orgChartNode(id) {
+  return window._orgChart.nodes.find((n) => n.id === id);
+}
+
+async function loadOrgChart() {
+  const resp = await apiFetch('/api/org-chart');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Помилка завантаження'); return; }
+  window._orgChart = { nodes: data.chart.nodes || [], connectors: data.chart.connectors || [] };
+  window._orgChartSelectedNode = null;
+  window._orgChartConnectFrom = null;
+  document.getElementById('orgChartCanvas').innerHTML = '<svg id="orgChartSvg"></svg>';
+  renderOrgChart();
+}
+
+function orgChartFieldEl(el, field) {
+  return el.querySelector(`[data-field="${field}"]`);
+}
+
+function createOrgNodeEl(n) {
+  const el = document.createElement('div');
+  el.className = 'orgNode';
+  el.dataset.id = n.id;
+  el.innerHTML = `
+    <button class="orgNodeDelete" title="Видалити блок" onclick="event.stopPropagation(); deleteOrgChartNode('${n.id}')">×</button>
+    <input class="orgNodeTitle" data-field="title" placeholder="Ім'я / посада">
+    <input class="orgNodeSubtitle" data-field="subtitle" placeholder="Департамент / кому підпорядковується">
+    <textarea class="orgNodeCkp" data-field="ckp" placeholder="ЦКП…" rows="2"></textarea>
+    <label class="orgNodeVacToggle"><input type="checkbox" class="orgNodeVacancyCheckbox"> Відкрита вакансія</label>
+  `;
+  el.addEventListener('pointerdown', (e) => startOrgChartDrag(e, n.id));
+  el.addEventListener('click', (e) => onOrgChartNodeClick(e, n.id));
+  el.querySelectorAll('[data-field]').forEach((fieldEl) => {
+    fieldEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    fieldEl.addEventListener('click', (e) => e.stopPropagation());
+    fieldEl.addEventListener('input', () => {
+      const node = orgChartNode(n.id);
+      if (node) node[fieldEl.dataset.field] = fieldEl.value;
+    });
+    fieldEl.addEventListener('blur', () => scheduleOrgChartSave());
+  });
+  const vacCheckbox = el.querySelector('.orgNodeVacancyCheckbox');
+  vacCheckbox.addEventListener('pointerdown', (e) => e.stopPropagation());
+  vacCheckbox.addEventListener('click', (e) => e.stopPropagation());
+  vacCheckbox.addEventListener('change', () => {
+    const node = orgChartNode(n.id);
+    if (!node) return;
+    node.vacancy = vacCheckbox.checked;
+    el.classList.toggle('vacancy', node.vacancy);
+    scheduleOrgChartSave();
+  });
+  return el;
+}
+
+function renderOrgChart() {
+  const canvas = document.getElementById('orgChartCanvas');
+  const chart = window._orgChart;
+  const existingIds = new Set(chart.nodes.map((n) => n.id));
+  canvas.querySelectorAll('.orgNode').forEach((el) => { if (!existingIds.has(el.dataset.id)) el.remove(); });
+
+  chart.nodes.forEach((n) => {
+    let el = canvas.querySelector(`.orgNode[data-id="${n.id}"]`);
+    if (!el) { el = createOrgNodeEl(n); canvas.appendChild(el); }
+    el.style.left = n.x + 'px';
+    el.style.top = n.y + 'px';
+    el.classList.toggle('vacancy', !!n.vacancy);
+    el.classList.toggle('selected', window._orgChartSelectedNode === n.id);
+    ['title', 'subtitle', 'ckp'].forEach((field) => {
+      const fieldEl = orgChartFieldEl(el, field);
+      if (document.activeElement !== fieldEl) fieldEl.value = n[field] || '';
+    });
+    const vacCheckbox = el.querySelector('.orgNodeVacancyCheckbox');
+    if (document.activeElement !== vacCheckbox) vacCheckbox.checked = !!n.vacancy;
+  });
+
+  renderOrgChartConnectors();
+}
+
+function renderOrgChartConnectors() {
+  const svg = document.getElementById('orgChartSvg');
+  const chart = window._orgChart;
+  const centers = {};
+  chart.nodes.forEach((n) => {
+    const el = document.querySelector(`.orgNode[data-id="${n.id}"]`);
+    if (el) centers[n.id] = { x: n.x + el.offsetWidth / 2, y: n.y + el.offsetHeight / 2 };
+  });
+  svg.innerHTML = chart.connectors.map((c) => {
+    const from = centers[c.from], to = centers[c.to];
+    if (!from || !to) return '';
+    return `<line style="stroke:var(--muted); stroke-width:2;" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" />
+            <line style="stroke:transparent; stroke-width:16; cursor:pointer; pointer-events:auto;" x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" onclick="deleteOrgChartConnector('${c.id}')" />`;
+  }).join('');
+}
+
+function onOrgChartNodeClick(e, nodeId) {
+  if (window._orgChartJustDragged) { window._orgChartJustDragged = false; return; }
+  if (window._orgChartConnectMode) {
+    e.stopPropagation();
+    if (!window._orgChartConnectFrom) {
+      window._orgChartConnectFrom = nodeId;
+      window._orgChartSelectedNode = nodeId;
+    } else if (window._orgChartConnectFrom !== nodeId) {
+      addOrgChartConnector(window._orgChartConnectFrom, nodeId);
+      window._orgChartConnectFrom = null;
+      window._orgChartSelectedNode = null;
+    }
+    renderOrgChart();
+    return;
+  }
+  window._orgChartSelectedNode = nodeId;
+  renderOrgChart();
+}
+
+function addOrgChartConnector(fromId, toId) {
+  const exists = window._orgChart.connectors.some((c) => (c.from === fromId && c.to === toId) || (c.from === toId && c.to === fromId));
+  if (exists) { showToast("Ці блоки вже з'єднані"); return; }
+  window._orgChart.connectors.push({ id: 'c' + Date.now() + Math.random().toString(36).slice(2, 6), from: fromId, to: toId });
+  scheduleOrgChartSave();
+}
+
+function deleteOrgChartConnector(connectorId) {
+  if (!confirm("Видалити цей зв'язок?")) return;
+  window._orgChart.connectors = window._orgChart.connectors.filter((c) => c.id !== connectorId);
+  renderOrgChartConnectors();
+  scheduleOrgChartSave();
+}
+
+function toggleOrgChartConnectMode() {
+  window._orgChartConnectMode = !window._orgChartConnectMode;
+  window._orgChartConnectFrom = null;
+  document.getElementById('btnOrgChartConnect').classList.toggle('active', window._orgChartConnectMode);
+  document.getElementById('orgChartCanvas').classList.toggle('connectMode', window._orgChartConnectMode);
+  renderOrgChart();
+}
+
+function addOrgChartNode(vacancy) {
+  const wrap = document.getElementById('orgChartWrap');
+  const node = {
+    id: 'n' + Date.now() + Math.random().toString(36).slice(2, 6),
+    x: wrap.scrollLeft + 60,
+    y: wrap.scrollTop + 60,
+    title: '',
+    subtitle: '',
+    ckp: '',
+    vacancy: !!vacancy
+  };
+  window._orgChart.nodes.push(node);
+  window._orgChartSelectedNode = node.id;
+  renderOrgChart();
+  scheduleOrgChartSave();
+  const el = document.querySelector(`.orgNode[data-id="${node.id}"] .orgNodeTitle`);
+  if (el) el.focus();
+}
+
+function deleteOrgChartNode(nodeId) {
+  if (!confirm('Видалити цей блок?')) return;
+  window._orgChart.nodes = window._orgChart.nodes.filter((n) => n.id !== nodeId);
+  window._orgChart.connectors = window._orgChart.connectors.filter((c) => c.from !== nodeId && c.to !== nodeId);
+  if (window._orgChartSelectedNode === nodeId) window._orgChartSelectedNode = null;
+  renderOrgChart();
+  scheduleOrgChartSave();
+}
+
+function startOrgChartDrag(e, nodeId) {
+  if (window._orgChartConnectMode) return;
+  if (e.target.closest('[data-field]') || e.target.closest('.orgNodeDelete') || e.target.closest('.orgNodeVacToggle')) return;
+  const node = orgChartNode(nodeId);
+  if (!node) return;
+  const canvasRect = document.getElementById('orgChartCanvas').getBoundingClientRect();
+  window._orgChartDrag = {
+    nodeId,
+    offsetX: e.clientX - canvasRect.left - node.x,
+    offsetY: e.clientY - canvasRect.top - node.y,
+    startX: node.x,
+    startY: node.y
+  };
+  window._orgChartSelectedNode = nodeId;
+  e.preventDefault();
+}
+
+document.addEventListener('pointermove', (e) => {
+  const drag = window._orgChartDrag;
+  if (!drag) return;
+  const node = orgChartNode(drag.nodeId);
+  if (!node) return;
+  const canvas = document.getElementById('orgChartCanvas');
+  const canvasRect = canvas.getBoundingClientRect();
+  node.x = Math.max(0, Math.round(e.clientX - canvasRect.left - drag.offsetX));
+  node.y = Math.max(0, Math.round(e.clientY - canvasRect.top - drag.offsetY));
+  const el = canvas.querySelector(`.orgNode[data-id="${node.id}"]`);
+  if (el) { el.style.left = node.x + 'px'; el.style.top = node.y + 'px'; }
+  renderOrgChartConnectors();
+});
+
+document.addEventListener('pointerup', () => {
+  const drag = window._orgChartDrag;
+  if (!drag) return;
+  const node = orgChartNode(drag.nodeId);
+  const moved = node && (Math.abs(node.x - drag.startX) > 2 || Math.abs(node.y - drag.startY) > 2);
+  window._orgChartDrag = null;
+  window._orgChartJustDragged = !!moved;
+  if (moved) scheduleOrgChartSave();
+});
+
+function scheduleOrgChartSave() {
+  document.getElementById('orgChartSaveStatus').textContent = 'Зберігаю…';
+  clearTimeout(window._orgChartSaveTimer);
+  window._orgChartSaveTimer = setTimeout(saveOrgChartNow, 900);
+}
+
+async function saveOrgChartNow() {
+  try {
+    const resp = await apiFetch('/api/org-chart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodes: window._orgChart.nodes, connectors: window._orgChart.connectors })
+    });
+    const data = await resp.json();
+    if (!data.ok) { showToast(data.error || 'Не вдалося зберегти схему'); return; }
+    document.getElementById('orgChartSaveStatus').textContent = 'Збережено ✓';
+  } catch (error) {
+    document.getElementById('orgChartSaveStatus').textContent = '';
+    showToast('Не вдалося зберегти схему');
+  }
+}
+
+document.getElementById('btnOrgChartAddNode').onclick = () => addOrgChartNode(false);
+document.getElementById('btnOrgChartAddVacancy').onclick = () => addOrgChartNode(true);
+document.getElementById('btnOrgChartConnect').onclick = () => toggleOrgChartConnectMode();
+document.getElementById('orgChartCanvas').addEventListener('click', (e) => {
+  if (e.target.id === 'orgChartCanvas' || e.target.id === 'orgChartSvg') {
+    window._orgChartSelectedNode = null;
+    if (window._orgChartConnectMode) window._orgChartConnectFrom = null;
+    renderOrgChart();
+  }
+});
 
 function positionStatusLabel(status) {
   const cls = status === 'Filled' ? 'ok' : status === 'Vacant' ? 'warn' : status === 'Recruitment Active' ? 'accent' : 'neutral';

@@ -143,6 +143,20 @@ async function initSchema() {
     -- взагалі існує, окремо від довільних приміток (note).
     ALTER TABLE hr_positions ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT '';
 
+    -- Довільна візуальна схема оргструктури (Chart View, drag&drop) — на
+    -- відміну від hr_departments/hr_positions вище (строга структура, з якої
+    -- рахуються метрики), це вільний "малюнок": блоки як завгодно розставлені
+    -- й підписані, лініями показано підпорядкування, без прив'язки до
+    -- реальних Department/Position записів. Одна схема на всю компанію —
+    -- один рядок (id завжди 1), зберігається цілком як JSON при кожній зміні.
+    CREATE TABLE IF NOT EXISTS hr_org_chart (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      data JSONB NOT NULL DEFAULT '{"nodes":[],"connectors":[]}',
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT hr_org_chart_singleton CHECK (id = 1)
+    );
+
     -- Person = "one person — one master record" (ТЗ п.3). У Release 1 ще
     -- немає Candidate/Recruitment — Person тут завжди веде до одного
     -- Employee, але таблиця виділена окремо, щоб рекрутинг (коли дійде
@@ -1494,6 +1508,22 @@ async function getOrgTree() {
     ORDER BY lower(p.title) ASC
   `);
   return { departments, positions };
+}
+
+async function getOrgChart() {
+  const { rows } = await pool.query('SELECT data, updated_by, updated_at FROM hr_org_chart WHERE id = 1');
+  if (!rows[0]) return { nodes: [], connectors: [], updated_by: '', updated_at: null };
+  return { nodes: rows[0].data.nodes || [], connectors: rows[0].data.connectors || [], updated_by: rows[0].updated_by, updated_at: rows[0].updated_at };
+}
+
+async function saveOrgChart({ nodes, connectors }, actor) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_org_chart (id, data, updated_by, updated_at) VALUES (1, $1, $2, now())
+     ON CONFLICT (id) DO UPDATE SET data = $1, updated_by = $2, updated_at = now()
+     RETURNING data, updated_by, updated_at`,
+    [JSON.stringify({ nodes, connectors }), actor || '']
+  );
+  return { nodes: rows[0].data.nodes || [], connectors: rows[0].data.connectors || [], updated_by: rows[0].updated_by, updated_at: rows[0].updated_at };
 }
 
 // ---------------------------------------------------------------------
@@ -4184,6 +4214,8 @@ export default {
   changeEmployment,
   addCompensationRecord,
   getOrgTree,
+  getOrgChart,
+  saveOrgChart,
   listVacancyRequests,
   getVacancyRequest,
   createVacancyRequest,
