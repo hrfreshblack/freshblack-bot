@@ -332,6 +332,31 @@ app.get('/api/org-tree', async (req, res) => {
   }
 });
 
+app.get('/api/org-chart', async (req, res) => {
+  try {
+    const chart = await db.getOrgChart();
+    res.json({ ok: true, chart });
+  } catch (error) {
+    console.error('GET /api/org-chart ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося завантажити схему' });
+  }
+});
+
+app.post('/api/org-chart', requireRole(), async (req, res) => {
+  try {
+    const { nodes, connectors } = req.body || {};
+    if (!Array.isArray(nodes) || !Array.isArray(connectors)) {
+      res.status(400).json({ ok: false, error: 'Некоректні дані схеми' });
+      return;
+    }
+    const chart = await db.saveOrgChart({ nodes, connectors }, req.account.username);
+    res.json({ ok: true, chart });
+  } catch (error) {
+    console.error('POST /api/org-chart ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти схему' });
+  }
+});
+
 // ---- Employees ----
 
 app.get('/api/employees', async (req, res) => {
