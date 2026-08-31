@@ -76,6 +76,11 @@ const SURVEY_QUESTION_TYPES = ['Scale', 'NPS', 'Single Select', 'Multi Select', 
 // HR Operations: absences (ТЗ розділ 27)
 const ABSENCE_TYPES = ['Vacation', 'Sick Leave', 'Unpaid Leave', 'Business Trip', 'Remote', 'Other'];
 const ABSENCE_STATUSES = ['Requested', 'Approved', 'Rejected', 'Cancelled'];
+// Проміжні статуси заявок з бота (timeoff_requests.final_status), поки їх
+// ще не погоджено — своя мова, бо це двоступеневе погодження (HRD →
+// бухгалтер), якого немає в статусах ручних hr_absences. Лише для фільтра
+// в UI, для запису статусу назад у hr_absences не використовуються.
+const BOT_ABSENCE_STATUSES = ['На погодженні HRD', 'На погодженні бухгалтера'];
 
 // Offboarding (ТЗ розділ 28, 28.1)
 const OFFBOARDING_INITIATION_TYPES = ['Employee Initiative', 'Company Initiative', 'End of Contract', 'Probation Failed', 'Mutual Agreement', 'Other'];
@@ -3399,26 +3404,79 @@ function countWorkdays(startDate, endDate) {
   return count;
 }
 
+// Заявки на відпустку/лікарняний, подані через Telegram-бота (окремий
+// сервіс, той самий Postgres — таблиця timeoff_requests з кореневого db.js,
+// без hr_-префікса), приєднуються тут наживо (без копіювання) до власних
+// hr_absences, щоб не треба було вносити те саме двічі — раз у боті (де
+// відбувається погодження HRD/бухгалтером), і ще раз вручну сюди. Прив'язка
+// до співробітника — по timeoff_requests.employee_id (текстовий, напр.
+// "FB000123") = hr_employees.employee_number. Якщо в цій базі немає таблиці
+// timeoff_requests (напр. локальний тест без розгорнутого бота) — тихо
+// показуємо тільки hr_absences, не ламаємо сторінку.
 async function listAbsences({ employee_id = null, department_id = null, status = '', from = '', to = '' } = {}) {
   const conditions = [];
   const params = [];
-  if (employee_id) { params.push(employee_id); conditions.push(`a.employee_id = $${params.length}`); }
-  if (status) { params.push(status); conditions.push(`a.status = $${params.length}`); }
-  if (from) { params.push(from); conditions.push(`a.end_date >= $${params.length}`); }
-  if (to) { params.push(to); conditions.push(`a.start_date <= $${params.length}`); }
-  if (department_id) { params.push(department_id); conditions.push(`ep.department_id = $${params.length}`); }
+  if (employee_id) { params.push(employee_id); conditions.push(`hr_employee_id = $${params.length}`); }
+  if (status) { params.push(status); conditions.push(`status = $${params.length}`); }
+  if (from) { params.push(from); conditions.push(`end_date >= $${params.length}`); }
+  if (to) { params.push(to); conditions.push(`start_date <= $${params.length}`); }
+  if (department_id) { params.push(department_id); conditions.push(`department_id = $${params.length}`); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const { rows } = await pool.query(`
-    SELECT a.*, per.full_name AS employee_name, dep.name AS department_name
-    FROM hr_absences a
-    JOIN hr_employees emp ON emp.id = a.employee_id
-    JOIN hr_persons per ON per.id = emp.person_id
-    LEFT JOIN hr_employment_periods ep ON ep.employee_id = a.employee_id AND ep.end_date IS NULL
-    LEFT JOIN hr_departments dep ON dep.id = ep.department_id
-    ${where}
-    ORDER BY a.start_date DESC
-  `, params);
-  return rows;
+
+  try {
+    const { rows } = await pool.query(`
+      WITH combined AS (
+        SELECT a.id::text AS id, 'manual' AS source, a.employee_id AS hr_employee_id, a.type, a.start_date, a.end_date,
+               a.workdays, a.status, a.comment, per.full_name AS employee_name, dep.id AS department_id, dep.name AS department_name
+        FROM hr_absences a
+        JOIN hr_employees emp ON emp.id = a.employee_id
+        JOIN hr_persons per ON per.id = emp.person_id
+        LEFT JOIN hr_employment_periods ep ON ep.employee_id = a.employee_id AND ep.end_date IS NULL
+        LEFT JOIN hr_departments dep ON dep.id = ep.department_id
+
+        UNION ALL
+
+        SELECT 'bot-' || t.request_id AS id, 'bot' AS source, emp2.id AS hr_employee_id,
+               CASE WHEN t.request_type = 'sick' THEN 'Sick Leave'
+                    WHEN t.request_subtype = 'unpaid' THEN 'Unpaid Leave'
+                    ELSE 'Vacation' END AS type,
+               COALESCE(NULLIF(t.date_from_iso, '')::date, to_date(NULLIF(t.date_from, ''), 'DD.MM.YYYY')) AS start_date,
+               COALESCE(NULLIF(t.date_to_iso, '')::date, to_date(NULLIF(t.date_to, ''), 'DD.MM.YYYY')) AS end_date,
+               NULL::int AS workdays,
+               CASE t.final_status
+                 WHEN 'approved' THEN 'Approved'
+                 WHEN 'rejected' THEN 'Rejected'
+                 WHEN 'pending_accountant' THEN 'На погодженні бухгалтера'
+                 ELSE 'На погодженні HRD'
+               END AS status,
+               t.comment || CASE WHEN t.replacement_person != '' THEN (CASE WHEN t.comment != '' THEN '; ' ELSE '' END || 'заміна: ' || t.replacement_person) ELSE '' END AS comment,
+               t.full_name AS employee_name, dep2.id AS department_id, dep2.name AS department_name
+        FROM timeoff_requests t
+        LEFT JOIN hr_employees emp2 ON emp2.employee_number = t.employee_id
+        LEFT JOIN hr_employment_periods ep2 ON ep2.employee_id = emp2.id AND ep2.end_date IS NULL
+        LEFT JOIN hr_departments dep2 ON dep2.id = ep2.department_id
+      )
+      SELECT * FROM combined
+      ${where}
+      ORDER BY start_date DESC
+    `, params);
+    return rows.map((r) => ({ ...r, workdays: r.workdays ?? countWorkdays(r.start_date, r.end_date) }));
+  } catch (error) {
+    if (error?.code !== '42P01') throw error;
+    console.warn('listAbsences: timeoff_requests відсутня в цій базі, показую лише hr_absences —', error.message);
+    const { rows } = await pool.query(`
+      SELECT a.id::text AS id, 'manual' AS source, a.employee_id AS hr_employee_id, a.type, a.start_date, a.end_date,
+             a.workdays, a.status, a.comment, per.full_name AS employee_name, dep.id AS department_id, dep.name AS department_name
+      FROM hr_absences a
+      JOIN hr_employees emp ON emp.id = a.employee_id
+      JOIN hr_persons per ON per.id = emp.person_id
+      LEFT JOIN hr_employment_periods ep ON ep.employee_id = a.employee_id AND ep.end_date IS NULL
+      LEFT JOIN hr_departments dep ON dep.id = ep.department_id
+      ${where}
+      ORDER BY start_date DESC
+    `, params);
+    return rows;
+  }
 }
 
 async function createAbsence({ employee_id, type, start_date, end_date, comment, document_url }, createdBy) {
@@ -4334,6 +4392,7 @@ export default {
   getSurveyResults,
   ABSENCE_TYPES,
   ABSENCE_STATUSES,
+  BOT_ABSENCE_STATUSES,
   listAbsences,
   createAbsence,
   updateAbsenceStatus,
