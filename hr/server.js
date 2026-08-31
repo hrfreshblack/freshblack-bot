@@ -207,6 +207,7 @@ app.get('/api/dictionaries', (req, res) => {
     surveyQuestionTypes: db.SURVEY_QUESTION_TYPES,
     absenceTypes: db.ABSENCE_TYPES,
     absenceStatuses: db.ABSENCE_STATUSES,
+    absenceStatusFilterOptions: db.ABSENCE_STATUSES.concat(db.BOT_ABSENCE_STATUSES),
     offboardingInitiationTypes: db.OFFBOARDING_INITIATION_TYPES,
     offboardingStatuses: db.OFFBOARDING_STATUSES,
     offboardingChecklistCategories: db.OFFBOARDING_CHECKLIST_CATEGORIES,

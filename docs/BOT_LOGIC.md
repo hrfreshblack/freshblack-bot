@@ -31,6 +31,8 @@
 ### timeoff_requests — заявки на відпустку/лікарняний
 Поля: `request_id`, `employee_id`, `telegram_chat_id`, `telegram_user_id`, `full_name`, `request_type` (vacation/sick), `request_subtype` (annual/unpaid), `date_from`, `date_to`, `replacement_person`, `comment`, `status`, `status_hr`, `status_chief_acc`, `final_status`.
 
+**Читається наживо HR CRM-ом** (`hr/db.js`, `listAbsences`) — вкладка "Відсутності" приєднує ці заявки до власних `hr_absences` за `timeoff_requests.employee_id` = `hr_employees.employee_number`, без копіювання даних. Це означає: зміна назв колонок цієї таблиці або `final_status`-значень (`pending_hrd`/`pending_accountant`/`approved`/`rejected`) — зміна контракту з HR CRM, не лише з ботом. Деталі — `docs/HR.md`, розділ "HR Operations: відсутності".
+
 ### (інші аркуші, не оброблюються поточним ботом)
 `dashboard`, `worklog`, `ФІО QR` — існують у тій самій таблиці, наповнюються іншим Apps Script кодом (меню "FreshBlack HR"), який поки не переданий і не входить у зону змін.
 

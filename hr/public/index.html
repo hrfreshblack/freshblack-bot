@@ -1382,7 +1382,7 @@ async function loadDictionaries() {
   document.getElementById('sqType').innerHTML = data.surveyQuestionTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
 
   document.getElementById('absType').innerHTML = data.absenceTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
-  document.getElementById('absStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.absenceStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('absStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.absenceStatusFilterOptions.map((s) => `<option value="${s}">${s}</option>`).join('');
 
   document.getElementById('offbInitiationType').innerHTML = data.offboardingInitiationTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
   document.getElementById('offbStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.offboardingStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
@@ -3396,10 +3396,10 @@ async function renderAbsencesTab(e) {
     <div style="margin-top:12px;">
       ${absences.map((a) => `
         <div class="historyCard">
-          <div class="historyTitle">${escAttr(a.type)} ${absenceStatusTag(a.status)}</div>
+          <div class="historyTitle">${escAttr(a.type)} ${absenceStatusTag(a.status)}${a.source === 'bot' ? ' <span class="tag neutral" title="Заявка подана й погоджується через Telegram-бота — статус тут оновлюється сам">бот</span>' : ''}</div>
           <div class="historyMeta">${new Date(a.start_date).toLocaleDateString('uk-UA')} — ${new Date(a.end_date).toLocaleDateString('uk-UA')} · ${a.workdays} робочих днів</div>
           ${a.comment ? '<div class="historyMeta">' + escAttr(a.comment) + '</div>' : ''}
-          ${a.status === 'Requested'
+          ${a.source === 'bot' ? '' : a.status === 'Requested'
             ? '<div style="margin-top:6px; display:flex; gap:6px;"><button style="font-size:11px; padding:4px 8px;" onclick="setAbsenceStatus(' + a.id + ', \'Approved\')">Погодити</button><button class="bad" style="font-size:11px; padding:4px 8px;" onclick="setAbsenceStatus(' + a.id + ', \'Rejected\')">Відхилити</button></div>'
             : a.status === 'Approved' ? '<div style="margin-top:6px;"><button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="setAbsenceStatus(' + a.id + ', \'Cancelled\')">Скасувати</button></div>' : ''}
         </div>
@@ -3488,7 +3488,7 @@ async function loadAbsencesView() {
       <td>${new Date(a.start_date).toLocaleDateString('uk-UA')}</td>
       <td>${new Date(a.end_date).toLocaleDateString('uk-UA')}</td>
       <td>${a.workdays}</td>
-      <td>${absenceStatusTag(a.status)}</td>
+      <td>${absenceStatusTag(a.status)}${a.source === 'bot' ? ' <span class="tag neutral" title="Заявка подана й погоджується через Telegram-бота — статус тут оновлюється сам">бот</span>' : ''}</td>
     </tr>
   `).join('');
 }
