@@ -1605,6 +1605,12 @@ document.getElementById('btnSaveInventoryImport').onclick = async () => {
       msg += ` Не розпізнано аркуші: ${data.unmatchedSheets.join(', ')}.`;
     }
     showToast(msg);
+    if (data.unmatchedByName && data.unmatchedByName.length) {
+      const lines = data.unmatchedByName.slice(0, 40).map((u) => `${u.name} (${u.qty}) — ${u.section}`);
+      let alertMsg = `Без коду в файлі, і за назвою теж не знайшлось серед наявних товарів (${data.unmatchedByName.length}) — не завантажені, треба внести вручну:\n\n` + lines.join('\n');
+      if (data.unmatchedByName.length > 40) alertMsg += `\n… і ще ${data.unmatchedByName.length - 40}.`;
+      alert(alertMsg);
+    }
 
     currentInventoryDate = movement_date;
     await loadInventoryDates();

@@ -1038,7 +1038,7 @@ async function listInventoryComparison(section) {
 // тієї ж позиції вже є підрахунок (повторне заливання того ж файлу чи
 // виправленого файлу) — оновлює його замість дубля.
 async function importInventoryCounts(sectionsData, { movement_date, created_by } = {}) {
-  const summary = { imported: 0, newItems: 0, skipped: 0, bySection: {}, unknownSections: [] };
+  const summary = { imported: 0, newItems: 0, skipped: 0, bySection: {}, unknownSections: [], unmatchedByName: [] };
 
   for (const [section, rows] of Object.entries(sectionsData)) {
     if (!INVENTORY_SECTIONS[section]) {
@@ -1056,8 +1056,28 @@ async function importInventoryCounts(sectionsData, { movement_date, created_by }
       const note = row.note || '';
 
       if (config.kind === 'product') {
-        const code = String(row.code || '').trim();
-        if (!code) { sectionSkipped++; continue; }
+        let code = String(row.code || '').trim();
+        const name = String(row.name || '').trim();
+        // Зелена кава/напівфабрикат зазвичай не мають SAP-коду в підрахунку
+        // (це не SAP-номенклатура) — якщо код не вказано, шукаємо існуючий
+        // товар цієї категорії за точним співпадінням назви. Не знайдено —
+        // НЕ створюємо новий товар із вигаданим кодом (це зламало б
+        // прив'язку до лота/партії обсмажки), а повертаємо в unmatchedByName,
+        // щоб користувач розібрався вручну.
+        if (!code) {
+          if (!name) { sectionSkipped++; continue; }
+          const { rows: found } = await pool.query(
+            `SELECT code FROM products WHERE category = ANY($1) AND lower(name) = lower($2) LIMIT 1`,
+            [config.categories, name]
+          );
+          if (found.length) {
+            code = found[0].code;
+          } else {
+            sectionSkipped++;
+            summary.unmatchedByName.push({ section, name, qty });
+            continue;
+          }
+        }
 
         const existing = await getProduct(code);
         if (!existing) {
