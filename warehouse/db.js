@@ -1038,7 +1038,14 @@ async function listInventoryComparison(section) {
 // тієї ж позиції вже є підрахунок (повторне заливання того ж файлу чи
 // виправленого файлу) — оновлює його замість дубля.
 async function importInventoryCounts(sectionsData, { movement_date, created_by } = {}) {
-  const summary = { imported: 0, newItems: 0, skipped: 0, bySection: {}, unknownSections: [], unmatchedByName: [] };
+  const summary = { imported: 0, newItems: 0, skipped: 0, bySection: {}, unknownSections: [], unmatchedByName: [], duplicateTargets: [] };
+  // Дві різні позиції файлу (різні назви/SAP-коди) іноді помилково мають
+  // однаковий "Код" у джерелі (реальний випадок: два профілі обсмажки
+  // одного лоту, скопійований код) — тоді другий запис у межах цього ж
+  // імпорту тихо перезаписав би підрахунок першого. Ловимо це тут, а не
+  // покладаємось лише на "той самий день = оновити" (той механізм — для
+  // повторного заливання, а не для двох різних рядків ОДНОГО файлу).
+  const seenTargetsThisImport = new Set();
 
   for (const [section, rows] of Object.entries(sectionsData)) {
     if (!INVENTORY_SECTIONS[section]) {
@@ -1058,33 +1065,60 @@ async function importInventoryCounts(sectionsData, { movement_date, created_by }
       if (config.kind === 'product') {
         let code = String(row.code || '').trim();
         const name = String(row.name || '').trim();
-        // Зелена кава/напівфабрикат зазвичай не мають SAP-коду в підрахунку
-        // (це не SAP-номенклатура) — якщо код не вказано, шукаємо існуючий
-        // товар цієї категорії за точним співпадінням назви. Не знайдено —
-        // НЕ створюємо новий товар із вигаданим кодом (це зламало б
-        // прив'язку до лота/партії обсмажки), а повертаємо в unmatchedByName,
-        // щоб користувач розібрався вручну.
-        if (!code) {
-          if (!name) { sectionSkipped++; continue; }
+        const sapCode = String(row.sap_code || '').trim();
+        // Зелена кава/напівфабрикат — це партії/лоти, а не SAP-номенклатура,
+        // тож у підрахунку часто немає власного внутрішнього коду товару
+        // (products.code, напр. "PG-0039"), лише SAP-код (products.sap_code)
+        // або сама назва. Порядок пошуку існуючого товару: власний код →
+        // SAP-код → точний збіг назви в межах категорії цієї вкладки.
+        if (!code && sapCode) {
+          const { rows: found } = await pool.query(
+            `SELECT code FROM products WHERE category = ANY($1) AND sap_code = $2 AND sap_code != '' LIMIT 1`,
+            [config.categories, sapCode]
+          );
+          if (found.length) code = found[0].code;
+        }
+        if (!code && name) {
           const { rows: found } = await pool.query(
             `SELECT code FROM products WHERE category = ANY($1) AND lower(name) = lower($2) LIMIT 1`,
             [config.categories, name]
           );
-          if (found.length) {
-            code = found[0].code;
+          if (found.length) code = found[0].code;
+        }
+        // Товару з такою позицією ще немає в жодній з трьох баз збігу —
+        // з'явилась нова позиція, це нормально, заводимо новий товар.
+        // Код: САП-код, якщо є (єдиний надійний ідентифікатор, коли
+        // власного внутрішнього коду товару ще не присвоєно); зовсім без
+        // жодного ідентифікатора (ні коду, ні SAP-коду, ні назви) — завести
+        // нічого не можна, пропускаємо.
+        if (!code) {
+          if (sapCode) {
+            code = sapCode;
+          } else if (name) {
+            sectionSkipped++;
+            summary.unmatchedByName.push({ section, name, qty, reason: 'немає ні власного коду, ні SAP-коду — заведи товар вручну на вкладці "Товари"' });
+            continue;
           } else {
             sectionSkipped++;
-            summary.unmatchedByName.push({ section, name, qty });
             continue;
           }
         }
 
+        const targetKey = 'product:' + code;
+        if (seenTargetsThisImport.has(targetKey)) {
+          summary.duplicateTargets.push({ section, code, name, sapCode, qty });
+        } else {
+          seenTargetsThisImport.add(targetKey);
+        }
+
         const existing = await getProduct(code);
         if (!existing) {
-          await insertProductsIfMissing([{ code, name: row.name || '', category: config.categories[0], is_stock_item: true, min_stock: 0 }]);
+          await insertProductsIfMissing([{ code, name: name || sapCode, category: config.categories[0], is_stock_item: true, min_stock: 0 }]);
+          if (sapCode) await pool.query(`UPDATE products SET sap_code = $2 WHERE code = $1 AND sap_code = ''`, [code, sapCode]);
           sectionNew++;
-        } else if (!existing.is_stock_item) {
-          await updateProductFields(code, { is_stock_item: true });
+        } else {
+          if (!existing.is_stock_item) await updateProductFields(code, { is_stock_item: true });
+          if (sapCode && !existing.sap_code) await pool.query(`UPDATE products SET sap_code = $2 WHERE code = $1 AND sap_code = ''`, [code, sapCode]);
         }
 
         const { rows: sameDay } = await pool.query(
@@ -1117,6 +1151,13 @@ async function importInventoryCounts(sectionsData, { movement_date, created_by }
           );
           materialId = created[0].id;
           sectionNew++;
+        }
+
+        const materialTargetKey = 'material:' + materialId;
+        if (seenTargetsThisImport.has(materialTargetKey)) {
+          summary.duplicateTargets.push({ section, code, name, qty });
+        } else {
+          seenTargetsThisImport.add(materialTargetKey);
         }
 
         const { rows: sameDay } = await pool.query(
