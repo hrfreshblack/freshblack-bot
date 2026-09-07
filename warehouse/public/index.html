@@ -1611,6 +1611,12 @@ document.getElementById('btnSaveInventoryImport').onclick = async () => {
       if (data.unmatchedByName.length > 40) alertMsg += `\n… і ще ${data.unmatchedByName.length - 40}.`;
       alert(alertMsg);
     }
+    if (data.duplicateTargets && data.duplicateTargets.length) {
+      const lines = data.duplicateTargets.slice(0, 40).map((d) => `${d.name || d.code} (${d.qty}) — ${d.section}, код ${d.code}${d.sapCode ? ', SAP ' + d.sapCode : ''}`);
+      let alertMsg = `Увага: у файлі кілька рядків мають однаковий код і підрахунок для них перезаписав один одного (${data.duplicateTargets.length}) — перевір ці позиції, можливо, у файлі переплутано коди:\n\n` + lines.join('\n');
+      if (data.duplicateTargets.length > 40) alertMsg += `\n… і ще ${data.duplicateTargets.length - 40}.`;
+      alert(alertMsg);
+    }
 
     currentInventoryDate = movement_date;
     await loadInventoryDates();

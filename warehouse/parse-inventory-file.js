@@ -15,6 +15,10 @@ const SECTION_MATCHERS = [
 ];
 
 const COLUMN_MATCHERS = [
+  // САП-код перевіряємо ПЕРШИМ — заголовок "Код САП"/"Код SAP" сам містить
+  // підрядок "код", тож якби 'code' йшов раніше, він би хибно забрав собі
+  // цю колонку.
+  { field: 'sap_code', includes: ['сап', 'sap'] },
   { field: 'code', includes: ['код'] },
   { field: 'name', includes: ['назва', 'найменування'] },
   { field: 'qty', includes: ['порахували', 'кількість'] },
@@ -87,7 +91,7 @@ export async function parseInventoryFile(buffer) {
         line[field] = field === 'qty' ? cellNumber(cell.value) : cellText(cell.value);
       });
 
-      if ((line.code || line.name) && line.qty !== undefined && line.qty !== null) {
+      if ((line.code || line.sap_code || line.name) && line.qty !== undefined && line.qty !== null) {
         rows.push(line);
       }
     });
