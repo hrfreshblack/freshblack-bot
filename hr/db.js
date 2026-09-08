@@ -442,6 +442,10 @@ async function initSchema() {
     ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_decision TEXT NOT NULL DEFAULT '';
     ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_decision_date DATE;
     ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_decision_reason TEXT NOT NULL DEFAULT '';
+    -- Юридична особа/ФОП, на яку формально оформлений співробітник —
+    -- окремо від Department/Position (організаційна структура), це суто
+    -- юридичне оформлення трудових відносин.
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS employed_under TEXT NOT NULL DEFAULT '';
 
     -- ==================== Onboarding / Adaptation (ТЗ 20, 23, 23.1) ====================
 
@@ -1234,6 +1238,82 @@ async function createEmployee({ full_name, birth_date, gender, phone, personal_e
   }
 }
 
+// Масовий імпорт співробітників з файлу (parseEmployeesFile) — контактні
+// дані/дата прийому/юр.особа, БЕЗ організаційного розміщення (посада/
+// департамент — це окремо, вручну, як і зараз). Дедуп — по телефону, потім
+// по робочій пошті: якщо збіг знайдено, лише ДОПОВНЮЄ порожні поля
+// (ніколи не перезаписує вже введене вручну); не знайдено — заводить нового
+// Person+Employee. Без position_id/department_id жодного Employment Period
+// не створюється — Employee просто ще "не розміщений" в оргструктурі.
+async function importEmployeesFromRows(rows, createdBy) {
+  const summary = { created: 0, updated: 0, skipped: 0 };
+
+  for (const row of rows) {
+    const full_name = String(row.full_name || '').trim();
+    if (!full_name) { summary.skipped++; continue; }
+    const phone = String(row.phone || '').trim();
+    const corporate_email = String(row.corporate_email || '').trim();
+    const telegram = String(row.telegram || '').trim();
+    const birth_date = row.birth_date || null;
+    const first_hire_date = row.first_hire_date || null;
+    const employed_under = String(row.employed_under || '').trim();
+
+    let employeeId = null;
+    if (phone) {
+      const { rows: found } = await pool.query(
+        `SELECT emp.id FROM hr_employees emp JOIN hr_persons per ON per.id = emp.person_id WHERE per.phone = $1 LIMIT 1`,
+        [phone]
+      );
+      if (found.length) employeeId = found[0].id;
+    }
+    if (!employeeId && corporate_email) {
+      const { rows: found } = await pool.query(`SELECT id FROM hr_employees WHERE corporate_email = $1 LIMIT 1`, [corporate_email]);
+      if (found.length) employeeId = found[0].id;
+    }
+
+    if (employeeId) {
+      const { rows: personRows } = await pool.query(
+        `UPDATE hr_persons per SET
+           birth_date = COALESCE(per.birth_date, $2),
+           phone = CASE WHEN per.phone = '' THEN $3 ELSE per.phone END,
+           telegram = CASE WHEN per.telegram = '' THEN $4 ELSE per.telegram END,
+           updated_at = now()
+         FROM hr_employees emp WHERE emp.id = $1 AND per.id = emp.person_id RETURNING per.id`,
+        [employeeId, birth_date, phone, telegram]
+      );
+      if (personRows.length) {
+        await pool.query(
+          `UPDATE hr_employees SET
+             corporate_email = CASE WHEN corporate_email = '' THEN $2 ELSE corporate_email END,
+             first_hire_date = COALESCE(first_hire_date, $3),
+             employed_under = CASE WHEN employed_under = '' THEN $4 ELSE employed_under END,
+             updated_at = now()
+           WHERE id = $1`,
+          [employeeId, corporate_email, first_hire_date, employed_under]
+        );
+        summary.updated++;
+        continue;
+      }
+    }
+
+    await createEmployee({
+      full_name, birth_date, phone, telegram, corporate_email, first_hire_date,
+      status: first_hire_date && new Date(first_hire_date) <= new Date() ? 'Active' : 'Future Employee',
+      created_by: createdBy
+    });
+    if (employed_under) {
+      const { rows: justCreated } = await pool.query(
+        `SELECT emp.id FROM hr_employees emp JOIN hr_persons per ON per.id = emp.person_id WHERE per.full_name = $1 ORDER BY emp.id DESC LIMIT 1`,
+        [full_name]
+      );
+      if (justCreated.length) await pool.query(`UPDATE hr_employees SET employed_under = $2 WHERE id = $1`, [justCreated[0].id, employed_under]);
+    }
+    summary.created++;
+  }
+
+  return summary;
+}
+
 // Одноразово: прибирає плоску структуру з попередньої (помилкової) версії
 // цього імпорту — топ-рівневі департаменти з переліком старих назв і все,
 // що на них тримається (посади, employment periods, employees, persons),
@@ -1372,7 +1452,8 @@ async function updateEmployeeStatus(employeeId, status, actor) {
 }
 
 async function updateEmployeeFields(employeeId, { employee_number, corporate_email, first_hire_date, rehire_eligible,
-  reservation_applicable, reservation_status, reservation_start_date, reservation_end_date, reservation_comment, reservation_document_url }) {
+  reservation_applicable, reservation_status, reservation_start_date, reservation_end_date, reservation_comment, reservation_document_url,
+  employed_under }) {
   if (reservation_status && !RESERVATION_STATUSES.includes(reservation_status)) {
     throw new Error(`Unknown reservation status: ${reservation_status}`);
   }
@@ -1388,11 +1469,12 @@ async function updateEmployeeFields(employeeId, { employee_number, corporate_ema
        reservation_end_date = $9,
        reservation_comment = COALESCE($10, reservation_comment),
        reservation_document_url = COALESCE($11, reservation_document_url),
+       employed_under = COALESCE($12, employed_under),
        updated_at = now()
      WHERE id = $1 RETURNING *`,
     [employeeId, employee_number ?? null, corporate_email ?? null, first_hire_date ?? null, rehire_eligible ?? null,
       reservation_applicable ?? null, reservation_status ?? null, reservation_start_date ?? null, reservation_end_date ?? null,
-      reservation_comment ?? null, reservation_document_url ?? null]
+      reservation_comment ?? null, reservation_document_url ?? null, employed_under ?? null]
   );
   return rows[0] || null;
 }
@@ -3519,6 +3601,34 @@ async function listAbsences({ employee_id = null, department_id = null, status =
   return combined;
 }
 
+function monthsBetween(startDate, endDate) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  let months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
+  if (end.getDate() < start.getDate()) months--;
+  return Math.max(0, months);
+}
+
+// Нараховані дні відпустки — стандарт 24 к.д./рік, пропорційно стажу (2 дні
+// за кожен повний відпрацьований місяць від first_hire_date). Використані —
+// сума робочих днів по всіх погоджених (Approved) заявках типу Vacation,
+// незалежно від джерела (вручну внесені чи через бота — listAbsences уже їх
+// об'єднує). Без first_hire_date порахувати нема від чого — повертає null.
+async function getVacationBalance(employeeId) {
+  const { rows } = await pool.query('SELECT first_hire_date FROM hr_employees WHERE id = $1', [employeeId]);
+  if (!rows[0] || !rows[0].first_hire_date) return { accrued: null, used: 0, remaining: null };
+
+  const months = monthsBetween(rows[0].first_hire_date, new Date());
+  const accrued = Math.round(months * 2 * 10) / 10;
+
+  const absences = await listAbsences({ employee_id: employeeId });
+  const used = absences
+    .filter((a) => a.type === 'Vacation' && a.status === 'Approved')
+    .reduce((sum, a) => sum + (a.workdays || 0), 0);
+
+  return { accrued, used, remaining: Math.round((accrued - used) * 10) / 10 };
+}
+
 async function createAbsence({ employee_id, type, start_date, end_date, comment, document_url }, createdBy) {
   if (!ABSENCE_TYPES.includes(type)) throw new Error(`Unknown absence type: ${type}`);
   if (new Date(end_date) < new Date(start_date)) throw new Error('Дата завершення не може бути раніше дати початку');
@@ -4301,6 +4411,7 @@ export default {
   listEmployees,
   getEmployee,
   createEmployee,
+  importEmployeesFromRows,
   seedOrgImport,
   parseVacancyRequestFieldsFromText,
   parseVacancyFieldsFromText,
@@ -4434,6 +4545,7 @@ export default {
   ABSENCE_STATUSES,
   BOT_ABSENCE_STATUSES,
   listAbsences,
+  getVacationBalance,
   createAbsence,
   updateAbsenceStatus,
   updateAbsence,

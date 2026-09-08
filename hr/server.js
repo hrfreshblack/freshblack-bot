@@ -6,6 +6,7 @@ import db from './db.js';
 import seedAccounts from './seed-accounts.js';
 import { DEPARTMENTS as SEED_DEPARTMENTS, POSITIONS as SEED_POSITIONS, LEGACY_TOP_LEVEL_DEPARTMENTS } from './seed-org-import.js';
 import { signSsoToken, verifySsoToken } from './sso.js';
+import { parseEmployeesFile } from './parse-employees-file.js';
 
 const resumeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 function uploadSingleFile(req, res) {
@@ -399,6 +400,27 @@ app.post('/api/employees', requireRole(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/employees ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити співробітника' });
+  }
+});
+
+app.post('/api/employees/import', requireRole(), async (req, res) => {
+  try {
+    await uploadSingleFile(req, res);
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл обов’язковий' });
+      return;
+    }
+    const rows = await parseEmployeesFile(req.file.buffer);
+    if (!rows.length) {
+      res.status(400).json({ ok: false, error: 'Не знайдено жодного рядка з ПІБ. Перевір, що в першому рядку файлу є заголовки колонок.' });
+      return;
+    }
+    const summary = await db.importEmployeesFromRows(rows, req.account.username);
+    res.json({ ok: true, ...summary, totalRows: rows.length });
+  } catch (error) {
+    console.error('POST /api/employees/import ERROR:', error?.message || error);
+    const message = error?.message?.includes('File too large') ? 'Файл завеликий (максимум 15МБ)' : (error?.message || 'Не вдалося розпізнати файл');
+    res.status(400).json({ ok: false, error: message });
   }
 });
 
@@ -1834,6 +1856,16 @@ app.get('/api/absences', async (req, res) => {
   } catch (error) {
     console.error('GET /api/absences ERROR:', error?.message || error);
     res.status(500).json({ ok: false, error: 'Не вдалося отримати відсутності' });
+  }
+});
+
+app.get('/api/employees/:id/vacation-balance', async (req, res) => {
+  try {
+    const balance = await db.getVacationBalance(Number(req.params.id));
+    res.json({ ok: true, balance });
+  } catch (error) {
+    console.error('GET /api/employees/:id/vacation-balance ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося порахувати баланс відпустки' });
   }
 });
 

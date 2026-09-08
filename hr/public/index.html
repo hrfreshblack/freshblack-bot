@@ -230,6 +230,7 @@
       <select id="peopleStatusFilter"><option value="">— усі статуси —</option></select>
       <select id="peopleDeptFilter"><option value="">— усі департаменти —</option></select>
       <button id="btnAddEmployee">+ Співробітник</button>
+      <button class="secondary" id="btnImportEmployees">+ Завантажити файлом</button>
     </div>
     <div class="cardsGrid" id="peopleCards"></div>
     <div class="empty" id="peopleEmpty" style="display:none;">Нікого не знайдено.</div>
@@ -1212,6 +1213,19 @@
   </div>
 </div>
 
+<!-- Модалка: завантажити співробітників файлом -->
+<div class="overlay" id="importEmployeesOverlay">
+  <div class="modal" style="max-width: 560px;">
+    <h2>Завантажити співробітників файлом</h2>
+    <p style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;">.xlsx, один аркуш, заголовки в першому рядку (порядок колонок довільний): ПІБ, Дата початку роботи, Оформлений на (юр. особа/ФОП), Дата народження, Робоча пошта, Телефон, Telegram. Дедуп — за телефоном, потім за робочою поштою: якщо такий співробітник вже є, лише доповнить порожні поля, вже введене вручну не зачепить.</p>
+    <div class="field"><input type="file" id="importEmployeesFile" accept=".xlsx"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('importEmployeesOverlay')">Скасувати</button>
+      <button id="btnSaveImportEmployees">Залити</button>
+    </div>
+  </div>
+</div>
+
 <!-- Модалка: створити заявку на вакансію з файлу -->
 <div class="overlay" id="vrUploadOverlay">
   <div class="modal" style="max-width: 480px;">
@@ -1691,6 +1705,30 @@ document.getElementById('peopleSearch').addEventListener('input', () => {
 document.getElementById('peopleStatusFilter').addEventListener('change', loadPeople);
 document.getElementById('peopleDeptFilter').addEventListener('change', loadPeople);
 
+document.getElementById('btnImportEmployees').onclick = () => {
+  document.getElementById('importEmployeesFile').value = '';
+  document.getElementById('importEmployeesOverlay').classList.add('open');
+};
+
+document.getElementById('btnSaveImportEmployees').onclick = async () => {
+  const fileInput = document.getElementById('importEmployeesFile');
+  if (!fileInput.files.length) { showToast('Обери файл'); return; }
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  const btn = document.getElementById('btnSaveImportEmployees');
+  btn.disabled = true;
+  try {
+    const resp = await apiFetch('/api/employees/import', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (!data.ok) { showToast(data.error || 'Не вдалося залити файл'); return; }
+    closeOverlay('importEmployeesOverlay');
+    showToast(`Опрацьовано ${data.totalRows} рядків: нових — ${data.created}, доповнено — ${data.updated}${data.skipped ? `, пропущено — ${data.skipped}` : ''}.`);
+    loadPeople();
+  } finally {
+    btn.disabled = false;
+  }
+};
+
 // ---- Add employee modal ----
 
 document.getElementById('btnAddEmployee').onclick = async () => {
@@ -1816,6 +1854,7 @@ function renderOverviewTab(e) {
       <div class="fieldItem"><label>Дата прийому (перша)</label>${e.first_hire_date ? new Date(e.first_hire_date).toLocaleDateString('uk-UA') : '—'}</div>
       <div class="fieldItem"><label>Стаж (tenure)</label>${e.tenure || '—'}</div>
       <div class="fieldItem"><label>Corporate email</label>${e.corporate_email || '—'}</div>
+      <div class="fieldItem"><label>Оформлений на</label>${escAttr(e.employed_under || '—')}</div>
     </div>
     <div style="margin-top:8px;">
       <button class="secondary" onclick="openStatusChange()">Змінити статус</button>
@@ -1842,6 +1881,7 @@ function renderPersonalTab(e) {
       <div class="fieldItem"><label>Місто</label><input type="text" id="pCity" value="${escAttr(e.city)}"></div>
       <div class="fieldItem"><label>Екстрений контакт</label><input type="text" id="pEmergency" value="${escAttr(e.emergency_contact)}"></div>
       <div class="fieldItem"><label>Corporate email</label><input type="text" id="pCorpEmail" value="${escAttr(e.corporate_email)}"></div>
+      <div class="fieldItem"><label>Оформлений на (юр. особа/ФОП)</label><input type="text" id="pEmployedUnder" value="${escAttr(e.employed_under || '')}"></div>
     </div>
     <button onclick="savePersonalTab()">Зберегти особисті дані</button>
 
@@ -1886,8 +1926,9 @@ async function savePersonalTab() {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
   const corp = document.getElementById('pCorpEmail').value.trim();
+  const employedUnder = document.getElementById('pEmployedUnder').value.trim();
   await apiFetch('/api/employees/' + currentEmployeeId + '/fields', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ corporate_email: corp })
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ corporate_email: corp, employed_under: employedUnder })
   });
   showToast('Збережено');
   renderEmployeeProfile();
@@ -3393,11 +3434,20 @@ function absenceStatusTag(status) {
 
 async function renderAbsencesTab(e) {
   const panel = document.getElementById('profileAbsences');
-  const resp = await apiFetch('/api/absences?' + new URLSearchParams({ employee_id: e.id }));
+  const [resp, balResp] = await Promise.all([
+    apiFetch('/api/absences?' + new URLSearchParams({ employee_id: e.id })),
+    apiFetch('/api/employees/' + e.id + '/vacation-balance')
+  ]);
   const data = await resp.json();
+  const balData = await balResp.json();
   const absences = data.ok ? data.absences : [];
+  const bal = balData.ok ? balData.balance : null;
+  const balanceHtml = bal && bal.accrued !== null
+    ? `<div class="historyMeta" style="margin-bottom:10px;">Відпустка (24 к.д./рік, пропорційно стажу): нараховано <b>${bal.accrued}</b> · використано <b>${bal.used}</b> · залишок <b>${bal.remaining}</b> дн.</div>`
+    : `<div class="historyMeta" style="margin-bottom:10px; color:var(--muted);">Баланс відпустки: не вказана дата прийому — нема від чого рахувати.</div>`;
   panel.innerHTML = `
     <button class="secondary" onclick="openAddAbsence(${e.id})">+ Відсутність</button>
+    ${balanceHtml}
     <div style="margin-top:12px;">
       ${absences.map((a) => `
         <div class="historyCard">
