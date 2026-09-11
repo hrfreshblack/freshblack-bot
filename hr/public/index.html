@@ -25,7 +25,7 @@
     background: var(--bg);
     color: var(--text);
   }
-  header { padding: 14px 24px 0; display: flex; flex-direction: column; }
+  header { padding: 14px 24px 0; display: flex; flex-direction: column; position: sticky; top: 0; background: var(--bg); z-index: 20; }
   .brandRow { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; }
   h1 { font-size: 16px; margin: 0; font-weight: 700; display: flex; align-items: center; gap: 8px; }
   .workspaceSwitch { font-size: 12px; color: var(--muted); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; }
@@ -55,7 +55,7 @@
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th {
     color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em;
-    position: sticky; top: 0; background: var(--bg); z-index: 2; box-shadow: 0 1px 0 var(--border);
+    position: sticky; top: var(--header-h, 92px); background: var(--bg); z-index: 2; box-shadow: 0 1px 0 var(--border);
   }
   tr:hover td { background: #1b1f28; }
   .clickable { cursor: pointer; }
@@ -353,7 +353,8 @@
       <button id="btnAddApplicationToVacancy">+ Кандидат на вакансію</button>
     </div>
     <div id="vacancyDetailFields" style="margin-bottom:16px;"></div>
-    <div class="tableWrap"><table><thead><tr><th>Кандидат</th><th>Телефон</th><th>Етап</th><th>Статус</th><th>Подано</th></tr></thead><tbody id="vacApplicationsBody"></tbody></table></div>
+    <div id="vacSalarySummary" style="color:var(--muted); font-size:13px; margin-bottom:12px;"></div>
+    <div class="tableWrap"><table><thead><tr><th>Кандидат</th><th>Телефон</th><th>Етап</th><th>Статус</th><th>Побажання по ЗП</th><th>Нотатка</th><th>Подано</th></tr></thead><tbody id="vacApplicationsBody"></tbody></table></div>
     <div class="empty" id="vacApplicationsEmpty" style="display:none;">Заявок на цю вакансію ще немає.</div>
   </div>
 
@@ -392,6 +393,9 @@
       <input type="text" id="appRejectionComment">
     </div>
     <button onclick="saveApplicationStageStatus()">Зберегти</button>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Резюме</h3>
+    <div id="applicationResumesList"></div>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Інтерв'ю</h3>
     <div id="applicationInterviews"></div>
@@ -1296,8 +1300,20 @@ async function initApp() {
   document.getElementById('appShell').style.display = '';
   document.getElementById('currentUserLabel').textContent = window._me.display_name || window._me.username;
 
+  syncHeaderHeight();
+  window.addEventListener('resize', syncHeaderHeight);
+
   await loadDictionaries();
   showTab('dashboard');
+}
+
+// Хедер тепер завжди прилипає до верху (щоб не треба було гортати вгору,
+// аби перейти на іншу вкладку) — заголовки таблиць теж липкі, тож їм
+// треба знати справжню висоту хедера, а не вгадану, інакше вони ховаються
+// під ним замість того, щоб стати одразу під ним.
+function syncHeaderHeight() {
+  const header = document.querySelector('header');
+  if (header) document.documentElement.style.setProperty('--header-h', header.offsetHeight + 'px');
 }
 
 function showLoginScreen() {
@@ -1518,7 +1534,7 @@ async function loadDashboard() {
 
   document.getElementById('dashboardFunnel').innerHTML = breakdownCardHtml(
     'Воронка найму',
-    'Кількість активних заявок кандидатів на кожному етапі воронки: Новий/Відгук → Сорсинг/Первинний розгляд → Первинне інтерв\'ю → Основне інтерв\'ю → Тестове завдання → Офер → Офер прийнято.',
+    'Кількість активних заявок кандидатів на кожному етапі воронки: Новий/Відгук → Сорсинг/Первинний розгляд → Первинне інтерв\'ю → Основне інтерв\'ю → Тестове завдання → Надіслано офер → Офер прийнято → Ознайомчий день → Стажувальний тиждень.',
     m.funnel, { scaleByMax: true }
   );
 
@@ -4643,6 +4659,7 @@ async function renderVacancyDetail() {
     ['Додаткові вимоги', v.additional_requirements]
   ].filter(([, val]) => val).map(([label, val]) => `<div class="textBlock"><label>${label}</label><div class="textBlockValue">${escAttr(val)}</div></div>`).join('');
   document.getElementById('vacancyDetailFields').innerHTML = fieldsHtml ? `<div class="textBlockGroup">${fieldsHtml}</div>` : '';
+  document.getElementById('vacSalarySummary').innerHTML = salarySummaryHtml(v.salary_range, v.applications.map((a) => a.desired_salary));
   const body = document.getElementById('vacApplicationsBody');
   const empty = document.getElementById('vacApplicationsEmpty');
   if (!v.applications.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
@@ -4653,9 +4670,40 @@ async function renderVacancyDetail() {
       <td>${escAttr(a.candidate_phone || '—')}</td>
       <td>${escAttr(a.stage)}</td>
       <td>${appStatusTag(a.status)}</td>
+      <td>${escAttr(a.desired_salary || '—')}</td>
+      <td>${escAttr(a.candidate_notes || '—')}</td>
       <td>${new Date(a.applied_date).toLocaleDateString('uk-UA')}</td>
     </tr>
   `).join('');
+}
+
+// Побажання по ЗП — вільний текст ("25000", "20-25 тис", "від 20000 грн"
+// тощо), тож рахуємо середнє/медіану толерантно: витягуємо число(-а) з
+// кожного рядка, діапазон "20-25" береться як середина. Рядки, де взагалі
+// нема цифр, просто не враховуються — не блокують підрахунок по решті.
+function parseSalaryNumber(text) {
+  if (!text) return null;
+  const nums = String(text).replace(/\s/g, '').match(/\d+([.,]\d+)?/g);
+  if (!nums || !nums.length) return null;
+  const values = nums.map((n) => Number(n.replace(',', '.'))).filter((n) => Number.isFinite(n) && n > 0);
+  if (!values.length) return null;
+  let scaled = values.map((n) => (/тис|к\b/i.test(text) && n < 1000 ? n * 1000 : n));
+  const avg = scaled.reduce((s, n) => s + n, 0) / scaled.length;
+  return avg;
+}
+
+function salarySummaryHtml(ourSalary, desiredList) {
+  const parsed = desiredList.map(parseSalaryNumber).filter((n) => n !== null).sort((a, b) => a - b);
+  const parts = [`Наша ЗП по вакансії: <b>${ourSalary ? escAttr(ourSalary) : '—'}</b>`];
+  if (parsed.length) {
+    const avg = Math.round(parsed.reduce((s, n) => s + n, 0) / parsed.length);
+    const mid = Math.floor(parsed.length / 2);
+    const median = Math.round(parsed.length % 2 ? parsed[mid] : (parsed[mid - 1] + parsed[mid]) / 2);
+    parts.push(`Побажання кандидатів (з ${parsed.length} розпізнаних): середня ~<b>${fmt(avg)}</b> · медіана ~<b>${fmt(median)}</b>`);
+  } else {
+    parts.push('Побажання кандидатів: недостатньо розпізнаваних чисел для підрахунку');
+  }
+  return parts.join(' &nbsp;·&nbsp; ');
 }
 
 document.getElementById('btnAddApplicationToVacancy').onclick = async () => {
@@ -4877,15 +4925,16 @@ function resumeParseStatusNote(status) {
   return '';
 }
 
-async function renderCandidateResumes(candidateId) {
+async function renderCandidateResumes(candidateId, targetId) {
   const resp = await apiFetch('/api/candidates/' + candidateId + '/resumes');
   const data = await resp.json();
   const resumes = data.ok ? data.resumes : [];
-  document.getElementById('candidateResumesList').innerHTML = resumes.length ? resumes.map((r) => `
+  document.getElementById(targetId || 'candidateResumesList').innerHTML = resumes.length ? resumes.map((r) => `
     <div class="historyCard" style="padding:8px 12px;">
-      <a href="/api/resumes/${r.id}/download" target="_blank" style="color:var(--accent2);">${escAttr(r.filename)}</a>
+      <a href="/api/resumes/${r.id}/view" target="_blank" style="color:var(--accent2);">${escAttr(r.filename)}</a>
       ${resumeParseStatusNote(r.parse_status)}
       <span class="historyMeta" style="margin-left:6px;">${new Date(r.created_at).toLocaleDateString('uk-UA')}</span>
+      <a href="/api/resumes/${r.id}/download" style="margin-left:8px; font-size:11px; color:var(--muted);" title="Скачати файл">⬇ скачати</a>
     </div>
   `).join('') : '<p style="color:var(--muted); font-size:13px;">Резюме ще не завантажено.</p>';
 }
@@ -4983,6 +5032,7 @@ async function renderApplicationDetail() {
   document.getElementById('appRejectionComment').value = a.rejection_comment || '';
   toggleRejectionFields();
 
+  renderCandidateResumes(a.candidate_id, 'applicationResumesList');
   renderApplicationInterviews(a.interviews);
   renderApplicationOffers(a.offers);
 }

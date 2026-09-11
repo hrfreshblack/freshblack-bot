@@ -30,7 +30,12 @@ const RESERVATION_STATUSES = ['Not Reserved', 'In Progress', 'Reserved', 'Expiri
 // Recruitment / ATS (ТЗ розділи 9-19)
 const VACANCY_REQUEST_STATUSES = ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Converted to Vacancy', 'Cancelled'];
 const VACANCY_STATUSES = ['Open', 'On Hold', 'Filled', 'Cancelled', 'Closed'];
-const APPLICATION_STAGES = ['Новий / Відгук', 'Сорсинг / Первинний розгляд', "Первинне інтерв'ю", "Основне інтерв'ю", 'Тестове завдання', 'Офер', 'Офер прийнято'];
+// "Відмова" — не звичайний крок воронки, а термінальний стан, у який
+// автоматично переводиться етап при статусі Rejected by Company/Candidate
+// (updateApplicationStatus нижче) — щоб етап і статус ніколи не
+// розходились в очах рекрутера.
+const APPLICATION_STAGES = ['Новий / Відгук', 'Сорсинг / Первинний розгляд', "Первинне інтерв'ю", "Основне інтерв'ю", 'Тестове завдання',
+  'Надіслано офер', 'Офер прийнято', 'Ознайомчий день', 'Стажувальний тиждень', 'Відмова'];
 // Active — у процесі (на одному з APPLICATION_STAGES). Решта — фінальні/архівні:
 // Hired = вихід на роботу, Talent Pool = у базі/резерв (не підійшов на цю роль,
 // але корисний надалі), Rejected by Company/Candidate — хто ініціював відмову
@@ -394,6 +399,11 @@ async function initSchema() {
     -- Таблиця вже існує на проді зі старим (англійським) дефолтом етапу —
     -- CREATE TABLE IF NOT EXISTS його не міняє, тому оновлюємо окремо.
     ALTER TABLE hr_applications ALTER COLUMN stage SET DEFAULT 'Новий / Відгук';
+    -- Перейменування етапу "Офер" → "Надіслано офер": підтягуємо вже
+    -- заповнені картки під нову назву, а не лишаємо їх "зі старою назвою,
+    -- якої більше нема в переліку" (інакше в UI випадаючий список показав
+    -- би цей етап як не вибраний, хоча дані по суті ті самі).
+    UPDATE hr_applications SET stage = 'Надіслано офер' WHERE stage = 'Офер';
 
     -- Interview: спрощено на цьому зрізі — дата/тип/нотатки/рішення, без
     -- формального зваженого scorecard-шаблону (ТЗ п.16 Scorecard templates
@@ -2195,7 +2205,8 @@ async function listApplications({ vacancy_id = '', archived = false } = {}) {
 
 async function listApplicationsForVacancy(vacancyId) {
   const { rows } = await pool.query(`
-    SELECT a.*, per.full_name AS candidate_name, per.phone AS candidate_phone, per.personal_email AS candidate_email
+    SELECT a.*, per.full_name AS candidate_name, per.phone AS candidate_phone, per.personal_email AS candidate_email,
+      c.desired_salary, c.notes AS candidate_notes
     FROM hr_applications a
     JOIN hr_candidates c ON c.id = a.candidate_id
     JOIN hr_persons per ON per.id = c.person_id
@@ -2267,16 +2278,22 @@ async function updateApplicationStatus(id, { status, rejection_reason, rejection
   }
   const { rows: before } = await pool.query('SELECT status FROM hr_applications WHERE id = $1', [id]);
   if (!before[0]) return null;
+  // Статус "Відмова" (компанією чи кандидатом) завжди тягне за собою й
+  // етап "Відмова" — щоб не було ситуації, коли статус уже показує
+  // відмову, а етап досі "Новий / Відгук" (плутає рекрутера й спотворює
+  // воронку). В інших статусах етап не займаємо.
+  const isRejected = status === 'Rejected by Company' || status === 'Rejected by Candidate';
   const { rows } = await pool.query(
     `UPDATE hr_applications SET
        status = $2,
+       stage = CASE WHEN $7 THEN 'Відмова' ELSE stage END,
        rejection_reason = COALESCE($3, rejection_reason),
        rejection_comment = COALESCE($4, rejection_comment),
        next_action = COALESCE($5, next_action),
        next_action_date = $6,
        updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [id, status, rejection_reason ?? null, rejection_comment ?? null, next_action ?? null, next_action_date ?? null]
+    [id, status, rejection_reason ?? null, rejection_comment ?? null, next_action ?? null, next_action_date ?? null, isRejected]
   );
   await writeAudit({ actor, action: 'status_change', entity_type: 'application', entity_id: id, old_value: { status: before[0].status }, new_value: { status, rejection_reason } });
   return rows[0];

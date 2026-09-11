@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
+import mammoth from 'mammoth';
 import db from './db.js';
 import seedAccounts from './seed-accounts.js';
 import { DEPARTMENTS as SEED_DEPARTMENTS, POSITIONS as SEED_POSITIONS, LEGACY_TOP_LEVEL_DEPARTMENTS } from './seed-org-import.js';
@@ -2091,6 +2092,38 @@ app.get('/api/resumes/:id/download', async (req, res) => {
   } catch (error) {
     console.error('GET /api/resumes/:id/download ERROR:', error?.message || error);
     res.status(500).json({ ok: false, error: 'Не вдалося завантажити файл' });
+  }
+});
+
+// PDF/TXT браузер уже вміє показати сам через "inline" (download-роут вище).
+// .docx браузер показати не вміє — довелось би щоразу качати файл, щоб
+// глянути. Замість повної конвертації у справжній .pdf (важкий рушій
+// рендерингу, якого тут нема) конвертуємо в HTML тим самим mammoth, що й
+// для розбору тексту при завантаженні — відкривається одразу в новій
+// вкладці, як і читалось, без завантаження файлу.
+app.get('/api/resumes/:id/view', async (req, res) => {
+  try {
+    const file = await db.getResumeFile(Number(req.params.id));
+    if (!file) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    const ext = (file.filename.split('.').pop() || '').toLowerCase();
+    const isDocx = file.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || ext === 'docx';
+    if (!isDocx) {
+      res.set('Content-Type', file.mime_type || 'application/octet-stream');
+      res.set('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
+      res.send(file.file_data);
+      return;
+    }
+    const { value: html } = await mammoth.convertToHtml({ buffer: file.file_data });
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!doctype html><html><head><meta charset="utf-8"><title>${file.filename.replace(/</g, '&lt;')}</title>
+      <style>body{max-width:800px;margin:24px auto;padding:0 20px;font-family:system-ui,sans-serif;line-height:1.5;color:#1a1a1a;}</style>
+      </head><body>${html}</body></html>`);
+  } catch (error) {
+    console.error('GET /api/resumes/:id/view ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося відкрити файл' });
   }
 });
 
