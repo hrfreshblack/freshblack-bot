@@ -6,6 +6,7 @@ import mammoth from 'mammoth';
 import db from './db.js';
 import seedAccounts from './seed-accounts.js';
 import { DEPARTMENTS as SEED_DEPARTMENTS, POSITIONS as SEED_POSITIONS, LEGACY_TOP_LEVEL_DEPARTMENTS } from './seed-org-import.js';
+import { ONBOARDING_LIBRARY as SEED_ONBOARDING_LIBRARY } from './seed-onboarding-library.js';
 import { signSsoToken, verifySsoToken } from './sso.js';
 import { parseEmployeesFile } from './parse-employees-file.js';
 
@@ -214,7 +215,8 @@ app.get('/api/dictionaries', (req, res) => {
     offboardingStatuses: db.OFFBOARDING_STATUSES,
     offboardingChecklistCategories: db.OFFBOARDING_CHECKLIST_CATEGORIES,
     offboardingChecklistStatuses: db.OFFBOARDING_CHECKLIST_STATUSES,
-    recommendCompanyOptions: db.RECOMMEND_COMPANY_OPTIONS
+    recommendCompanyOptions: db.RECOMMEND_COMPANY_OPTIONS,
+    taskStatuses: db.TASK_STATUSES
   });
 });
 
@@ -1914,6 +1916,79 @@ app.post('/api/absences/:id', requireRole(), async (req, res) => {
   }
 });
 
+// ---- Задачі ----
+
+app.get('/api/tasks', async (req, res) => {
+  try {
+    const { status, created_by } = req.query;
+    const assignee_employee_id = req.query.assignee_employee_id ? Number(req.query.assignee_employee_id) : null;
+    const tasks = await db.listTasks({ assignee_employee_id, status: status || null, created_by: created_by || null });
+    res.json({ ok: true, tasks });
+  } catch (error) {
+    console.error('GET /api/tasks ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати задачі' });
+  }
+});
+
+app.get('/api/tasks/stats', async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const stats = await db.getTaskCompletionStats({ from: from || null, to: to || null });
+    res.json({ ok: true, stats });
+  } catch (error) {
+    console.error('GET /api/tasks/stats ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося порахувати статистику' });
+  }
+});
+
+app.post('/api/tasks', requireRole('Recruiter'), async (req, res) => {
+  try {
+    const task = await db.createTask(req.body || {}, req.account.username);
+    res.json({ ok: true, task });
+  } catch (error) {
+    console.error('POST /api/tasks ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити задачу' });
+  }
+});
+
+app.post('/api/tasks/:id', requireRole('Recruiter'), async (req, res) => {
+  try {
+    const task = await db.updateTask(Number(req.params.id), req.body || {});
+    if (!task) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, task });
+  } catch (error) {
+    console.error('POST /api/tasks/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося оновити задачу' });
+  }
+});
+
+app.post('/api/tasks/:id/status', requireRole('Recruiter'), async (req, res) => {
+  try {
+    const task = await db.updateTaskStatus(Number(req.params.id), (req.body || {}).status, req.account.username);
+    if (!task) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, task });
+  } catch (error) {
+    console.error('POST /api/tasks/:id/status ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+app.delete('/api/tasks/:id', requireRole('Recruiter'), async (req, res) => {
+  try {
+    await db.deleteTask(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('DELETE /api/tasks/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: 'Не вдалося видалити задачу' });
+  }
+});
+
 // ---- Offboarding ----
 
 app.get('/api/offboarding-cases', async (req, res) => {
@@ -2140,6 +2215,9 @@ app.get('/api/resumes/:id/view', async (req, res) => {
 
     const orgImportResult = await db.seedOrgImport(SEED_DEPARTMENTS, SEED_POSITIONS);
     console.log(`Org structure import: ${orgImportResult.imported} imported, ${orgImportResult.skipped} already existed`);
+
+    const onboardingLibraryResult = await db.seedOnboardingLibrary(SEED_ONBOARDING_LIBRARY);
+    console.log(`Onboarding library import: ${onboardingLibraryResult.imported} imported, ${onboardingLibraryResult.skipped} already existed`);
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);
     process.exit(1);

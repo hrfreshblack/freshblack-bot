@@ -16,6 +16,7 @@
     --ok: #35c281;
     --warn: #e0a83c;
     --bad: #e0523c;
+    --sidebar-w: 220px;
   }
   * { box-sizing: border-box; }
   body {
@@ -25,18 +26,49 @@
     background: var(--bg);
     color: var(--text);
   }
-  header { padding: 14px 24px 0; display: flex; flex-direction: column; position: sticky; top: 0; background: var(--bg); z-index: 20; }
-  .brandRow { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; }
-  h1 { font-size: 16px; margin: 0; font-weight: 700; display: flex; align-items: center; gap: 8px; }
-  .workspaceSwitch { font-size: 12px; color: var(--muted); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; }
-  .workspaceSwitch:hover { color: var(--text); border-color: var(--accent); }
-  nav.tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  nav.tabs button {
-    background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
-    color: var(--muted); padding: 9px 2px; font-weight: 600; font-size: 13px; cursor: pointer;
+  /* Ліва панель — завжди закріплена (position: fixed на всю висоту), не
+     зникає при скролі, на відміну від колишнього верхнього хедера. */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: var(--sidebar-w);
+    background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; z-index: 30; overflow-y: auto;
   }
-  nav.tabs button:hover { color: var(--text); }
-  nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .sidebar .brand { padding: 18px 16px 14px; }
+  h1 { font-size: 15px; margin: 0; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .sidebar nav { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; flex: 1; }
+  .navItemWithFlyout { position: relative; }
+  .sidebar nav button {
+    width: 100%; background: none; border: none; border-radius: 8px; text-align: left;
+    color: var(--muted); padding: 10px 12px; font-weight: 600; font-size: 13px; cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  }
+  .sidebar nav button:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+  .sidebar nav button.active { color: var(--text); background: rgba(201,162,75,0.14); }
+  .navFlyoutArrow { color: var(--muted); font-size: 14px; }
+  /* position: fixed, не absolute — sidebar сам скролиться (overflow-y:
+     auto), і absolute-позиціонований елемент всередині нього обрізався б
+     цим overflow, навіть виходячи за left:100%. fixed рахується відносно
+     вікна, а не sidebar, тож координати виставляються з JS (bounding rect
+     кнопки "Рекрутинг") у toggleRecruitmentFlyout(). */
+  .navFlyout {
+    display: none; position: fixed;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 6px; min-width: 210px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 40;
+    flex-direction: column; gap: 2px;
+  }
+  .navFlyout.open { display: flex; }
+  .navFlyout button {
+    width: 100%; text-align: left; background: none; border: none; color: var(--text);
+    padding: 9px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .navFlyout button:hover { background: rgba(255,255,255,0.07); }
+  .navFlyout button.active { color: var(--accent); }
+  .sidebar .sidebarFooter {
+    padding: 12px 14px 16px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted);
+  }
+  .workspaceSwitch { font-size: 12px; color: var(--muted); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; text-align: center; }
+  .workspaceSwitch:hover { color: var(--text); border-color: var(--accent); }
 
   .viewToolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 14px 0 14px; }
 
@@ -49,13 +81,13 @@
   button.secondary { background: transparent; color: var(--text); border-color: var(--border); }
   button.bad { background: transparent; color: var(--bad); border-color: var(--bad); }
   button:active { transform: translateY(1px); }
-  main { padding: 0 24px 40px; }
+  main { margin-left: var(--sidebar-w); padding: 24px 24px 40px; }
   .tableWrap { }
   table { width: 100%; border-collapse: collapse; min-width: 720px; }
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th {
     color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em;
-    position: sticky; top: var(--header-h, 92px); background: var(--bg); z-index: 2; box-shadow: 0 1px 0 var(--border);
+    position: sticky; top: 0; background: var(--bg); z-index: 2; box-shadow: 0 1px 0 var(--border);
   }
   tr:hover td { background: #1b1f28; }
   .clickable { cursor: pointer; }
@@ -146,6 +178,7 @@
   .funnelCard .funnelCandidate { font-weight: 700; font-size: 13px; }
   .funnelCard .funnelVacancy { color: var(--accent2); font-size: 12px; margin-top: 2px; }
   .funnelCard .funnelMeta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  #journeyMapBoard .funnelColumn { max-height: 80vh; overflow-y: auto; }
 
   .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); align-items: center; justify-content: center; padding: 16px; z-index: 10; }
   .overlay.open { display: flex; }
@@ -184,20 +217,22 @@
 </div>
 
 <div id="appShell" style="display: none;">
-<header>
-  <div class="brandRow">
-    <h1>🗂 Fresh Black HR CRM</h1>
-    <div style="display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted);">
-      <a class="workspaceSwitch" href="#" onclick="switchWorkspace('https://splendid-tenderness-production-f002.up.railway.app'); return false;" title="Перейти у Виробництво (ERP)">📦 Виробництво</a>
-      <span id="currentUserLabel"></span>
-      <button class="secondary" id="btnLogout" style="padding: 5px 10px; font-size: 12px;">Вийти</button>
-    </div>
-  </div>
-  <nav class="tabs">
+<aside class="sidebar">
+  <div class="brand"><h1>🗂 Fresh Black HR CRM</h1></div>
+  <nav>
     <button id="tabDashboard" onclick="showTab('dashboard')">Дашборд</button>
+    <button id="tabTasks" onclick="showTab('tasks')">Задачі</button>
     <button id="tabPeople" onclick="showTab('people')">Співробітники</button>
     <button id="tabOrg" onclick="showTab('org')">Оргструктура</button>
-    <button id="tabRecruitment" onclick="showTab('recruitment')">Рекрутинг</button>
+    <div class="navItemWithFlyout">
+      <button id="tabRecruitment" onclick="toggleRecruitmentFlyout(event)"><span>Рекрутинг</span><span class="navFlyoutArrow">›</span></button>
+      <div class="navFlyout" id="recruitmentFlyout">
+        <button data-subtab="requests" onclick="goToRecruitmentSubTab('requests')">Заявки на вакансії</button>
+        <button data-subtab="vacancies" onclick="goToRecruitmentSubTab('vacancies')">Вакансії</button>
+        <button data-subtab="candidates" onclick="goToRecruitmentSubTab('candidates')">Кандидати</button>
+        <button data-subtab="funnel" onclick="goToRecruitmentSubTab('funnel')">Воронка</button>
+      </div>
+    </div>
     <button id="tabOnboardingTemplates" onclick="showTab('onboardingTemplates')">Адаптація</button>
     <button id="tabOkr" onclick="showTab('okr')">OKR</button>
     <button id="tabKnowledge" onclick="showTab('knowledge')">Знання</button>
@@ -206,7 +241,14 @@
     <button id="tabOffboarding" onclick="showTab('offboarding')">Звільнення</button>
     <button id="tabRecruitmentMetrics" onclick="showTab('recruitmentMetrics')">Метрики найму</button>
   </nav>
-</header>
+  <div class="sidebarFooter">
+    <a class="workspaceSwitch" href="#" onclick="switchWorkspace('https://splendid-tenderness-production-f002.up.railway.app'); return false;" title="Перейти у Виробництво (ERP)">📦 Виробництво</a>
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+      <span id="currentUserLabel"></span>
+      <button class="secondary" id="btnLogout" style="padding: 5px 10px; font-size: 12px;">Вийти</button>
+    </div>
+  </div>
+</aside>
 
 <main>
 
@@ -222,6 +264,32 @@
     <div class="breakdownGrid" id="dashboardBreakdowns"></div>
 
     <p style="color: var(--muted); font-size: 12px; margin-top: 20px;">Це базові HR-метрики зі стандартними формулами (наведи курсор на ⓘ, щоб побачити, як саме рахується) — не повноцінна аналітика з ТЗ розділу 29, яку свідомо відкладено до стабілізації даних.</p>
+  </div>
+
+  <div id="viewTasks" style="display:none;">
+    <div class="profileTabs">
+      <button class="active" id="tasksSubBoard" onclick="showTasksSubTab('board')">Дошка</button>
+      <button id="tasksSubStats" onclick="showTasksSubTab('stats')">Статистика</button>
+    </div>
+
+    <div class="profilePanel active" id="tasksPanelBoard">
+      <div class="viewToolbar">
+        <select id="taskFilterAssignee"><option value="">— усі виконавці —</option></select>
+        <button id="btnAddTask">+ Задача</button>
+      </div>
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Перетягуй картку між колонками, щоб змінити статус, або клікни на неї, щоб відредагувати.</p>
+      <div class="funnelBoard" id="tasksBoard"></div>
+    </div>
+
+    <div class="profilePanel" id="tasksPanelStats">
+      <div class="viewToolbar">
+        <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted);">З <input type="date" id="taskStatsFrom"></label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted);">По <input type="date" id="taskStatsTo"></label>
+      </div>
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Скільки задач кожен закрив (статус "Виконано") за обраний період — за датою фактичного закриття.</p>
+      <div class="tableWrap"><table><thead><tr><th>Співробітник</th><th>Закрито задач</th></tr></thead><tbody id="taskStatsBody"></tbody></table></div>
+      <div class="empty" id="taskStatsEmpty" style="display:none;">Немає закритих задач за період.</div>
+    </div>
   </div>
 
   <div id="viewPeople" style="display:none;">
@@ -392,6 +460,10 @@
       <label>Коментар</label>
       <input type="text" id="appRejectionComment">
     </div>
+    <div class="field" id="appHireStartDateWrap" style="display:none;">
+      <label>Дата виходу на роботу</label>
+      <input type="date" id="appHireStartDate">
+    </div>
     <button onclick="saveApplicationStageStatus()">Зберегти</button>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Резюме</h3>
@@ -407,14 +479,27 @@
   </div>
 
   <div id="viewOnboardingTemplates" style="display:none;">
-    <div class="viewToolbar">
-      <select id="obtFilterDepartment"><option value="">— усі департаменти —</option></select>
-      <select id="obtFilterPosition"><option value="">— усі посади —</option></select>
-      <button id="btnAddOnboardingTemplate">+ Шаблон</button>
+    <div class="profileTabs">
+      <button class="active" id="adaptSubTemplates" onclick="showAdaptationSubTab('templates')">Шаблони</button>
+      <button id="adaptSubJourneyMap" onclick="showAdaptationSubTab('journeyMap')">Employee Journey Map</button>
     </div>
-    <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Бібліотека задач адаптації — компанія в цілому, або конкретний департамент/посада. При прийнятті офера (і кнопкою "Згенерувати з шаблонів" у профілі співробітника) підходящі шаблони перетворюються на особисті задачі співробітника.</p>
-    <div class="tableWrap"><table><thead><tr><th>Етап</th><th>Назва</th><th>Область</th><th>Дедлайн (днів від старту)</th><th>Відповідальний</th><th></th></tr></thead><tbody id="obtTemplatesBody"></tbody></table></div>
-    <div class="empty" id="obtTemplatesEmpty" style="display:none;">Шаблонів ще немає.</div>
+
+    <div class="profilePanel active" id="adaptPanelTemplates">
+      <div class="viewToolbar">
+        <select id="obtFilterDepartment"><option value="">— усі департаменти —</option></select>
+        <select id="obtFilterPosition"><option value="">— усі посади —</option></select>
+        <button id="btnAddOnboardingTemplate">+ Шаблон</button>
+      </div>
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Бібліотека задач адаптації — компанія в цілому, або конкретний департамент/посада. При прийнятті офера (і прямій зміні статусу заявки на "Найнято", і кнопкою "Згенерувати з шаблонів" у профілі співробітника) підходящі шаблони перетворюються на особисті задачі співробітника.</p>
+      <div class="tableWrap"><table><thead><tr><th>Етап</th><th>Назва</th><th>Область</th><th>Дедлайн (днів від старту)</th><th>Відповідальний</th><th></th></tr></thead><tbody id="obtTemplatesBody"></tbody></table></div>
+      <div class="empty" id="obtTemplatesEmpty" style="display:none;">Шаблонів ще немає.</div>
+    </div>
+
+    <div class="profilePanel" id="adaptPanelJourneyMap">
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Повний шлях адаптації співробітника — етап за етапом, так, як його імпортовано з Employee Journey Map. Довідково: сюди потрапляють ті самі шаблони, що й у вкладці "Шаблони", лише в іншому, поетапному вигляді. Редагування — там.</p>
+      <div class="funnelBoard" id="journeyMapBoard"></div>
+      <div class="empty" id="journeyMapEmpty" style="display:none;">Шаблонів ще немає.</div>
+    </div>
   </div>
 
   <div id="viewOkr" style="display:none;">
@@ -646,6 +731,34 @@
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('employmentChangeOverlay')">Скасувати</button>
       <button id="btnSaveEmploymentChange">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: зміна статусу співробітника -->
+<div class="overlay" id="empStatusChangeOverlay">
+  <div class="modal">
+    <h2>Зміна статусу співробітника</h2>
+    <div class="field"><label>Новий статус</label><select id="empStatusChangeSelect"></select></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('empStatusChangeOverlay')">Скасувати</button>
+      <button id="btnSaveEmpStatusChange">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: задача -->
+<div class="overlay" id="taskOverlay">
+  <div class="modal">
+    <h2 id="taskModalTitle">Нова задача</h2>
+    <div class="field"><label>Назва</label><input type="text" id="taskTitle"></div>
+    <div class="field"><label>Опис</label><textarea id="taskDescription" rows="3"></textarea></div>
+    <div class="field"><label>Виконавець</label><select id="taskAssignee"><option value="">— не призначено —</option></select></div>
+    <div class="field"><label>Дедлайн</label><input type="date" id="taskDueDate"></div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnDeleteTask" style="display:none; margin-right:auto;" onclick="deleteCurrentTask()">Видалити</button>
+      <button class="secondary" onclick="closeOverlay('taskOverlay')">Скасувати</button>
+      <button id="btnSaveTask">Зберегти</button>
     </div>
   </div>
 </div>
@@ -1259,7 +1372,7 @@ function escAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;');
 // свідомо (або весь довідник, або жоден) — інакше вийде мішанина мов.
 const STATUS_LABELS_UK = {
   'Future Employee': 'Майбутній співробітник', 'Probation': 'Випробувальний термін', 'Active': 'Активний',
-  'Part-time': 'Часткова зайнятість', 'Maternity/Parental Leave': 'Декретна відпустка', 'Suspended': 'Призупинено',
+  'Part-time': 'Часткова зайнятість', 'Maternity/Parental Leave': 'Декретна відпустка', 'Mobilized': 'Мобілізований в ЗСУ', 'Suspended': 'Призупинено',
   'Long Absence': 'Тривала відсутність', 'Leaving': 'Звільняється', 'Former Employee': 'Колишній співробітник',
   'Filled': 'Заповнена', 'Vacant': 'Вакантна', 'Recruitment Active': 'Йде підбір', 'Planned': 'Заплановано',
   'Frozen': 'Заморожено', 'Closed': 'Закрито',
@@ -1271,7 +1384,8 @@ const STATUS_LABELS_UK = {
   'Sent': 'Надіслано', 'Accepted': 'Прийнято', 'Declined': 'Відхилено кандидатом', 'Expired': 'Термін минув', 'Withdrawn': 'Відкликано',
   'HR Screening': 'Первинний скринінг (HR)', 'Technical/Professional': 'Технічне/Професійне', 'Final': 'Фінальне',
   'Test Task Review': 'Розгляд тестового завдання', 'Reference Check': 'Перевірка рекомендацій',
-  'Scheduled': 'Заплановано', 'Completed': 'Завершено', 'No Show': "Не з'явився"
+  'Scheduled': 'Заплановано', 'Completed': 'Завершено', 'No Show': "Не з'явився",
+  'To Do': 'До виконання', 'In Progress': 'В роботі', 'Done': 'Виконано', 'Cancelled': 'Скасовано'
 };
 function statusLabel(s) { return STATUS_LABELS_UK[s] || s; }
 function fmt(n) { return (Number(n) || 0).toLocaleString('uk-UA', { maximumFractionDigits: 2 }); }
@@ -1300,21 +1414,37 @@ async function initApp() {
   document.getElementById('appShell').style.display = '';
   document.getElementById('currentUserLabel').textContent = window._me.display_name || window._me.username;
 
-  syncHeaderHeight();
-  window.addEventListener('resize', syncHeaderHeight);
-
   await loadDictionaries();
   showTab('dashboard');
 }
 
-// Хедер тепер завжди прилипає до верху (щоб не треба було гортати вгору,
-// аби перейти на іншу вкладку) — заголовки таблиць теж липкі, тож їм
-// треба знати справжню висоту хедера, а не вгадану, інакше вони ховаються
-// під ним замість того, щоб стати одразу під ним.
-function syncHeaderHeight() {
-  const header = document.querySelector('header');
-  if (header) document.documentElement.style.setProperty('--header-h', header.offsetHeight + 'px');
+// Клік на "Рекрутинг" у боковій панелі не переходить одразу на якусь
+// сторінку — відкриває список вкладок розділу (заявка на вакансію/
+// вакансія/кандидати/воронка), щоб одразу стрибнути в потрібну, а не
+// заходити спершу в розділ і тоді ще раз обирати підвкладку.
+function toggleRecruitmentFlyout(event) {
+  event.stopPropagation();
+  const flyout = document.getElementById('recruitmentFlyout');
+  if (flyout.classList.contains('open')) { closeRecruitmentFlyout(); return; }
+  const rect = document.getElementById('tabRecruitment').getBoundingClientRect();
+  flyout.style.left = (rect.right + 6) + 'px';
+  flyout.style.top = rect.top + 'px';
+  flyout.classList.add('open');
 }
+function closeRecruitmentFlyout() {
+  document.getElementById('recruitmentFlyout').classList.remove('open');
+}
+function goToRecruitmentSubTab(subtab) {
+  closeRecruitmentFlyout();
+  window._recruitmentSubTab = subtab;
+  showTab('recruitment');
+}
+document.addEventListener('click', (e) => {
+  const flyout = document.getElementById('recruitmentFlyout');
+  if (flyout && flyout.classList.contains('open') && !flyout.contains(e.target) && !e.target.closest('#tabRecruitment')) {
+    closeRecruitmentFlyout();
+  }
+});
 
 function showLoginScreen() {
   document.getElementById('appShell').style.display = 'none';
@@ -1425,6 +1555,7 @@ const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabO
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
+  document.getElementById('viewTasks').style.display = tab === 'tasks' ? '' : 'none';
   document.getElementById('viewPeople').style.display = tab === 'people' ? '' : 'none';
   document.getElementById('viewEmployeeProfile').style.display = 'none';
   document.getElementById('viewOrg').style.display = tab === 'org' ? '' : 'none';
@@ -1442,6 +1573,7 @@ function showTab(tab) {
   document.getElementById('viewOffboardingCaseDetail').style.display = 'none';
   document.getElementById('viewRecruitmentMetrics').style.display = tab === 'recruitmentMetrics' ? '' : 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
+  document.getElementById('tabTasks').classList.toggle('active', tab === 'tasks');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
   document.getElementById('tabRecruitment').classList.toggle('active', tab === 'recruitment');
@@ -1453,10 +1585,11 @@ function showTab(tab) {
   document.getElementById('tabOffboarding').classList.toggle('active', tab === 'offboarding');
   document.getElementById('tabRecruitmentMetrics').classList.toggle('active', tab === 'recruitmentMetrics');
   if (tab === 'dashboard') loadDashboard();
+  if (tab === 'tasks') showTasksSubTab(window._tasksSubTab || 'board');
   if (tab === 'people') loadPeople();
   if (tab === 'org') showOrgSubTab(window._orgSubTab || 'list');
   if (tab === 'recruitment') showRecruitmentSubTab(window._recruitmentSubTab || 'requests');
-  if (tab === 'onboardingTemplates') loadOnboardingTemplates();
+  if (tab === 'onboardingTemplates') showAdaptationSubTab(window._adaptationSubTab || 'templates');
   if (tab === 'okr') loadOkrView();
   if (tab === 'knowledge') showKnowledgeSubTab(window._knowledgeSubTab || 'articles');
   if (tab === 'surveys') loadSurveys();
@@ -1492,6 +1625,142 @@ function breakdownCardHtml(title, formula, dataObj, opts = {}) {
     </div>
   `;
 }
+
+// ---- Задачі ----
+
+function showTasksSubTab(tab) {
+  window._tasksSubTab = tab;
+  document.getElementById('tasksPanelBoard').classList.toggle('active', tab === 'board');
+  document.getElementById('tasksPanelStats').classList.toggle('active', tab === 'stats');
+  document.getElementById('tasksSubBoard').classList.toggle('active', tab === 'board');
+  document.getElementById('tasksSubStats').classList.toggle('active', tab === 'stats');
+  if (tab === 'board') loadTasksBoard();
+  if (tab === 'stats') loadTaskStats();
+}
+
+async function loadTasksBoard() {
+  await ensureRecruitmentRefsLoaded();
+  const assigneeSelect = document.getElementById('taskFilterAssignee');
+  if (assigneeSelect.options.length <= 1) {
+    assigneeSelect.innerHTML = '<option value="">— усі виконавці —</option>' + window._employeesCache.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
+  }
+
+  const assignee_employee_id = assigneeSelect.value;
+  const params = new URLSearchParams();
+  if (assignee_employee_id) params.set('assignee_employee_id', assignee_employee_id);
+  const resp = await apiFetch('/api/tasks?' + params.toString());
+  const data = await resp.json();
+  const tasks = data.ok ? data.tasks : [];
+  window._tasksCache = tasks;
+
+  const board = document.getElementById('tasksBoard');
+  board.innerHTML = window._dict.taskStatuses.map((status) => {
+    const items = tasks.filter((t) => t.status === status);
+    return `
+      <div class="funnelColumn" ondragover="event.preventDefault()" ondrop="taskDrop(event, '${status}')">
+        <h4><span>${escAttr(statusLabel(status))}</span><span>${items.length}</span></h4>
+        ${items.map((t) => `
+          <div class="funnelCard" draggable="true" ondragstart="taskDragStart(event, ${t.id})" onclick="openEditTask(${t.id})">
+            <div class="funnelCandidate">${escAttr(t.title)}</div>
+            <div class="funnelVacancy">${t.assignee_name ? escAttr(t.assignee_name) : 'Не призначено'}</div>
+            <div class="funnelMeta">${t.due_date ? (t.is_overdue ? '⚠ ' : '') + 'до ' + new Date(t.due_date).toLocaleDateString('uk-UA') : 'без дедлайну'}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }).join('');
+}
+document.getElementById('taskFilterAssignee').addEventListener('change', loadTasksBoard);
+
+function taskDragStart(event, id) {
+  event.dataTransfer.setData('text/plain', String(id));
+}
+
+async function taskDrop(event, status) {
+  event.preventDefault();
+  const id = event.dataTransfer.getData('text/plain');
+  if (!id) return;
+  const resp = await apiFetch('/api/tasks/' + id + '/status', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  loadTasksBoard();
+}
+
+function openAddTask() {
+  window._editingTaskId = null;
+  document.getElementById('taskModalTitle').textContent = 'Нова задача';
+  document.getElementById('taskTitle').value = '';
+  document.getElementById('taskDescription').value = '';
+  document.getElementById('taskAssignee').innerHTML = '<option value="">— не призначено —</option>' + window._employeesCache.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
+  document.getElementById('taskDueDate').value = '';
+  document.getElementById('btnDeleteTask').style.display = 'none';
+  document.getElementById('taskOverlay').classList.add('open');
+}
+document.getElementById('btnAddTask').addEventListener('click', openAddTask);
+
+function openEditTask(id) {
+  const t = (window._tasksCache || []).find((x) => x.id === id);
+  if (!t) return;
+  window._editingTaskId = id;
+  document.getElementById('taskModalTitle').textContent = 'Задача';
+  document.getElementById('taskTitle').value = t.title;
+  document.getElementById('taskDescription').value = t.description || '';
+  document.getElementById('taskAssignee').innerHTML = '<option value="">— не призначено —</option>' + window._employeesCache.map((e) => `<option value="${e.id}" ${e.id === t.assignee_employee_id ? 'selected' : ''}>${escAttr(e.full_name)}</option>`).join('');
+  document.getElementById('taskDueDate').value = t.due_date ? t.due_date.slice(0, 10) : '';
+  document.getElementById('btnDeleteTask').style.display = '';
+  document.getElementById('taskOverlay').classList.add('open');
+}
+
+async function deleteCurrentTask() {
+  if (!window._editingTaskId) return;
+  if (!confirm('Видалити задачу без можливості відновлення?')) return;
+  const resp = await apiFetch('/api/tasks/' + window._editingTaskId, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  closeOverlay('taskOverlay');
+  showToast('Видалено');
+  loadTasksBoard();
+}
+
+document.getElementById('btnSaveTask').addEventListener('click', async () => {
+  const title = document.getElementById('taskTitle').value.trim();
+  if (!title) { showToast('Вкажи назву задачі'); return; }
+  const body = {
+    title,
+    description: document.getElementById('taskDescription').value.trim(),
+    assignee_employee_id: document.getElementById('taskAssignee').value || null,
+    due_date: document.getElementById('taskDueDate').value || null
+  };
+  const url = window._editingTaskId ? '/api/tasks/' + window._editingTaskId : '/api/tasks';
+  const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('taskOverlay');
+  showToast('Збережено');
+  loadTasksBoard();
+});
+
+async function loadTaskStats() {
+  const from = document.getElementById('taskStatsFrom').value;
+  const to = document.getElementById('taskStatsTo').value;
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  const resp = await apiFetch('/api/tasks/stats?' + params.toString());
+  const data = await resp.json();
+  const stats = data.ok ? data.stats : [];
+  const body = document.getElementById('taskStatsBody');
+  const empty = document.getElementById('taskStatsEmpty');
+  if (!stats.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = stats.map((s) => `
+    <tr><td>${escAttr(s.assignee_name || 'Не призначено')}</td><td>${s.completed_count}</td></tr>
+  `).join('');
+}
+document.getElementById('taskStatsFrom').addEventListener('change', loadTaskStats);
+document.getElementById('taskStatsTo').addEventListener('change', loadTaskStats);
 
 async function loadDashboard() {
   const [empResp, orgResp, metricsResp] = await Promise.all([
@@ -2298,6 +2567,67 @@ async function loadOnboardingTemplates() {
 }
 document.getElementById('obtFilterDepartment').addEventListener('change', loadOnboardingTemplates);
 document.getElementById('obtFilterPosition').addEventListener('change', loadOnboardingTemplates);
+
+function showAdaptationSubTab(tab) {
+  window._adaptationSubTab = tab;
+  document.getElementById('adaptPanelTemplates').classList.toggle('active', tab === 'templates');
+  document.getElementById('adaptPanelJourneyMap').classList.toggle('active', tab === 'journeyMap');
+  document.getElementById('adaptSubTemplates').classList.toggle('active', tab === 'templates');
+  document.getElementById('adaptSubJourneyMap').classList.toggle('active', tab === 'journeyMap');
+  if (tab === 'templates') loadOnboardingTemplates();
+  if (tab === 'journeyMap') loadJourneyMap();
+}
+
+// Дедлайн шаблону — зсув у днях від дати старту (може бути й'ємним для
+// pre-onboarding задач, які треба зробити ще до виходу співробітника) —
+// перетворюємо на людську мітку етапу для наочності на дошці.
+function journeyMapStageLabel(dueOffsetDays) {
+  if (dueOffsetDays < 0) return `До старту (${-dueOffsetDays} дн.)`;
+  if (dueOffsetDays === 0) return 'День 1';
+  if (dueOffsetDays < 14) return `Перший тиждень (день ${dueOffsetDays})`;
+  return `День ${dueOffsetDays}`;
+}
+
+async function loadJourneyMap() {
+  const resp = await apiFetch('/api/onboarding-templates');
+  const data = await resp.json();
+  const board = document.getElementById('journeyMapBoard');
+  const empty = document.getElementById('journeyMapEmpty');
+  const templates = data.ok ? data.templates : [];
+  if (!templates.length) { board.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+
+  // "Day 1 / Week 1" — один milestone-бакет у базі й на нього одного
+  // виходить майже половина всіх шаблонів (pre-onboarding + день 1 +
+  // тиждень 1 разом), тому на дошці для наочності ділимо його додатково
+  // на дві колонки за знаком зсуву — сам milestone у базі не міняється.
+  const columnDefs = [
+    { label: 'Pre-onboarding', match: (t) => t.milestone === 'Day 1 / Week 1' && t.due_offset_days < 0 },
+    { label: 'Day 1 / Week 1', match: (t) => t.milestone === 'Day 1 / Week 1' && t.due_offset_days >= 0 },
+    { label: '14 days', match: (t) => t.milestone === '14 days' },
+    { label: '30 days', match: (t) => t.milestone === '30 days' },
+    { label: '60 days', match: (t) => t.milestone === '60 days' },
+    { label: '90 days', match: (t) => t.milestone === '90 days' }
+  ];
+  const columns = columnDefs.map((def) => ({
+    label: def.label,
+    items: templates.filter(def.match).sort((a, b) => a.due_offset_days - b.due_offset_days)
+  }));
+
+  board.innerHTML = columns.map((col) => `
+    <div class="funnelColumn">
+      <h4><span>${escAttr(col.label)}</span><span>${col.items.length}</span></h4>
+      ${col.items.map((t) => `
+        <div class="funnelCard" style="cursor:default;">
+          <div class="funnelCandidate">${escAttr(t.title)}</div>
+          <div class="funnelVacancy">${journeyMapStageLabel(t.due_offset_days)} · ${t.scope === 'Company' ? 'Уся компанія' : t.scope === 'Department' ? escAttr(t.department_name || '') : escAttr(t.position_title || '')}</div>
+          ${t.description ? `<div class="funnelMeta">${escAttr(t.description)}</div>` : ''}
+          ${t.owner_role ? `<div class="funnelMeta">Відповідальний: ${escAttr(t.owner_role)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
 
 function deactivateOnboardingTemplate(id) {
   apiFetch('/api/onboarding-templates/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: false }) })
@@ -3834,17 +4164,22 @@ async function renderChangesTab(e) {
 }
 
 function openStatusChange() {
-  const status = prompt('Новий статус (' + window._dict.employeeStatuses.join(', ') + '):', window._currentEmployee.status);
-  if (!status) return;
-  if (!window._dict.employeeStatuses.includes(status)) { showToast('Невідомий статус'); return; }
-  apiFetch('/api/employees/' + currentEmployeeId + '/status', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
-  }).then((r) => r.json()).then((data) => {
-    if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
-    showToast('Статус змінено');
-    renderEmployeeProfile();
-  });
+  const select = document.getElementById('empStatusChangeSelect');
+  select.innerHTML = window._dict.employeeStatuses.map((s) => `<option value="${escAttr(s)}" ${s === window._currentEmployee.status ? 'selected' : ''}>${escAttr(statusLabel(s))}</option>`).join('');
+  document.getElementById('empStatusChangeOverlay').classList.add('open');
 }
+
+document.getElementById('btnSaveEmpStatusChange').onclick = async () => {
+  const status = document.getElementById('empStatusChangeSelect').value;
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/status', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  closeOverlay('empStatusChangeOverlay');
+  showToast('Статус змінено');
+  renderEmployeeProfile();
+};
 
 // ---- Organization Structure ----
 
@@ -4301,6 +4636,7 @@ function showRecruitmentSubTab(tab) {
     document.getElementById('recrPanel' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
     document.getElementById('recrSub' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
   });
+  document.querySelectorAll('#recruitmentFlyout button').forEach((b) => b.classList.toggle('active', b.dataset.subtab === tab));
   if (tab === 'requests') loadVacancyRequests();
   if (tab === 'vacancies') loadVacancies();
   if (tab === 'candidates') loadCandidates();
@@ -4759,7 +5095,9 @@ async function loadCandidates() {
       <td>${escAttr(c.phone || '—')}</td>
       <td>${escAttr(c.personal_email || '—')}</td>
       <td>${escAttr(c.source || '—')}</td>
-      <td>${c.current_stage ? escAttr(c.current_stage) : '—'}</td>
+      <td onclick="event.stopPropagation()">${c.current_application_id ? `<select onchange="quickSetApplicationStatus(${c.current_application_id}, this)" data-current="${escAttr(c.current_status)}">
+        ${window._dict.applicationStatuses.map((s) => `<option value="${escAttr(s)}" ${s === c.current_status ? 'selected' : ''}>${escAttr(statusLabel(s))}</option>`).join('')}
+      </select>` : '—'}</td>
       <td>${escAttr(c.applied_vacancy_title || '—')}</td>
       <td>${escAttr(c.considering_vacancy_title || '—')}</td>
       <td>${escAttr(c.vacancy_salary_range || '—')}</td>
@@ -4772,6 +5110,32 @@ document.getElementById('candSearch').addEventListener('input', () => {
   clearTimeout(window._candSearchTimer);
   window._candSearchTimer = setTimeout(loadCandidates, 250);
 });
+
+// Швидка зміна статусу заявки прямо з переліку кандидатів, без відкриття
+// картки. Відмову (потрібна обов'язкова причина) і Найнято (потрібна дата
+// виходу — від неї рахуються дедлайни онбординг-задач) сюди не пускаємо —
+// для них відкривається картка заявки з відповідним полем.
+async function quickSetApplicationStatus(applicationId, selectEl) {
+  const status = selectEl.value;
+  const prev = selectEl.dataset.current;
+  if (status === 'Rejected by Company' || status === 'Rejected by Candidate') {
+    showToast('Для відмови потрібна причина — відкрий картку кандидата');
+    selectEl.value = prev;
+    return;
+  }
+  if (status === 'Hired') {
+    showToast('Для найму потрібна дата виходу — відкрий картку кандидата');
+    selectEl.value = prev;
+    return;
+  }
+  const resp = await apiFetch('/api/applications/' + applicationId + '/status', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); selectEl.value = prev; return; }
+  selectEl.dataset.current = status;
+  showToast('Статус змінено');
+}
 
 async function loadCandidateVacancySelects(selectedAppliedId, selectedConsideringId) {
   const resp = await apiFetch('/api/vacancies');
@@ -5048,6 +5412,13 @@ function toggleRejectionFields() {
     document.getElementById('appRejectionReason').innerHTML = reasons.map((s) => `<option value="${s}">${s}</option>`).join('');
     if (reasons.includes(current)) document.getElementById('appRejectionReason').value = current;
   }
+
+  const isHired = status === 'Hired';
+  document.getElementById('appHireStartDateWrap').style.display = isHired ? '' : 'none';
+  if (isHired && !document.getElementById('appHireStartDate').value) {
+    const acceptedOffer = (window._currentApplication.offers || []).find((o) => o.status === 'Accepted');
+    document.getElementById('appHireStartDate').value = acceptedOffer?.start_date ? acceptedOffer.start_date.slice(0, 10) : isoDate(new Date());
+  }
 }
 document.getElementById('appStatusSelect').addEventListener('change', toggleRejectionFields);
 
@@ -5065,6 +5436,10 @@ async function saveApplicationStageStatus() {
       body.rejection_reason = document.getElementById('appRejectionReason').value;
       body.rejection_comment = document.getElementById('appRejectionComment').value.trim();
       if (!body.rejection_reason) { showToast('Вкажи причину відмови'); return; }
+    }
+    if (status === 'Hired') {
+      body.start_date = document.getElementById('appHireStartDate').value;
+      if (!body.start_date) { showToast('Вкажи дату виходу на роботу'); return; }
     }
     const r2 = await apiFetch('/api/applications/' + currentApplicationId + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d2 = await r2.json();

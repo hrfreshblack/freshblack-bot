@@ -22,9 +22,10 @@ const SESSION_IDLE_MINUTES = 60;
 
 const EMPLOYEE_STATUSES = [
   'Future Employee', 'Probation', 'Active', 'Part-time',
-  'Maternity/Parental Leave', 'Suspended', 'Long Absence', 'Leaving', 'Former Employee'
+  'Maternity/Parental Leave', 'Mobilized', 'Suspended', 'Long Absence', 'Leaving', 'Former Employee'
 ];
 const POSITION_STATUSES = ['Filled', 'Vacant', 'Recruitment Active', 'Planned', 'Frozen', 'Closed'];
+const TASK_STATUSES = ['To Do', 'In Progress', 'Done', 'Cancelled'];
 const RESERVATION_STATUSES = ['Not Reserved', 'In Progress', 'Reserved', 'Expiring', 'Other'];
 
 // Recruitment / ATS (ТЗ розділи 9-19)
@@ -903,6 +904,26 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_candidate_resumes_candidate ON hr_candidate_resumes(candidate_id);
+
+    -- Задачі — окремий канбан-задачник (не onboarding-задачі, ті лишаються
+    -- в hr_onboarding_tasks): HRD/рекрутер ставлять задачу собі або
+    -- будь-якому співробітнику з переліку. Поки без self-service логіну
+    -- для рядових співробітників — assignee лише позначає, на кого
+    -- призначено, самі вони задачу в системі не рухають.
+    CREATE TABLE IF NOT EXISTS hr_tasks (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      assignee_employee_id INTEGER REFERENCES hr_employees(id),
+      status TEXT NOT NULL DEFAULT 'To Do',
+      due_date DATE,
+      created_by TEXT NOT NULL DEFAULT '',
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_tasks_assignee ON hr_tasks(assignee_employee_id);
+    CREATE INDEX IF NOT EXISTS idx_hr_tasks_status ON hr_tasks(status);
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -2095,8 +2116,9 @@ async function listCandidates({ search = '' } = {}) {
   const { rows } = await pool.query(`
     SELECT c.*, per.full_name, per.phone, per.personal_email, per.telegram, per.city,
       (SELECT COUNT(*)::int FROM hr_applications a WHERE a.candidate_id = c.id AND a.status = 'Active') AS active_applications_count,
-      (SELECT a.stage FROM hr_applications a
-         WHERE a.candidate_id = c.id AND a.status = 'Active' ORDER BY a.applied_date ASC, a.id ASC LIMIT 1) AS current_stage,
+      latest_app.id AS current_application_id,
+      latest_app.stage AS current_stage,
+      latest_app.status AS current_status,
       av.title AS applied_vacancy_title,
       cv.title AS considering_vacancy_title,
       cv.salary_range AS vacancy_salary_range,
@@ -2105,6 +2127,10 @@ async function listCandidates({ search = '' } = {}) {
     JOIN hr_persons per ON per.id = c.person_id
     LEFT JOIN hr_vacancies av ON av.id = c.applied_vacancy_id
     LEFT JOIN hr_vacancies cv ON cv.id = c.considering_vacancy_id
+    LEFT JOIN LATERAL (
+      SELECT a.id, a.stage, a.status FROM hr_applications a
+      WHERE a.candidate_id = c.id ORDER BY a.updated_at DESC LIMIT 1
+    ) latest_app ON true
     ${where}
     ORDER BY c.created_at DESC
   `, params);
@@ -2263,7 +2289,7 @@ async function updateApplicationStage(id, stage, actor) {
   return rows[0];
 }
 
-async function updateApplicationStatus(id, { status, rejection_reason, rejection_comment, next_action, next_action_date }, actor) {
+async function updateApplicationStatus(id, { status, rejection_reason, rejection_comment, next_action, next_action_date, start_date }, actor) {
   if (!APPLICATION_STATUSES.includes(status)) {
     throw new Error(`Unknown application status: ${status}`);
   }
@@ -2296,7 +2322,87 @@ async function updateApplicationStatus(id, { status, rejection_reason, rejection
     [id, status, rejection_reason ?? null, rejection_comment ?? null, next_action ?? null, next_action_date ?? null, isRejected]
   );
   await writeAudit({ actor, action: 'status_change', entity_type: 'application', entity_id: id, old_value: { status: before[0].status }, new_value: { status, rejection_reason } });
+
+  // Статус "Найнято" без формального офера (рекрутер чи HRD поставили
+  // його напряму — з переліку кандидатів, воронки чи картки заявки) теж
+  // має запускати найм: Future Employee + онбординг-задачі, а не лише
+  // прийняття офера (ТЗ: "коли по кандидату поставили статус Найнято -
+  // одразу формувались задачі з онбордингу"). Best-effort — сам факт
+  // зміни статусу заявки вже зафіксовано вище і не залежить від цього.
+  if (status === 'Hired' && before[0].status !== 'Hired') {
+    try {
+      await hireFromApplication(id, { start_date: start_date || new Date().toISOString().slice(0, 10) }, actor);
+    } catch (hireError) {
+      console.error('updateApplicationStatus hire side effect ERROR:', hireError?.message || hireError);
+    }
+  }
+
   return rows[0];
+}
+
+// Спільний "найм" без формального офера — Future Employee + employment
+// period + позначення посади/вакансії Filled + пробація/онбординг/
+// навчання, той самий набір дій, що й після Accepted-офера (ТЗ п.37), але
+// без самого офера. Ідемпотентно за person_id (одна людина — один запис
+// hr_employees): якщо співробітника вже створено раніше (цим шляхом чи
+// через офер), просто повертає його, нічого не дублює.
+async function hireFromApplication(applicationId, { start_date }, actor) {
+  const application = await getApplication(applicationId);
+  if (!application) return null;
+
+  const { rows: candRows } = await pool.query(`SELECT person_id FROM hr_candidates WHERE id = $1`, [application.candidate_id]);
+  const personId = candRows[0]?.person_id;
+  if (!personId) return null;
+
+  const { rows: existingEmp } = await pool.query(`SELECT * FROM hr_employees WHERE person_id = $1`, [personId]);
+  if (existingEmp[0]) return existingEmp[0];
+
+  const { rows: vacRows } = await pool.query(
+    `SELECT position_id, department_id, hiring_manager_employee_id FROM hr_vacancies WHERE id = $1`,
+    [application.vacancy_id]
+  );
+  const vacancy = vacRows[0];
+
+  const client = await pool.connect();
+  let employee;
+  try {
+    await client.query('BEGIN');
+    const { rows: empRows } = await client.query(
+      `INSERT INTO hr_employees (person_id, status, first_hire_date) VALUES ($1,'Future Employee',$2) RETURNING *`,
+      [personId, start_date || null]
+    );
+    employee = empRows[0];
+
+    if (vacancy?.position_id && vacancy?.department_id && start_date) {
+      await client.query(
+        `INSERT INTO hr_employment_periods (employee_id, position_id, department_id, manager_employee_id, start_date, change_reason)
+         VALUES ($1,$2,$3,$4,$5,'Статус заявки змінено на Найнято')`,
+        [employee.id, vacancy.position_id, vacancy.department_id, vacancy.hiring_manager_employee_id || null, start_date]
+      );
+      await client.query(`UPDATE hr_positions SET status = 'Filled', updated_at = now() WHERE id = $1`, [vacancy.position_id]);
+    }
+    await client.query(`UPDATE hr_vacancies SET status = 'Filled', updated_at = now() WHERE id = $1`, [application.vacancy_id]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  await writeAudit({ actor, action: 'hired_from_application', entity_type: 'employee', entity_id: employee.id, new_value: { application_id: applicationId } });
+
+  try {
+    await setProbation(employee.id, { probation_goals: '' });
+    if (vacancy?.position_id || vacancy?.department_id) {
+      await generateOnboardingTasks(employee.id, { department_id: vacancy.department_id, position_id: vacancy.position_id, start_date }, actor);
+      await generateLearningAssignments(employee.id, { department_id: vacancy.department_id, position_id: vacancy.position_id }, actor);
+    }
+  } catch (sideEffectError) {
+    console.error('hireFromApplication onboarding/probation side effect ERROR:', sideEffectError?.message || sideEffectError);
+  }
+
+  return employee;
 }
 
 // ---------------------------------------------------------------------
@@ -2501,6 +2607,46 @@ async function createOnboardingTemplate({ scope, department_id, position_id, mil
       description || '', owner_role || '', due_offset_days ?? 0, required ?? true]
   );
   return rows[0];
+}
+
+// Ідемпотентний імпорт бібліотеки шаблонів онбордингу з Employee Journey
+// Map (seed-onboarding-library.js), за принципом seedOrgImport: викликається
+// при кожному старті сервера, за збігом (scope, milestone, title) шаблон,
+// що вже існує (в т.ч. якщо Тетяна його відредагувала чи додала вручну),
+// повторно не створює.
+async function seedOnboardingLibrary(templateDefs) {
+  let imported = 0;
+  let skipped = 0;
+  for (const t of templateDefs) {
+    let departmentId = null;
+    if (t.scope === 'Department' && t.department) {
+      const { rows } = await pool.query('SELECT id FROM hr_departments WHERE name = $1', [t.department]);
+      departmentId = rows[0]?.id || null;
+      if (!departmentId) { skipped += 1; continue; }
+    }
+    // Ключ збігу включає due_offset_days: "Day 1 / Week 1" — один
+    // мілстоун-бакет і на Day 1, і на Week 1 з файлу, тому лише
+    // scope+milestone+title недостатньо — у джерелі трапляються різні
+    // задачі з однаковою назвою на цих двох підетапах.
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM hr_onboarding_templates WHERE scope = $1 AND milestone = $2 AND title = $3 AND due_offset_days = $4`,
+      [t.scope, t.milestone, t.title, t.due_offset_days ?? 0]
+    );
+    if (existing.length) { skipped += 1; continue; }
+    await createOnboardingTemplate({
+      scope: t.scope,
+      department_id: departmentId,
+      position_id: null,
+      milestone: t.milestone,
+      title: t.title,
+      description: t.description || '',
+      owner_role: t.owner_role || '',
+      due_offset_days: t.due_offset_days ?? 0,
+      required: t.required ?? true
+    });
+    imported += 1;
+  }
+  return { imported, skipped };
 }
 
 async function updateOnboardingTemplate(id, { title, description, owner_role, due_offset_days, required, active }) {
@@ -4395,6 +4541,114 @@ async function getRecruitmentMetrics() {
   };
 }
 
+// ---------------------------------------------------------------------
+// Задачі — окремий канбан-задачник (не плутати з hr_onboarding_tasks)
+// ---------------------------------------------------------------------
+
+async function listTasks({ assignee_employee_id = null, status = null, created_by = null } = {}) {
+  const conditions = [];
+  const params = [];
+  if (assignee_employee_id) {
+    params.push(assignee_employee_id);
+    conditions.push(`t.assignee_employee_id = $${params.length}`);
+  }
+  if (status) {
+    params.push(status);
+    conditions.push(`t.status = $${params.length}`);
+  }
+  if (created_by) {
+    params.push(created_by);
+    conditions.push(`t.created_by = $${params.length}`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(`
+    SELECT t.*, per.full_name AS assignee_name
+    FROM hr_tasks t
+    LEFT JOIN hr_employees e ON e.id = t.assignee_employee_id
+    LEFT JOIN hr_persons per ON per.id = e.person_id
+    ${where}
+    ORDER BY t.due_date NULLS LAST, t.created_at DESC
+  `, params);
+  const today = new Date().toISOString().slice(0, 10);
+  return rows.map((t) => ({
+    ...t,
+    is_overdue: !!(t.due_date && t.due_date.toISOString().slice(0, 10) < today && t.status !== 'Done' && t.status !== 'Cancelled')
+  }));
+}
+
+async function createTask({ title, description, assignee_employee_id, due_date }, createdBy) {
+  if (!title || !title.trim()) throw new Error('Потрібна назва задачі');
+  const { rows } = await pool.query(
+    `INSERT INTO hr_tasks (title, description, assignee_employee_id, due_date, created_by)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [title.trim(), description || '', assignee_employee_id || null, due_date || null, createdBy || '']
+  );
+  await writeAudit({ actor: createdBy, action: 'create', entity_type: 'task', entity_id: rows[0].id, new_value: { title } });
+  return rows[0];
+}
+
+async function updateTask(id, { title, description, assignee_employee_id, due_date }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_tasks SET
+       title = COALESCE($2, title),
+       description = COALESCE($3, description),
+       assignee_employee_id = $4,
+       due_date = $5,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, title ?? null, description ?? null, assignee_employee_id ?? null, due_date ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function updateTaskStatus(id, status, actor) {
+  if (!TASK_STATUSES.includes(status)) throw new Error(`Unknown task status: ${status}`);
+  const { rows: before } = await pool.query('SELECT status FROM hr_tasks WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_tasks SET
+       status = $2,
+       completed_at = CASE WHEN $2 = 'Done' THEN now() ELSE NULL END,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, status]
+  );
+  if (status !== before[0].status) {
+    await writeAudit({ actor, action: 'status_change', entity_type: 'task', entity_id: id, old_value: { status: before[0].status }, new_value: { status } });
+  }
+  return rows[0];
+}
+
+async function deleteTask(id) {
+  await pool.query('DELETE FROM hr_tasks WHERE id = $1', [id]);
+}
+
+// Скільки задач кожен співробітник закрив (status = Done) у вказаному
+// періоді — за completed_at, а не за due_date (цікавить, коли фактично
+// зробили, а не на коли було заплановано).
+async function getTaskCompletionStats({ from = null, to = null } = {}) {
+  const conditions = [`t.status = 'Done'`];
+  const params = [];
+  if (from) {
+    params.push(from);
+    conditions.push(`t.completed_at >= $${params.length}`);
+  }
+  if (to) {
+    params.push(to);
+    conditions.push(`t.completed_at < $${params.length}::date + interval '1 day'`);
+  }
+  const { rows } = await pool.query(`
+    SELECT t.assignee_employee_id, per.full_name AS assignee_name, COUNT(*)::int AS completed_count
+    FROM hr_tasks t
+    LEFT JOIN hr_employees e ON e.id = t.assignee_employee_id
+    LEFT JOIN hr_persons per ON per.id = e.person_id
+    WHERE ${conditions.join(' AND ')}
+    GROUP BY t.assignee_employee_id, per.full_name
+    ORDER BY completed_count DESC
+  `, params);
+  return rows;
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -4430,6 +4684,7 @@ export default {
   createEmployee,
   importEmployeesFromRows,
   seedOrgImport,
+  seedOnboardingLibrary,
   parseVacancyRequestFieldsFromText,
   parseVacancyFieldsFromText,
   parseVacancyFileForFields,
@@ -4589,5 +4844,12 @@ export default {
   listVacancyRequestAttachments,
   getVacancyRequestAttachmentFile,
   getDashboardMetrics,
-  getRecruitmentMetrics
+  getRecruitmentMetrics,
+  TASK_STATUSES,
+  listTasks,
+  createTask,
+  updateTask,
+  updateTaskStatus,
+  deleteTask,
+  getTaskCompletionStats
 };
