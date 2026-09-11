@@ -196,6 +196,7 @@
   </div>
   <nav class="tabs">
     <button id="tabDashboard" onclick="showTab('dashboard')">Дашборд</button>
+    <button id="tabTasks" onclick="showTab('tasks')">Задачі</button>
     <button id="tabPeople" onclick="showTab('people')">Співробітники</button>
     <button id="tabOrg" onclick="showTab('org')">Оргструктура</button>
     <button id="tabRecruitment" onclick="showTab('recruitment')">Рекрутинг</button>
@@ -223,6 +224,32 @@
     <div class="breakdownGrid" id="dashboardBreakdowns"></div>
 
     <p style="color: var(--muted); font-size: 12px; margin-top: 20px;">Це базові HR-метрики зі стандартними формулами (наведи курсор на ⓘ, щоб побачити, як саме рахується) — не повноцінна аналітика з ТЗ розділу 29, яку свідомо відкладено до стабілізації даних.</p>
+  </div>
+
+  <div id="viewTasks" style="display:none;">
+    <div class="profileTabs">
+      <button class="active" id="tasksSubBoard" onclick="showTasksSubTab('board')">Дошка</button>
+      <button id="tasksSubStats" onclick="showTasksSubTab('stats')">Статистика</button>
+    </div>
+
+    <div class="profilePanel active" id="tasksPanelBoard">
+      <div class="viewToolbar">
+        <select id="taskFilterAssignee"><option value="">— усі виконавці —</option></select>
+        <button id="btnAddTask">+ Задача</button>
+      </div>
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Перетягуй картку між колонками, щоб змінити статус, або клікни на неї, щоб відредагувати.</p>
+      <div class="funnelBoard" id="tasksBoard"></div>
+    </div>
+
+    <div class="profilePanel" id="tasksPanelStats">
+      <div class="viewToolbar">
+        <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted);">З <input type="date" id="taskStatsFrom"></label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted);">По <input type="date" id="taskStatsTo"></label>
+      </div>
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Скільки задач кожен закрив (статус "Виконано") за обраний період — за датою фактичного закриття.</p>
+      <div class="tableWrap"><table><thead><tr><th>Співробітник</th><th>Закрито задач</th></tr></thead><tbody id="taskStatsBody"></tbody></table></div>
+      <div class="empty" id="taskStatsEmpty" style="display:none;">Немає закритих задач за період.</div>
+    </div>
   </div>
 
   <div id="viewPeople" style="display:none;">
@@ -676,6 +703,22 @@
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('empStatusChangeOverlay')">Скасувати</button>
       <button id="btnSaveEmpStatusChange">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: задача -->
+<div class="overlay" id="taskOverlay">
+  <div class="modal">
+    <h2 id="taskModalTitle">Нова задача</h2>
+    <div class="field"><label>Назва</label><input type="text" id="taskTitle"></div>
+    <div class="field"><label>Опис</label><textarea id="taskDescription" rows="3"></textarea></div>
+    <div class="field"><label>Виконавець</label><select id="taskAssignee"><option value="">— не призначено —</option></select></div>
+    <div class="field"><label>Дедлайн</label><input type="date" id="taskDueDate"></div>
+    <div class="modal-actions">
+      <button class="secondary" id="btnDeleteTask" style="display:none; margin-right:auto;" onclick="deleteCurrentTask()">Видалити</button>
+      <button class="secondary" onclick="closeOverlay('taskOverlay')">Скасувати</button>
+      <button id="btnSaveTask">Зберегти</button>
     </div>
   </div>
 </div>
@@ -1301,7 +1344,8 @@ const STATUS_LABELS_UK = {
   'Sent': 'Надіслано', 'Accepted': 'Прийнято', 'Declined': 'Відхилено кандидатом', 'Expired': 'Термін минув', 'Withdrawn': 'Відкликано',
   'HR Screening': 'Первинний скринінг (HR)', 'Technical/Professional': 'Технічне/Професійне', 'Final': 'Фінальне',
   'Test Task Review': 'Розгляд тестового завдання', 'Reference Check': 'Перевірка рекомендацій',
-  'Scheduled': 'Заплановано', 'Completed': 'Завершено', 'No Show': "Не з'явився"
+  'Scheduled': 'Заплановано', 'Completed': 'Завершено', 'No Show': "Не з'явився",
+  'To Do': 'До виконання', 'In Progress': 'В роботі', 'Done': 'Виконано', 'Cancelled': 'Скасовано'
 };
 function statusLabel(s) { return STATUS_LABELS_UK[s] || s; }
 function fmt(n) { return (Number(n) || 0).toLocaleString('uk-UA', { maximumFractionDigits: 2 }); }
@@ -1455,6 +1499,7 @@ const ALL_TABS = ['tabDashboard', 'tabPeople', 'tabOrg', 'tabRecruitment', 'tabO
 
 function showTab(tab) {
   document.getElementById('viewDashboard').style.display = tab === 'dashboard' ? '' : 'none';
+  document.getElementById('viewTasks').style.display = tab === 'tasks' ? '' : 'none';
   document.getElementById('viewPeople').style.display = tab === 'people' ? '' : 'none';
   document.getElementById('viewEmployeeProfile').style.display = 'none';
   document.getElementById('viewOrg').style.display = tab === 'org' ? '' : 'none';
@@ -1472,6 +1517,7 @@ function showTab(tab) {
   document.getElementById('viewOffboardingCaseDetail').style.display = 'none';
   document.getElementById('viewRecruitmentMetrics').style.display = tab === 'recruitmentMetrics' ? '' : 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
+  document.getElementById('tabTasks').classList.toggle('active', tab === 'tasks');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
   document.getElementById('tabOrg').classList.toggle('active', tab === 'org');
   document.getElementById('tabRecruitment').classList.toggle('active', tab === 'recruitment');
@@ -1483,6 +1529,7 @@ function showTab(tab) {
   document.getElementById('tabOffboarding').classList.toggle('active', tab === 'offboarding');
   document.getElementById('tabRecruitmentMetrics').classList.toggle('active', tab === 'recruitmentMetrics');
   if (tab === 'dashboard') loadDashboard();
+  if (tab === 'tasks') showTasksSubTab(window._tasksSubTab || 'board');
   if (tab === 'people') loadPeople();
   if (tab === 'org') showOrgSubTab(window._orgSubTab || 'list');
   if (tab === 'recruitment') showRecruitmentSubTab(window._recruitmentSubTab || 'requests');
@@ -1522,6 +1569,142 @@ function breakdownCardHtml(title, formula, dataObj, opts = {}) {
     </div>
   `;
 }
+
+// ---- Задачі ----
+
+function showTasksSubTab(tab) {
+  window._tasksSubTab = tab;
+  document.getElementById('tasksPanelBoard').classList.toggle('active', tab === 'board');
+  document.getElementById('tasksPanelStats').classList.toggle('active', tab === 'stats');
+  document.getElementById('tasksSubBoard').classList.toggle('active', tab === 'board');
+  document.getElementById('tasksSubStats').classList.toggle('active', tab === 'stats');
+  if (tab === 'board') loadTasksBoard();
+  if (tab === 'stats') loadTaskStats();
+}
+
+async function loadTasksBoard() {
+  await ensureRecruitmentRefsLoaded();
+  const assigneeSelect = document.getElementById('taskFilterAssignee');
+  if (assigneeSelect.options.length <= 1) {
+    assigneeSelect.innerHTML = '<option value="">— усі виконавці —</option>' + window._employeesCache.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
+  }
+
+  const assignee_employee_id = assigneeSelect.value;
+  const params = new URLSearchParams();
+  if (assignee_employee_id) params.set('assignee_employee_id', assignee_employee_id);
+  const resp = await apiFetch('/api/tasks?' + params.toString());
+  const data = await resp.json();
+  const tasks = data.ok ? data.tasks : [];
+  window._tasksCache = tasks;
+
+  const board = document.getElementById('tasksBoard');
+  board.innerHTML = window._dict.taskStatuses.map((status) => {
+    const items = tasks.filter((t) => t.status === status);
+    return `
+      <div class="funnelColumn" ondragover="event.preventDefault()" ondrop="taskDrop(event, '${status}')">
+        <h4><span>${escAttr(statusLabel(status))}</span><span>${items.length}</span></h4>
+        ${items.map((t) => `
+          <div class="funnelCard" draggable="true" ondragstart="taskDragStart(event, ${t.id})" onclick="openEditTask(${t.id})">
+            <div class="funnelCandidate">${escAttr(t.title)}</div>
+            <div class="funnelVacancy">${t.assignee_name ? escAttr(t.assignee_name) : 'Не призначено'}</div>
+            <div class="funnelMeta">${t.due_date ? (t.is_overdue ? '⚠ ' : '') + 'до ' + new Date(t.due_date).toLocaleDateString('uk-UA') : 'без дедлайну'}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }).join('');
+}
+document.getElementById('taskFilterAssignee').addEventListener('change', loadTasksBoard);
+
+function taskDragStart(event, id) {
+  event.dataTransfer.setData('text/plain', String(id));
+}
+
+async function taskDrop(event, status) {
+  event.preventDefault();
+  const id = event.dataTransfer.getData('text/plain');
+  if (!id) return;
+  const resp = await apiFetch('/api/tasks/' + id + '/status', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  loadTasksBoard();
+}
+
+function openAddTask() {
+  window._editingTaskId = null;
+  document.getElementById('taskModalTitle').textContent = 'Нова задача';
+  document.getElementById('taskTitle').value = '';
+  document.getElementById('taskDescription').value = '';
+  document.getElementById('taskAssignee').innerHTML = '<option value="">— не призначено —</option>' + window._employeesCache.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
+  document.getElementById('taskDueDate').value = '';
+  document.getElementById('btnDeleteTask').style.display = 'none';
+  document.getElementById('taskOverlay').classList.add('open');
+}
+document.getElementById('btnAddTask').addEventListener('click', openAddTask);
+
+function openEditTask(id) {
+  const t = (window._tasksCache || []).find((x) => x.id === id);
+  if (!t) return;
+  window._editingTaskId = id;
+  document.getElementById('taskModalTitle').textContent = 'Задача';
+  document.getElementById('taskTitle').value = t.title;
+  document.getElementById('taskDescription').value = t.description || '';
+  document.getElementById('taskAssignee').innerHTML = '<option value="">— не призначено —</option>' + window._employeesCache.map((e) => `<option value="${e.id}" ${e.id === t.assignee_employee_id ? 'selected' : ''}>${escAttr(e.full_name)}</option>`).join('');
+  document.getElementById('taskDueDate').value = t.due_date ? t.due_date.slice(0, 10) : '';
+  document.getElementById('btnDeleteTask').style.display = '';
+  document.getElementById('taskOverlay').classList.add('open');
+}
+
+async function deleteCurrentTask() {
+  if (!window._editingTaskId) return;
+  if (!confirm('Видалити задачу без можливості відновлення?')) return;
+  const resp = await apiFetch('/api/tasks/' + window._editingTaskId, { method: 'DELETE' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  closeOverlay('taskOverlay');
+  showToast('Видалено');
+  loadTasksBoard();
+}
+
+document.getElementById('btnSaveTask').addEventListener('click', async () => {
+  const title = document.getElementById('taskTitle').value.trim();
+  if (!title) { showToast('Вкажи назву задачі'); return; }
+  const body = {
+    title,
+    description: document.getElementById('taskDescription').value.trim(),
+    assignee_employee_id: document.getElementById('taskAssignee').value || null,
+    due_date: document.getElementById('taskDueDate').value || null
+  };
+  const url = window._editingTaskId ? '/api/tasks/' + window._editingTaskId : '/api/tasks';
+  const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('taskOverlay');
+  showToast('Збережено');
+  loadTasksBoard();
+});
+
+async function loadTaskStats() {
+  const from = document.getElementById('taskStatsFrom').value;
+  const to = document.getElementById('taskStatsTo').value;
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  const resp = await apiFetch('/api/tasks/stats?' + params.toString());
+  const data = await resp.json();
+  const stats = data.ok ? data.stats : [];
+  const body = document.getElementById('taskStatsBody');
+  const empty = document.getElementById('taskStatsEmpty');
+  if (!stats.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  body.innerHTML = stats.map((s) => `
+    <tr><td>${escAttr(s.assignee_name || 'Не призначено')}</td><td>${s.completed_count}</td></tr>
+  `).join('');
+}
+document.getElementById('taskStatsFrom').addEventListener('change', loadTaskStats);
+document.getElementById('taskStatsTo').addEventListener('change', loadTaskStats);
 
 async function loadDashboard() {
   const [empResp, orgResp, metricsResp] = await Promise.all([

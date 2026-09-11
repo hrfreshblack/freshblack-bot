@@ -25,6 +25,7 @@ const EMPLOYEE_STATUSES = [
   'Maternity/Parental Leave', 'Mobilized', 'Suspended', 'Long Absence', 'Leaving', 'Former Employee'
 ];
 const POSITION_STATUSES = ['Filled', 'Vacant', 'Recruitment Active', 'Planned', 'Frozen', 'Closed'];
+const TASK_STATUSES = ['To Do', 'In Progress', 'Done', 'Cancelled'];
 const RESERVATION_STATUSES = ['Not Reserved', 'In Progress', 'Reserved', 'Expiring', 'Other'];
 
 // Recruitment / ATS (ТЗ розділи 9-19)
@@ -903,6 +904,26 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_candidate_resumes_candidate ON hr_candidate_resumes(candidate_id);
+
+    -- Задачі — окремий канбан-задачник (не onboarding-задачі, ті лишаються
+    -- в hr_onboarding_tasks): HRD/рекрутер ставлять задачу собі або
+    -- будь-якому співробітнику з переліку. Поки без self-service логіну
+    -- для рядових співробітників — assignee лише позначає, на кого
+    -- призначено, самі вони задачу в системі не рухають.
+    CREATE TABLE IF NOT EXISTS hr_tasks (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      assignee_employee_id INTEGER REFERENCES hr_employees(id),
+      status TEXT NOT NULL DEFAULT 'To Do',
+      due_date DATE,
+      created_by TEXT NOT NULL DEFAULT '',
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_tasks_assignee ON hr_tasks(assignee_employee_id);
+    CREATE INDEX IF NOT EXISTS idx_hr_tasks_status ON hr_tasks(status);
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -4520,6 +4541,114 @@ async function getRecruitmentMetrics() {
   };
 }
 
+// ---------------------------------------------------------------------
+// Задачі — окремий канбан-задачник (не плутати з hr_onboarding_tasks)
+// ---------------------------------------------------------------------
+
+async function listTasks({ assignee_employee_id = null, status = null, created_by = null } = {}) {
+  const conditions = [];
+  const params = [];
+  if (assignee_employee_id) {
+    params.push(assignee_employee_id);
+    conditions.push(`t.assignee_employee_id = $${params.length}`);
+  }
+  if (status) {
+    params.push(status);
+    conditions.push(`t.status = $${params.length}`);
+  }
+  if (created_by) {
+    params.push(created_by);
+    conditions.push(`t.created_by = $${params.length}`);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const { rows } = await pool.query(`
+    SELECT t.*, per.full_name AS assignee_name
+    FROM hr_tasks t
+    LEFT JOIN hr_employees e ON e.id = t.assignee_employee_id
+    LEFT JOIN hr_persons per ON per.id = e.person_id
+    ${where}
+    ORDER BY t.due_date NULLS LAST, t.created_at DESC
+  `, params);
+  const today = new Date().toISOString().slice(0, 10);
+  return rows.map((t) => ({
+    ...t,
+    is_overdue: !!(t.due_date && t.due_date.toISOString().slice(0, 10) < today && t.status !== 'Done' && t.status !== 'Cancelled')
+  }));
+}
+
+async function createTask({ title, description, assignee_employee_id, due_date }, createdBy) {
+  if (!title || !title.trim()) throw new Error('Потрібна назва задачі');
+  const { rows } = await pool.query(
+    `INSERT INTO hr_tasks (title, description, assignee_employee_id, due_date, created_by)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [title.trim(), description || '', assignee_employee_id || null, due_date || null, createdBy || '']
+  );
+  await writeAudit({ actor: createdBy, action: 'create', entity_type: 'task', entity_id: rows[0].id, new_value: { title } });
+  return rows[0];
+}
+
+async function updateTask(id, { title, description, assignee_employee_id, due_date }) {
+  const { rows } = await pool.query(
+    `UPDATE hr_tasks SET
+       title = COALESCE($2, title),
+       description = COALESCE($3, description),
+       assignee_employee_id = $4,
+       due_date = $5,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, title ?? null, description ?? null, assignee_employee_id ?? null, due_date ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function updateTaskStatus(id, status, actor) {
+  if (!TASK_STATUSES.includes(status)) throw new Error(`Unknown task status: ${status}`);
+  const { rows: before } = await pool.query('SELECT status FROM hr_tasks WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const { rows } = await pool.query(
+    `UPDATE hr_tasks SET
+       status = $2,
+       completed_at = CASE WHEN $2 = 'Done' THEN now() ELSE NULL END,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, status]
+  );
+  if (status !== before[0].status) {
+    await writeAudit({ actor, action: 'status_change', entity_type: 'task', entity_id: id, old_value: { status: before[0].status }, new_value: { status } });
+  }
+  return rows[0];
+}
+
+async function deleteTask(id) {
+  await pool.query('DELETE FROM hr_tasks WHERE id = $1', [id]);
+}
+
+// Скільки задач кожен співробітник закрив (status = Done) у вказаному
+// періоді — за completed_at, а не за due_date (цікавить, коли фактично
+// зробили, а не на коли було заплановано).
+async function getTaskCompletionStats({ from = null, to = null } = {}) {
+  const conditions = [`t.status = 'Done'`];
+  const params = [];
+  if (from) {
+    params.push(from);
+    conditions.push(`t.completed_at >= $${params.length}`);
+  }
+  if (to) {
+    params.push(to);
+    conditions.push(`t.completed_at < $${params.length}::date + interval '1 day'`);
+  }
+  const { rows } = await pool.query(`
+    SELECT t.assignee_employee_id, per.full_name AS assignee_name, COUNT(*)::int AS completed_count
+    FROM hr_tasks t
+    LEFT JOIN hr_employees e ON e.id = t.assignee_employee_id
+    LEFT JOIN hr_persons per ON per.id = e.person_id
+    WHERE ${conditions.join(' AND ')}
+    GROUP BY t.assignee_employee_id, per.full_name
+    ORDER BY completed_count DESC
+  `, params);
+  return rows;
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
@@ -4715,5 +4844,12 @@ export default {
   listVacancyRequestAttachments,
   getVacancyRequestAttachmentFile,
   getDashboardMetrics,
-  getRecruitmentMetrics
+  getRecruitmentMetrics,
+  TASK_STATUSES,
+  listTasks,
+  createTask,
+  updateTask,
+  updateTaskStatus,
+  deleteTask,
+  getTaskCompletionStats
 };
