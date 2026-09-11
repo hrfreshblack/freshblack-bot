@@ -22,7 +22,7 @@ const SESSION_IDLE_MINUTES = 60;
 
 const EMPLOYEE_STATUSES = [
   'Future Employee', 'Probation', 'Active', 'Part-time',
-  'Maternity/Parental Leave', 'Suspended', 'Long Absence', 'Leaving', 'Former Employee'
+  'Maternity/Parental Leave', 'Mobilized', 'Suspended', 'Long Absence', 'Leaving', 'Former Employee'
 ];
 const POSITION_STATUSES = ['Filled', 'Vacant', 'Recruitment Active', 'Planned', 'Frozen', 'Closed'];
 const RESERVATION_STATUSES = ['Not Reserved', 'In Progress', 'Reserved', 'Expiring', 'Other'];
@@ -2095,8 +2095,9 @@ async function listCandidates({ search = '' } = {}) {
   const { rows } = await pool.query(`
     SELECT c.*, per.full_name, per.phone, per.personal_email, per.telegram, per.city,
       (SELECT COUNT(*)::int FROM hr_applications a WHERE a.candidate_id = c.id AND a.status = 'Active') AS active_applications_count,
-      (SELECT a.stage FROM hr_applications a
-         WHERE a.candidate_id = c.id AND a.status = 'Active' ORDER BY a.applied_date ASC, a.id ASC LIMIT 1) AS current_stage,
+      latest_app.id AS current_application_id,
+      latest_app.stage AS current_stage,
+      latest_app.status AS current_status,
       av.title AS applied_vacancy_title,
       cv.title AS considering_vacancy_title,
       cv.salary_range AS vacancy_salary_range,
@@ -2105,6 +2106,10 @@ async function listCandidates({ search = '' } = {}) {
     JOIN hr_persons per ON per.id = c.person_id
     LEFT JOIN hr_vacancies av ON av.id = c.applied_vacancy_id
     LEFT JOIN hr_vacancies cv ON cv.id = c.considering_vacancy_id
+    LEFT JOIN LATERAL (
+      SELECT a.id, a.stage, a.status FROM hr_applications a
+      WHERE a.candidate_id = c.id ORDER BY a.updated_at DESC LIMIT 1
+    ) latest_app ON true
     ${where}
     ORDER BY c.created_at DESC
   `, params);

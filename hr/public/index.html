@@ -650,6 +650,18 @@
   </div>
 </div>
 
+<!-- Модалка: зміна статусу співробітника -->
+<div class="overlay" id="empStatusChangeOverlay">
+  <div class="modal">
+    <h2>Зміна статусу співробітника</h2>
+    <div class="field"><label>Новий статус</label><select id="empStatusChangeSelect"></select></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('empStatusChangeOverlay')">Скасувати</button>
+      <button id="btnSaveEmpStatusChange">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <!-- Модалка: нова компенсація -->
 <div class="overlay" id="compensationOverlay">
   <div class="modal">
@@ -1259,7 +1271,7 @@ function escAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;');
 // свідомо (або весь довідник, або жоден) — інакше вийде мішанина мов.
 const STATUS_LABELS_UK = {
   'Future Employee': 'Майбутній співробітник', 'Probation': 'Випробувальний термін', 'Active': 'Активний',
-  'Part-time': 'Часткова зайнятість', 'Maternity/Parental Leave': 'Декретна відпустка', 'Suspended': 'Призупинено',
+  'Part-time': 'Часткова зайнятість', 'Maternity/Parental Leave': 'Декретна відпустка', 'Mobilized': 'Мобілізований в ЗСУ', 'Suspended': 'Призупинено',
   'Long Absence': 'Тривала відсутність', 'Leaving': 'Звільняється', 'Former Employee': 'Колишній співробітник',
   'Filled': 'Заповнена', 'Vacant': 'Вакантна', 'Recruitment Active': 'Йде підбір', 'Planned': 'Заплановано',
   'Frozen': 'Заморожено', 'Closed': 'Закрито',
@@ -3834,17 +3846,22 @@ async function renderChangesTab(e) {
 }
 
 function openStatusChange() {
-  const status = prompt('Новий статус (' + window._dict.employeeStatuses.join(', ') + '):', window._currentEmployee.status);
-  if (!status) return;
-  if (!window._dict.employeeStatuses.includes(status)) { showToast('Невідомий статус'); return; }
-  apiFetch('/api/employees/' + currentEmployeeId + '/status', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
-  }).then((r) => r.json()).then((data) => {
-    if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
-    showToast('Статус змінено');
-    renderEmployeeProfile();
-  });
+  const select = document.getElementById('empStatusChangeSelect');
+  select.innerHTML = window._dict.employeeStatuses.map((s) => `<option value="${escAttr(s)}" ${s === window._currentEmployee.status ? 'selected' : ''}>${escAttr(statusLabel(s))}</option>`).join('');
+  document.getElementById('empStatusChangeOverlay').classList.add('open');
 }
+
+document.getElementById('btnSaveEmpStatusChange').onclick = async () => {
+  const status = document.getElementById('empStatusChangeSelect').value;
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/status', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  closeOverlay('empStatusChangeOverlay');
+  showToast('Статус змінено');
+  renderEmployeeProfile();
+};
 
 // ---- Organization Structure ----
 
@@ -4759,7 +4776,9 @@ async function loadCandidates() {
       <td>${escAttr(c.phone || '—')}</td>
       <td>${escAttr(c.personal_email || '—')}</td>
       <td>${escAttr(c.source || '—')}</td>
-      <td>${c.current_stage ? escAttr(c.current_stage) : '—'}</td>
+      <td onclick="event.stopPropagation()">${c.current_application_id ? `<select onchange="quickSetApplicationStatus(${c.current_application_id}, this)" data-current="${escAttr(c.current_status)}">
+        ${window._dict.applicationStatuses.map((s) => `<option value="${escAttr(s)}" ${s === c.current_status ? 'selected' : ''}>${escAttr(statusLabel(s))}</option>`).join('')}
+      </select>` : '—'}</td>
       <td>${escAttr(c.applied_vacancy_title || '—')}</td>
       <td>${escAttr(c.considering_vacancy_title || '—')}</td>
       <td>${escAttr(c.vacancy_salary_range || '—')}</td>
@@ -4772,6 +4791,26 @@ document.getElementById('candSearch').addEventListener('input', () => {
   clearTimeout(window._candSearchTimer);
   window._candSearchTimer = setTimeout(loadCandidates, 250);
 });
+
+// Швидка зміна статусу заявки прямо з переліку кандидатів, без відкриття
+// картки. Відмову (потрібна обов'язкова причина) сюди не пускаємо — для
+// неї відкривається картка заявки, де є поле причини.
+async function quickSetApplicationStatus(applicationId, selectEl) {
+  const status = selectEl.value;
+  const prev = selectEl.dataset.current;
+  if (status === 'Rejected by Company' || status === 'Rejected by Candidate') {
+    showToast('Для відмови потрібна причина — відкрий картку кандидата');
+    selectEl.value = prev;
+    return;
+  }
+  const resp = await apiFetch('/api/applications/' + applicationId + '/status', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); selectEl.value = prev; return; }
+  selectEl.dataset.current = status;
+  showToast('Статус змінено');
+}
 
 async function loadCandidateVacancySelects(selectedAppliedId, selectedConsideringId) {
   const resp = await apiFetch('/api/vacancies');
