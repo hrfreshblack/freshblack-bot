@@ -226,6 +226,7 @@
     <button id="tabOrders" onclick="showTab('orders')">Замовлення</button>
     <button id="tabClients" onclick="showTab('clients')">Клієнти</button>
     <button id="tabActivityLog" onclick="showTab('activityLog')">Журнал дій</button>
+    <button id="tabPermissions" onclick="showTab('permissions')">Доступи</button>
   </nav>
 </header>
 
@@ -723,6 +724,17 @@
     <div style="margin-top: 12px;">
       <button class="secondary" id="btnLoadMoreActivityLog" style="display:none;">Показати ще</button>
     </div>
+  </div>
+
+  <div id="viewPermissions" style="display:none;">
+    <p style="color: var(--muted); margin: 0 0 14px;">Роль сама по собі вже дає базовий доступ (наприклад, "тімлід" бачить Станції/Зелену каву/Напівфабрикати). Тут — додаткові права понад роль, для конкретної людини: "Перегляд" відкриває розділ на читання, "Редагування" — ще й створення/зміну в ньому. "—" означає, що людина має лише те, що дає роль.</p>
+    <div class="tableWrap">
+    <table id="permissionsTable">
+      <thead><tr id="permissionsHeadRow"><th>Користувач</th></tr></thead>
+      <tbody id="permissionsBody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="permissionsEmpty" style="display:none;">Немає інших акаунтів, окрім адмінів.</div>
   </div>
 </main>
 
@@ -1731,6 +1743,7 @@ function showTab(tab) {
   document.getElementById('viewOrders').style.display = tab === 'orders' ? '' : 'none';
   document.getElementById('viewClients').style.display = tab === 'clients' ? '' : 'none';
   document.getElementById('viewActivityLog').style.display = tab === 'activityLog' ? '' : 'none';
+  document.getElementById('viewPermissions').style.display = tab === 'permissions' ? '' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', tab === 'products');
   document.getElementById('tabStock').classList.toggle('active', tab === 'stock');
   document.getElementById('tabAnalytics').classList.toggle('active', tab === 'analytics');
@@ -1743,6 +1756,7 @@ function showTab(tab) {
   document.getElementById('tabOrders').classList.toggle('active', tab === 'orders');
   document.getElementById('tabClients').classList.toggle('active', tab === 'clients');
   document.getElementById('tabActivityLog').classList.toggle('active', tab === 'activityLog');
+  document.getElementById('tabPermissions').classList.toggle('active', tab === 'permissions');
   if (tab === 'products') loadProducts();
   if (tab === 'stock') loadStock();
   if (tab === 'analytics') loadAnalytics();
@@ -1755,6 +1769,7 @@ function showTab(tab) {
   if (tab === 'orders') loadOrders();
   if (tab === 'clients') loadClients();
   if (tab === 'activityLog') initActivityLog();
+  if (tab === 'permissions') loadPermissions();
 }
 
 // ---- Зелена кава → Обсмажка → Фотосепарація → напівфабрикат/квакер ----
@@ -3614,13 +3629,28 @@ document.getElementById('btnCloseSpec').onclick = () => {
   document.getElementById('specOverlay').classList.remove('open');
 };
 
-const ALL_TABS = ['tabProducts', 'tabStock', 'tabAnalytics', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabNapivfabrykat', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients', 'tabActivityLog'];
+const ALL_TABS = ['tabProducts', 'tabStock', 'tabAnalytics', 'tabInventory', 'tabStations', 'tabGreenCoffee', 'tabNapivfabrykat', 'tabMaterials', 'tabRecipes', 'tabOrders', 'tabClients', 'tabActivityLog', 'tabPermissions'];
+// "Доступи" — не в жодному ROLE_TABS нижче, лише в 'адмін' через
+// ALL_TABS: керування дозволами навмисно не роздається через самі
+// дозволи (див. коментар у db.js біля user_permissions).
 const ROLE_TABS = {
   'адмін': ALL_TABS,
   'тімлід': ['tabStations', 'tabGreenCoffee', 'tabNapivfabrykat'],
   'станція': ['tabStations', 'tabGreenCoffee', 'tabNapivfabrykat'],
   'бухгалтерія': ['tabStock', 'tabAnalytics', 'tabInventory', 'tabOrders'],
   'кладовщик': ['tabStock', 'tabAnalytics', 'tabInventory', 'tabOrders']
+};
+// section (як у db.js PERMISSION_SECTIONS) -> id вкладки, для показу
+// додаткових вкладок понад роль, коли Тетяна видала явний дозвіл.
+const SECTION_TO_TAB = {
+  products: 'tabProducts', stock: 'tabStock', analytics: 'tabAnalytics', inventory: 'tabInventory',
+  stations: 'tabStations', greenCoffee: 'tabGreenCoffee', napivfabrykat: 'tabNapivfabrykat',
+  materials: 'tabMaterials', recipes: 'tabRecipes', orders: 'tabOrders', clients: 'tabClients', activityLog: 'tabActivityLog'
+};
+const SECTION_LABELS = {
+  products: 'Товари', stock: 'Склад', analytics: 'Аналітика', inventory: 'Інвентаризації',
+  stations: 'Станції', greenCoffee: 'Зелена кава', napivfabrykat: 'Напівфабрикати',
+  materials: 'Розхідники', recipes: 'Рецептури блендів', orders: 'Замовлення', clients: 'Клієнти', activityLog: 'Журнал дій'
 };
 const ROLE_DEFAULT_TAB = {
   'адмін': 'products',
@@ -3629,6 +3659,53 @@ const ROLE_DEFAULT_TAB = {
   'бухгалтерія': 'stock',
   'кладовщик': 'stock'
 };
+
+// ---- Доступи (матриця користувач × розділ, лише адмін) ----
+
+async function loadPermissions() {
+  const resp = await fetch('/api/permissions');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити дозволи'); return; }
+
+  const accounts = data.accounts.filter((a) => a.role !== 'адмін');
+  const permByUser = {};
+  data.permissions.forEach((p) => {
+    if (!permByUser[p.username]) permByUser[p.username] = {};
+    permByUser[p.username][p.section] = p.level;
+  });
+
+  const headRow = document.getElementById('permissionsHeadRow');
+  headRow.innerHTML = '<th>Користувач</th>' + data.sections.map((s) => `<th>${escAttr(SECTION_LABELS[s] || s)}</th>`).join('');
+
+  const body = document.getElementById('permissionsBody');
+  const empty = document.getElementById('permissionsEmpty');
+  if (!accounts.length) { body.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+
+  body.innerHTML = accounts.map((a) => `
+    <tr>
+      <td><strong>${escAttr(a.display_name || a.username)}</strong><br><span style="color:var(--muted); font-size:11px;">${escAttr(a.username)} · ${escAttr(a.role)}</span></td>
+      ${data.sections.map((s) => {
+        const level = (permByUser[a.username] || {})[s] || '';
+        return `<td><select onchange="savePermission('${a.username}', '${s}', this.value)">
+          <option value="" ${level === '' ? 'selected' : ''}>—</option>
+          <option value="view" ${level === 'view' ? 'selected' : ''}>Перегляд</option>
+          <option value="edit" ${level === 'edit' ? 'selected' : ''}>Редагування</option>
+        </select></td>`;
+      }).join('')}
+    </tr>
+  `).join('');
+}
+
+async function savePermission(username, section, level) {
+  const resp = await fetch('/api/permissions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, section, level: level || null })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); loadPermissions(); return; }
+  showToast('Збережено');
+}
 
 async function initApp() {
   const resp = await fetch('/api/me');
@@ -3642,9 +3719,10 @@ async function initApp() {
   document.title = 'Fresh Black ERP — ' + (window._me.display_name || window._me.username);
   document.getElementById('currentUserLabel').textContent = window._me.display_name || window._me.username;
 
-  const visible = ROLE_TABS[window._me.role] || [];
+  const grantedTabs = Object.keys(window._me.permissions || {}).map((section) => SECTION_TO_TAB[section]).filter(Boolean);
+  const visible = new Set([...(ROLE_TABS[window._me.role] || []), ...grantedTabs]);
   ALL_TABS.forEach((id) => {
-    document.getElementById(id).style.display = visible.includes(id) ? '' : 'none';
+    document.getElementById(id).style.display = visible.has(id) ? '' : 'none';
   });
 
   const canManageOrders = window._me.role === 'адмін';

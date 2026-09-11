@@ -100,6 +100,26 @@ function requireRole(...roles) {
   };
 }
 
+// Те саме, що requireRole, але ще й пускає користувача з явним дозволом
+// на конкретний розділ (Тетяна роздає їх сама через вкладку "Доступи",
+// поверх ролей — нічого не забирає, лише додає). minLevel 'view' —
+// читання, 'edit' — створення/зміна; 'edit'-грант покриває й 'view'-
+// маршрути того самого розділу. Ролі в аргументах — точно ті самі, що
+// раніше в requireRole на цьому маршруті, тож без явного гранту поведінка
+// не змінюється.
+function requireSectionAccess(section, minLevel, ...roles) {
+  return async (req, res, next) => {
+    if (req.account.role === 'адмін' || roles.includes(req.account.role)) return next();
+    try {
+      const granted = await db.getUserSectionLevel(req.account.username, section);
+      if (granted === 'edit' || (granted === 'view' && minLevel === 'view')) return next();
+    } catch (error) {
+      console.error('requireSectionAccess ERROR:', error?.message || error);
+    }
+    res.status(403).json({ ok: false, error: 'Немає доступу' });
+  };
+}
+
 // Статика (сторінка, стилі, JS) віддається без авторизації — інакше
 // сторінка входу сама не змогла б завантажитись. Дані йдуть лише через
 // /api/*, який вже за authMiddleware нижче.
@@ -171,12 +191,19 @@ app.get('/api/sso-token', (req, res) => {
   }
 });
 
-app.get('/api/me', (req, res) => {
-  const { username, role, home_station, display_name } = req.account;
-  res.json({ ok: true, account: { username, role, home_station, display_name } });
+app.get('/api/me', async (req, res) => {
+  try {
+    const { username, role, home_station, display_name } = req.account;
+    const permissions = role === 'адмін' ? {} : await db.getUserPermissionsMap(username);
+    res.json({ ok: true, account: { username, role, home_station, display_name, permissions } });
+  } catch (error) {
+    console.error('GET /api/me ERROR:', error?.message || error);
+    const { username, role, home_station, display_name } = req.account;
+    res.json({ ok: true, account: { username, role, home_station, display_name, permissions: {} } });
+  }
 });
 
-app.get('/api/products', requireRole('тімлід'), async (req, res) => {
+app.get('/api/products', requireSectionAccess('products', 'view', 'тімлід'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const products = await db.listProducts({ search, activeOnly: true });
@@ -187,7 +214,7 @@ app.get('/api/products', requireRole('тімлід'), async (req, res) => {
   }
 });
 
-app.post('/api/products', requireRole(), async (req, res) => {
+app.post('/api/products', requireSectionAccess('products', 'edit'), async (req, res) => {
   try {
     const { code, name, short_name, unit, station, is_stock_item, min_stock, active, status } = req.body || {};
     if (!code || !String(code).trim()) {
@@ -212,7 +239,7 @@ app.post('/api/products', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/products/:code', requireRole(), async (req, res) => {
+app.post('/api/products/:code', requireSectionAccess('products', 'edit'), async (req, res) => {
   try {
     const { status, station, min_stock, unit, is_stock_item, category } = req.body || {};
     const product = await db.updateProductFields(req.params.code, { status, station, min_stock, unit, is_stock_item, category });
@@ -227,7 +254,7 @@ app.post('/api/products/:code', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/stock', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/stock', requireSectionAccess('stock', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const stock = await db.listStock({ search });
@@ -238,7 +265,7 @@ app.get('/api/stock', requireRole('бухгалтерія', 'кладовщик'
   }
 });
 
-app.get('/api/analytics/products', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/analytics/products', requireSectionAccess('analytics', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const analytics = await db.getProductAnalytics();
     res.json({ ok: true, analytics });
@@ -248,7 +275,7 @@ app.get('/api/analytics/products', requireRole('бухгалтерія', 'кла
   }
 });
 
-app.get('/api/analytics/materials', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/analytics/materials', requireSectionAccess('analytics', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const analytics = await db.getMaterialAnalytics();
     res.json({ ok: true, analytics });
@@ -258,7 +285,7 @@ app.get('/api/analytics/materials', requireRole('бухгалтерія', 'кл�
   }
 });
 
-app.get('/api/green-coffee', requireRole('тімлід', 'станція'), async (req, res) => {
+app.get('/api/green-coffee', requireSectionAccess('greenCoffee', 'view', 'тімлід', 'станція'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const greenCoffee = await db.listGreenCoffee({ search });
@@ -269,7 +296,7 @@ app.get('/api/green-coffee', requireRole('тімлід', 'станція'), asyn
   }
 });
 
-app.get('/api/green-coffee/movements-summary', requireRole('тімлід', 'станція'), async (req, res) => {
+app.get('/api/green-coffee/movements-summary', requireSectionAccess('greenCoffee', 'view', 'тімлід', 'станція'), async (req, res) => {
   try {
     const dateFrom = String(req.query.dateFrom || '').trim();
     const dateTo = String(req.query.dateTo || '').trim();
@@ -285,7 +312,7 @@ app.get('/api/green-coffee/movements-summary', requireRole('тімлід', 'ст
   }
 });
 
-app.post('/api/green-coffee/:code/needs-photoseparation', requireRole(), async (req, res) => {
+app.post('/api/green-coffee/:code/needs-photoseparation', requireSectionAccess('greenCoffee', 'edit'), async (req, res) => {
   try {
     const { needs_photoseparation } = req.body || {};
     const rowCount = await db.updateGreenCoffeeNeedsPhotoseparation(req.params.code, needs_photoseparation);
@@ -300,7 +327,7 @@ app.post('/api/green-coffee/:code/needs-photoseparation', requireRole(), async (
   }
 });
 
-app.post('/api/green-coffee/:code/short-names', requireRole(), async (req, res) => {
+app.post('/api/green-coffee/:code/short-names', requireSectionAccess('greenCoffee', 'edit'), async (req, res) => {
   try {
     const { napivfabrykat_names } = req.body || {};
     const rowCount = await db.updateGreenCoffeeShortNames(req.params.code, napivfabrykat_names);
@@ -315,7 +342,7 @@ app.post('/api/green-coffee/:code/short-names', requireRole(), async (req, res) 
   }
 });
 
-app.post('/api/green-coffee/:code/sap-code', requireRole(), async (req, res) => {
+app.post('/api/green-coffee/:code/sap-code', requireSectionAccess('greenCoffee', 'edit'), async (req, res) => {
   try {
     const { sap_code } = req.body || {};
     const rowCount = await db.updateProductSapCode(req.params.code, sap_code);
@@ -330,7 +357,7 @@ app.post('/api/green-coffee/:code/sap-code', requireRole(), async (req, res) => 
   }
 });
 
-app.get('/api/napivfabrykat', requireRole('тімлід', 'станція'), async (req, res) => {
+app.get('/api/napivfabrykat', requireSectionAccess('napivfabrykat', 'view', 'тімлід', 'станція'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const napivfabrykat = await db.listNapivfabrykat({ search });
@@ -341,7 +368,7 @@ app.get('/api/napivfabrykat', requireRole('тімлід', 'станція'), asy
   }
 });
 
-app.post('/api/napivfabrykat/:code/sap-code', requireRole(), async (req, res) => {
+app.post('/api/napivfabrykat/:code/sap-code', requireSectionAccess('napivfabrykat', 'edit'), async (req, res) => {
   try {
     const { sap_code } = req.body || {};
     const rowCount = await db.updateProductSapCode(req.params.code, sap_code);
@@ -356,7 +383,7 @@ app.post('/api/napivfabrykat/:code/sap-code', requireRole(), async (req, res) =>
   }
 });
 
-app.post('/api/napivfabrykat/:code/short-name', requireRole(), async (req, res) => {
+app.post('/api/napivfabrykat/:code/short-name', requireSectionAccess('napivfabrykat', 'edit'), async (req, res) => {
   try {
     const { short_name } = req.body || {};
     const rowCount = await db.updateNapivfabrykatShortName(req.params.code, short_name);
@@ -371,7 +398,7 @@ app.post('/api/napivfabrykat/:code/short-name', requireRole(), async (req, res) 
   }
 });
 
-app.post('/api/napivfabrykat/:code/needs-photoseparation', requireRole(), async (req, res) => {
+app.post('/api/napivfabrykat/:code/needs-photoseparation', requireSectionAccess('napivfabrykat', 'edit'), async (req, res) => {
   try {
     const { needs_photoseparation } = req.body || {};
     const rowCount = await db.updateNapivfabrykatNeedsPhotoseparation(req.params.code, needs_photoseparation);
@@ -386,7 +413,7 @@ app.post('/api/napivfabrykat/:code/needs-photoseparation', requireRole(), async 
   }
 });
 
-app.post('/api/napivfabrykat/:code/source', requireRole(), async (req, res) => {
+app.post('/api/napivfabrykat/:code/source', requireSectionAccess('napivfabrykat', 'edit'), async (req, res) => {
   try {
     const { source_green_coffee_code } = req.body || {};
     const product = await db.updateNapivfabrykatSource(req.params.code, source_green_coffee_code);
@@ -401,7 +428,7 @@ app.post('/api/napivfabrykat/:code/source', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/napivfabrykat', requireRole(), async (req, res) => {
+app.post('/api/napivfabrykat', requireSectionAccess('napivfabrykat', 'edit'), async (req, res) => {
   try {
     const { source_green_coffee_code, short_name, needs_photoseparation, sap_code } = req.body || {};
     if (!source_green_coffee_code) {
@@ -416,7 +443,7 @@ app.post('/api/napivfabrykat', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/products/:code/rename', requireRole(), async (req, res) => {
+app.post('/api/products/:code/rename', requireSectionAccess('products', 'edit'), async (req, res) => {
   try {
     const { new_code } = req.body || {};
     await db.renameProductCode(req.params.code, new_code);
@@ -471,7 +498,7 @@ app.post('/api/roasting-batches/:id/photoseparation', requireRole('тімлід'
   }
 });
 
-app.get('/api/stations', requireRole('тімлід', 'станція'), async (req, res) => {
+app.get('/api/stations', requireSectionAccess('stations', 'view', 'тімлід', 'станція'), async (req, res) => {
   try {
     const stations = await db.listStations();
     res.json({ ok: true, stations });
@@ -481,7 +508,7 @@ app.get('/api/stations', requireRole('тімлід', 'станція'), async (r
   }
 });
 
-app.get('/api/stations-status', requireRole('тімлід', 'станція'), async (req, res) => {
+app.get('/api/stations-status', requireSectionAccess('stations', 'view', 'тімлід', 'станція'), async (req, res) => {
   try {
     const stations = await db.listStationsWithStatus();
     res.json({ ok: true, stations });
@@ -491,7 +518,7 @@ app.get('/api/stations-status', requireRole('тімлід', 'станція'), a
   }
 });
 
-app.post('/api/stations/:name', requireRole(), async (req, res) => {
+app.post('/api/stations/:name', requireSectionAccess('stations', 'edit'), async (req, res) => {
   try {
     const { note } = req.body || {};
     const station = await db.updateStation(req.params.name, { note });
@@ -506,7 +533,7 @@ app.post('/api/stations/:name', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/stations/:name/operations', requireRole(), async (req, res) => {
+app.post('/api/stations/:name/operations', requireSectionAccess('stations', 'edit'), async (req, res) => {
   try {
     const { operation_name, base_norm, target_norm, unit } = req.body || {};
     const operation = await db.upsertStationOperation({ station: req.params.name, operation_name, base_norm, target_norm, unit });
@@ -517,7 +544,7 @@ app.post('/api/stations/:name/operations', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/stations/:name/employees', requireRole(), async (req, res) => {
+app.post('/api/stations/:name/employees', requireSectionAccess('stations', 'edit'), async (req, res) => {
   try {
     const { employee_name, personal_norm, personal_norm_unit, schedule_note } = req.body || {};
     if (!employee_name) {
@@ -532,7 +559,7 @@ app.post('/api/stations/:name/employees', requireRole(), async (req, res) => {
   }
 });
 
-app.delete('/api/station-operations/:id', requireRole(), async (req, res) => {
+app.delete('/api/station-operations/:id', requireSectionAccess('stations', 'edit'), async (req, res) => {
   try {
     const rowCount = await db.deleteStationOperation(Number(req.params.id));
     if (!rowCount) {
@@ -546,7 +573,7 @@ app.delete('/api/station-operations/:id', requireRole(), async (req, res) => {
   }
 });
 
-app.delete('/api/station-employees/:id', requireRole(), async (req, res) => {
+app.delete('/api/station-employees/:id', requireSectionAccess('stations', 'edit'), async (req, res) => {
   try {
     const rowCount = await db.deleteStationEmployee(Number(req.params.id));
     if (!rowCount) {
@@ -624,7 +651,7 @@ app.post('/api/tasks/:id/status', requireRole('тімлід', 'станція'),
   }
 });
 
-app.get('/api/materials', requireRole('кладовщик'), async (req, res) => {
+app.get('/api/materials', requireSectionAccess('materials', 'view', 'кладовщик'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const materialType = String(req.query.materialType || '').trim();
@@ -637,7 +664,7 @@ app.get('/api/materials', requireRole('кладовщик'), async (req, res) =>
   }
 });
 
-app.post('/api/materials', requireRole(), async (req, res) => {
+app.post('/api/materials', requireSectionAccess('materials', 'edit'), async (req, res) => {
   try {
     const { name, material_type, size_label, station, unit, min_stock, reorder_period_days } = req.body || {};
     if (!name || !String(name).trim()) {
@@ -652,7 +679,7 @@ app.post('/api/materials', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/materials/:id', requireRole(), async (req, res) => {
+app.post('/api/materials/:id', requireSectionAccess('materials', 'edit'), async (req, res) => {
   try {
     const { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status, sap_code } = req.body || {};
     const material = await db.updateMaterialFields(Number(req.params.id), { station, min_stock, unit, reorder_period_days, material_type, availability_status, process_status, sap_code });
@@ -667,7 +694,7 @@ app.post('/api/materials/:id', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/materials/:id/movements', requireRole(), async (req, res) => {
+app.get('/api/materials/:id/movements', requireSectionAccess('materials', 'view'), async (req, res) => {
   try {
     const movements = await db.listMaterialMovements(Number(req.params.id));
     res.json({ ok: true, movements });
@@ -677,7 +704,7 @@ app.get('/api/materials/:id/movements', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/material-movements', requireRole(), async (req, res) => {
+app.post('/api/material-movements', requireSectionAccess('materials', 'edit'), async (req, res) => {
   try {
     const { material_id, movement_type, qty, note, movement_date, created_by } = req.body || {};
     if (!material_id || !movement_type || qty === undefined || qty === null) {
@@ -693,7 +720,7 @@ app.post('/api/material-movements', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/products/:code/specs', requireRole(), async (req, res) => {
+app.get('/api/products/:code/specs', requireSectionAccess('recipes', 'view'), async (req, res) => {
   try {
     const specs = await db.listProductSpecs(req.params.code);
     res.json({ ok: true, specs });
@@ -703,7 +730,7 @@ app.get('/api/products/:code/specs', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/products/:code/specs', requireRole(), async (req, res) => {
+app.post('/api/products/:code/specs', requireSectionAccess('recipes', 'edit'), async (req, res) => {
   try {
     const { role, material_id, qty_per_unit } = req.body || {};
     if (!role || !material_id) {
@@ -718,7 +745,7 @@ app.post('/api/products/:code/specs', requireRole(), async (req, res) => {
   }
 });
 
-app.delete('/api/product-specs/:id', requireRole(), async (req, res) => {
+app.delete('/api/product-specs/:id', requireSectionAccess('recipes', 'edit'), async (req, res) => {
   try {
     const rowCount = await db.deleteProductSpec(Number(req.params.id));
     if (!rowCount) {
@@ -742,7 +769,7 @@ app.get('/api/blend-recipes', requireRole('тімлід', 'станція'), asy
   }
 });
 
-app.post('/api/orders/import', requireRole(), upload.single('file'), async (req, res) => {
+app.post('/api/orders/import', requireSectionAccess('orders', 'edit'), upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       res.status(400).json({ ok: false, error: 'Файл не додано' });
@@ -758,7 +785,7 @@ app.post('/api/orders/import', requireRole(), upload.single('file'), async (req,
   }
 });
 
-app.get('/api/orders/import-duplicates', requireRole(), async (req, res) => {
+app.get('/api/orders/import-duplicates', requireSectionAccess('orders', 'view'), async (req, res) => {
   try {
     const duplicates = await db.listImportDuplicates();
     res.json({ ok: true, duplicates });
@@ -768,7 +795,7 @@ app.get('/api/orders/import-duplicates', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/orders', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/orders', requireSectionAccess('orders', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const status = String(req.query.status || '').trim();
@@ -780,7 +807,7 @@ app.get('/api/orders', requireRole('бухгалтерія', 'кладовщик
   }
 });
 
-app.get('/api/orders/:orderNumber', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/orders/:orderNumber', requireSectionAccess('orders', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const lines = await db.getOrderLines(req.params.orderNumber);
     res.json({ ok: true, lines });
@@ -790,7 +817,7 @@ app.get('/api/orders/:orderNumber', requireRole('бухгалтерія', 'кл�
   }
 });
 
-app.post('/api/orders/:orderNumber/lines', requireRole('кладовщик'), async (req, res) => {
+app.post('/api/orders/:orderNumber/lines', requireSectionAccess('orders', 'edit', 'кладовщик'), async (req, res) => {
   try {
     const { product_code, product_name, qty } = req.body || {};
     const line = await db.addOrderLine(req.params.orderNumber, { product_code, product_name, qty });
@@ -801,7 +828,7 @@ app.post('/api/orders/:orderNumber/lines', requireRole('кладовщик'), as
   }
 });
 
-app.post('/api/order-lines/:lineId/overrides', requireRole('кладовщик'), async (req, res) => {
+app.post('/api/order-lines/:lineId/overrides', requireSectionAccess('orders', 'edit', 'кладовщик'), async (req, res) => {
   try {
     const { role, material_id, note } = req.body || {};
     if (!role || !material_id) {
@@ -822,7 +849,7 @@ app.post('/api/order-lines/:lineId/overrides', requireRole('кладовщик')
   }
 });
 
-app.delete('/api/order-line-overrides/:id', requireRole('кладовщик'), async (req, res) => {
+app.delete('/api/order-line-overrides/:id', requireSectionAccess('orders', 'edit', 'кладовщик'), async (req, res) => {
   try {
     const rowCount = await db.deleteOrderLineOverride(Number(req.params.id));
     if (!rowCount) {
@@ -836,7 +863,7 @@ app.delete('/api/order-line-overrides/:id', requireRole('кладовщик'), a
   }
 });
 
-app.post('/api/orders/:orderNumber/status', requireRole('кладовщик'), async (req, res) => {
+app.post('/api/orders/:orderNumber/status', requireSectionAccess('orders', 'edit', 'кладовщик'), async (req, res) => {
   try {
     const { status, note } = req.body || {};
     if (!db.ORDER_STATUSES.includes(status)) {
@@ -855,7 +882,7 @@ app.post('/api/orders/:orderNumber/status', requireRole('кладовщик'), a
   }
 });
 
-app.post('/api/order-lines/:lineId/status', requireRole('кладовщик'), async (req, res) => {
+app.post('/api/order-lines/:lineId/status', requireSectionAccess('orders', 'edit', 'кладовщик'), async (req, res) => {
   try {
     const { status, note } = req.body || {};
     if (!db.ORDER_STATUSES.includes(status)) {
@@ -874,7 +901,7 @@ app.post('/api/order-lines/:lineId/status', requireRole('кладовщик'), a
   }
 });
 
-app.post('/api/order-lines/:lineId/delivery', requireRole('кладовщик'), async (req, res) => {
+app.post('/api/order-lines/:lineId/delivery', requireSectionAccess('orders', 'edit', 'кладовщик'), async (req, res) => {
   try {
     const { delivery_method, ttn } = req.body || {};
     const rowCount = await db.updateOrderLineDelivery(Number(req.params.lineId), delivery_method, ttn);
@@ -889,7 +916,7 @@ app.post('/api/order-lines/:lineId/delivery', requireRole('кладовщик'),
   }
 });
 
-app.post('/api/order-lines/:lineId/substitute', requireRole('кладовщик'), async (req, res) => {
+app.post('/api/order-lines/:lineId/substitute', requireSectionAccess('orders', 'edit', 'кладовщик'), async (req, res) => {
   try {
     const { product_code, qty, note } = req.body || {};
     if (!product_code) {
@@ -904,7 +931,7 @@ app.post('/api/order-lines/:lineId/substitute', requireRole('кладовщик'
   }
 });
 
-app.post('/api/orders/:orderNumber/delivery', requireRole('кладовщик'), async (req, res) => {
+app.post('/api/orders/:orderNumber/delivery', requireSectionAccess('orders', 'edit', 'кладовщик'), async (req, res) => {
   try {
     const { delivery_method, ttn } = req.body || {};
     const rowCount = await db.updateOrderDelivery(req.params.orderNumber, delivery_method, ttn);
@@ -919,7 +946,7 @@ app.post('/api/orders/:orderNumber/delivery', requireRole('кладовщик'),
   }
 });
 
-app.get('/api/clients', requireRole(), async (req, res) => {
+app.get('/api/clients', requireSectionAccess('clients', 'view'), async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const clients = await db.listClients({ search });
@@ -930,7 +957,7 @@ app.get('/api/clients', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/clients/:customerCode', requireRole(), async (req, res) => {
+app.post('/api/clients/:customerCode', requireSectionAccess('clients', 'edit'), async (req, res) => {
   try {
     const { partner_group, client_type, manager } = req.body || {};
     const client = await db.updateClient(req.params.customerCode, { partner_group, client_type, manager });
@@ -945,7 +972,7 @@ app.post('/api/clients/:customerCode', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/products/:code/movements', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/products/:code/movements', requireSectionAccess('stock', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const movements = await db.listMovements(req.params.code);
     res.json({ ok: true, movements });
@@ -955,7 +982,7 @@ app.get('/api/products/:code/movements', requireRole('бухгалтерія', '
   }
 });
 
-app.get('/api/inventory/dates', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/inventory/dates', requireSectionAccess('inventory', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const dates = await db.listInventoryDates();
     res.json({ ok: true, dates });
@@ -965,7 +992,7 @@ app.get('/api/inventory/dates', requireRole('бухгалтерія', 'клад�
   }
 });
 
-app.get('/api/inventory/dates/:date', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/inventory/dates/:date', requireSectionAccess('inventory', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const section = String(req.query.section || 'stock');
     const detail = await db.listInventoryDetail(req.params.date, section);
@@ -976,7 +1003,7 @@ app.get('/api/inventory/dates/:date', requireRole('бухгалтерія', 'к�
   }
 });
 
-app.get('/api/inventory/comparison', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/inventory/comparison', requireSectionAccess('inventory', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const section = String(req.query.section || 'stock');
     const comparison = await db.listInventoryComparison(section);
@@ -987,7 +1014,7 @@ app.get('/api/inventory/comparison', requireRole('бухгалтерія', 'кл
   }
 });
 
-app.get('/api/inventory/export/:date', requireRole('бухгалтерія', 'кладовщик'), async (req, res) => {
+app.get('/api/inventory/export/:date', requireSectionAccess('inventory', 'view', 'бухгалтерія', 'кладовщик'), async (req, res) => {
   try {
     const sectionsData = {};
     for (const section of db.INVENTORY_SECTION_KEYS) {
@@ -1003,7 +1030,7 @@ app.get('/api/inventory/export/:date', requireRole('бухгалтерія', 'к
   }
 });
 
-app.post('/api/inventory/import', requireRole('бухгалтерія', 'кладовщик'), upload.single('file'), async (req, res) => {
+app.post('/api/inventory/import', requireSectionAccess('inventory', 'edit', 'бухгалтерія', 'кладовщик'), upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       res.status(400).json({ ok: false, error: 'Файл не додано' });
@@ -1023,7 +1050,7 @@ app.post('/api/inventory/import', requireRole('бухгалтерія', 'кла�
   }
 });
 
-app.post('/api/movements', requireRole('кладовщик'), async (req, res) => {
+app.post('/api/movements', requireSectionAccess('stock', 'edit', 'кладовщик'), async (req, res) => {
   try {
     const { product_code, movement_type, qty, note, movement_date, created_by } = req.body || {};
 
@@ -1050,7 +1077,7 @@ app.post('/api/movements', requireRole('кладовщик'), async (req, res) =
 // Журнал дій — лише адмін: об'єднана стрічка рухів товарів і матеріалів
 // (хто, коли, що саме зробив), з можливістю виправити чи видалити рух
 // заднім числом (напр. комірник переплутав тип руху).
-app.get('/api/activity-log', requireRole(), async (req, res) => {
+app.get('/api/activity-log', requireSectionAccess('activityLog', 'view'), async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 100, 500);
     const offset = Number(req.query.offset) || 0;
@@ -1065,7 +1092,7 @@ app.get('/api/activity-log', requireRole(), async (req, res) => {
   }
 });
 
-app.get('/api/activity-log/actors', requireRole(), async (req, res) => {
+app.get('/api/activity-log/actors', requireSectionAccess('activityLog', 'view'), async (req, res) => {
   try {
     const actors = await db.listActivityLogActors();
     res.json({ ok: true, actors });
@@ -1075,7 +1102,7 @@ app.get('/api/activity-log/actors', requireRole(), async (req, res) => {
   }
 });
 
-app.post('/api/activity-log/:kind/:id', requireRole(), async (req, res) => {
+app.post('/api/activity-log/:kind/:id', requireSectionAccess('activityLog', 'edit'), async (req, res) => {
   try {
     const { movement_type, qty, note, movement_date } = req.body || {};
     if (!movement_type || qty === undefined || qty === null) {
@@ -1094,7 +1121,7 @@ app.post('/api/activity-log/:kind/:id', requireRole(), async (req, res) => {
   }
 });
 
-app.delete('/api/activity-log/:kind/:id', requireRole(), async (req, res) => {
+app.delete('/api/activity-log/:kind/:id', requireSectionAccess('activityLog', 'edit'), async (req, res) => {
   try {
     const rowCount = await db.deleteActivityLogEntry(req.params.kind, Number(req.params.id));
     if (!rowCount) {
@@ -1134,6 +1161,34 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
   } catch (error) {
     console.error('POST /api/accounts/:username/password ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити пароль' });
+  }
+});
+
+// Свідомо requireRole() без параметрів (адмін-only, без винятків) —
+// це маршрут КЕРУВАННЯ самими дозволами, розділ "accounts" сюди не
+// входить (див. коментар біля CREATE TABLE user_permissions).
+app.get('/api/permissions', requireRole(), async (req, res) => {
+  try {
+    const [accounts, permissions] = await Promise.all([db.listAccounts(), db.listAllPermissions()]);
+    res.json({ ok: true, accounts, permissions, sections: db.PERMISSION_SECTIONS, levels: db.PERMISSION_LEVELS });
+  } catch (error) {
+    console.error('GET /api/permissions ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати дозволи' });
+  }
+});
+
+app.post('/api/permissions', requireRole(), async (req, res) => {
+  try {
+    const { username, section, level } = req.body || {};
+    if (!username || !section) {
+      res.status(400).json({ ok: false, error: 'Потрібні користувач і розділ' });
+      return;
+    }
+    const permission = await db.setUserPermission(username, section, level || null, req.account.username);
+    res.json({ ok: true, permission });
+  } catch (error) {
+    console.error('POST /api/permissions ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти дозвіл' });
   }
 });
 
@@ -1201,6 +1256,21 @@ app.post('/api/accounts/:username/password', requireRole(), async (req, res) => 
 
     for (const account of seedAccounts) {
       await db.createAccountIfMissingWithHash(account);
+    }
+
+    // Одноразовий грант, який Тетяна попросила: kovalk (Коваль Катерина,
+    // бекап тімліда) отримує редагування на товарах/складі/зеленій каві/
+    // напівфабрикатах/розхідниках/рецептурах блендів/замовленнях. Лише
+    // якщо в неї взагалі ще немає жодного дозволу (перший запуск після
+    // цього деплою) — далі вона керує своїми дозволами сама через вкладку
+    // "Доступи", і цей код більше їх не чіпає.
+    const KOVALK_INITIAL_GRANTS = ['products', 'stock', 'greenCoffee', 'napivfabrykat', 'materials', 'recipes', 'orders'];
+    const kovalkExistingPermissions = await db.getUserPermissionsMap('kovalk');
+    if (Object.keys(kovalkExistingPermissions).length === 0) {
+      for (const section of KOVALK_INITIAL_GRANTS) {
+        await db.setUserPermission('kovalk', section, 'edit', 'seed');
+      }
+      console.log(`Granted kovalk edit access to: ${KOVALK_INITIAL_GRANTS.join(', ')}`);
     }
 
     const INVENTORY_BASELINE_NOTE = 'Інвентаризація 02.08.2026 (файл від Тетяни)';

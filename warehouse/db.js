@@ -5,6 +5,12 @@ import crypto from 'crypto';
 const { Pool } = pg;
 
 const ACCOUNT_ROLES = ['адмін', 'тімлід', 'станція', 'бухгалтерія', 'кладовщик'];
+// Ті самі розділи, що й вкладки інтерфейсу (ALL_TABS у public/index.html,
+// без "tab"-префіксу) — тримати два списки синхронізованими вручну, назви
+// збігаються з id вкладок. "accounts" навмисно відсутній (див. коментар
+// біля CREATE TABLE user_permissions).
+const PERMISSION_SECTIONS = ['products', 'stock', 'analytics', 'inventory', 'stations', 'greenCoffee', 'napivfabrykat', 'materials', 'recipes', 'orders', 'clients', 'activityLog'];
+const PERMISSION_LEVELS = ['view', 'edit'];
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL
@@ -328,6 +334,24 @@ async function initSchema() {
       active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Дрібногранулярні дозволи поверх ролей — Тетяна сама роздає й бачить
+    -- через вкладку "Доступи" (адмін-only), без втручання розробника.
+    -- Роль лишається базовим рівнем доступу (нічого не відбирає); грант
+    -- тут — це ЩЕ доступ до конкретного розділу понад роль: 'view'
+    -- (бачити розділ) або 'edit' (створювати/змінювати в ньому). 'адмін'
+    -- завжди має все, гранти для нього не потрібні й не показуються.
+    -- Розділ "accounts" (керування акаунтами й самими доступами) свідомо
+    -- НЕ входить у список секцій, які можна роздавати — інакше можна було
+    -- б через дозволи видати собі ще дозволів.
+    CREATE TABLE IF NOT EXISTS user_permissions (
+      username TEXT NOT NULL REFERENCES accounts(username),
+      section TEXT NOT NULL,
+      level TEXT NOT NULL,
+      granted_by TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (username, section)
     );
 
     -- Сесії входу: замінили Basic Auth (браузер кешує його логін/пароль
@@ -3147,6 +3171,46 @@ async function listAccounts() {
   return rows;
 }
 
+// Усі гранти одразу (для матриці "хто що бачить" на вкладці "Доступи") —
+// невелика таблиця, зручніше й дешевше за N окремих запитів на екран.
+async function listAllPermissions() {
+  const { rows } = await pool.query('SELECT username, section, level FROM user_permissions ORDER BY username, section');
+  return rows;
+}
+
+// { section: level } для одного користувача — віддається йому самому в
+// /api/me, щоб фронтенд показав додаткові вкладки понад роль.
+async function getUserPermissionsMap(username) {
+  const { rows } = await pool.query('SELECT section, level FROM user_permissions WHERE username = $1', [username]);
+  return Object.fromEntries(rows.map((r) => [r.section, r.level]));
+}
+
+async function getUserSectionLevel(username, section) {
+  const { rows } = await pool.query(
+    'SELECT level FROM user_permissions WHERE username = $1 AND section = $2',
+    [username, section]
+  );
+  return rows[0]?.level || null;
+}
+
+// level === null/'' прибирає грант (повернення до "лише за роллю").
+async function setUserPermission(username, section, level, grantedBy) {
+  if (!PERMISSION_SECTIONS.includes(section)) throw new Error(`Unknown permission section: ${section}`);
+  if (!level) {
+    await pool.query('DELETE FROM user_permissions WHERE username = $1 AND section = $2', [username, section]);
+    return null;
+  }
+  if (!PERMISSION_LEVELS.includes(level)) throw new Error(`Unknown permission level: ${level}`);
+  const { rows } = await pool.query(
+    `INSERT INTO user_permissions (username, section, level, granted_by)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (username, section) DO UPDATE SET level = $3, granted_by = $4, updated_at = now()
+     RETURNING *`,
+    [username, section, level, grantedBy || '']
+  );
+  return rows[0];
+}
+
 async function updateAccountPassword(username, newPassword) {
   const passwordHash = await bcrypt.hash(newPassword, 10);
   const { rowCount } = await pool.query(
@@ -3397,6 +3461,10 @@ export default {
   verifyAccountPassword,
   listAccounts,
   updateAccountPassword,
+  listAllPermissions,
+  getUserPermissionsMap,
+  getUserSectionLevel,
+  setUserPermission,
   createSession,
   touchSession,
   deleteSession,
@@ -3421,6 +3489,8 @@ export default {
   MATERIAL_SIGNED_TYPES,
   MATERIAL_ABSOLUTE_TYPES,
   ACCOUNT_ROLES,
+  PERMISSION_SECTIONS,
+  PERMISSION_LEVELS,
   SIGNED_TYPES,
   ABSOLUTE_TYPES
 };
