@@ -216,7 +216,9 @@ app.get('/api/dictionaries', (req, res) => {
     offboardingChecklistCategories: db.OFFBOARDING_CHECKLIST_CATEGORIES,
     offboardingChecklistStatuses: db.OFFBOARDING_CHECKLIST_STATUSES,
     recommendCompanyOptions: db.RECOMMEND_COMPANY_OPTIONS,
-    taskStatuses: db.TASK_STATUSES
+    taskStatuses: db.TASK_STATUSES,
+    taskPriorities: db.TASK_PRIORITIES,
+    taskBoardBuckets: db.TASK_BOARD_BUCKETS
   });
 });
 
@@ -1953,7 +1955,7 @@ app.post('/api/tasks', requireRole('Recruiter'), async (req, res) => {
 
 app.post('/api/tasks/:id', requireRole('Recruiter'), async (req, res) => {
   try {
-    const task = await db.updateTask(Number(req.params.id), req.body || {});
+    const task = await db.updateTask(Number(req.params.id), req.body || {}, req.account.username);
     if (!task) {
       res.status(404).json({ ok: false, error: 'Не знайдено' });
       return;
@@ -1976,6 +1978,20 @@ app.post('/api/tasks/:id/status', requireRole('Recruiter'), async (req, res) => 
   } catch (error) {
     console.error('POST /api/tasks/:id/status ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити статус' });
+  }
+});
+
+app.post('/api/tasks/:id/move', requireRole('Recruiter'), async (req, res) => {
+  try {
+    const task = await db.moveTaskToBoardBucket(Number(req.params.id), (req.body || {}).bucket, req.account.username);
+    if (!task) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, task });
+  } catch (error) {
+    console.error('POST /api/tasks/:id/move ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося перемістити задачу' });
   }
 });
 
