@@ -179,6 +179,15 @@
   .funnelCard .funnelVacancy { color: var(--accent2); font-size: 12px; margin-top: 2px; }
   .funnelCard .funnelMeta { color: var(--muted); font-size: 11px; margin-top: 4px; }
   #journeyMapBoard .funnelColumn { max-height: 80vh; overflow-y: auto; }
+  #tasksBoard .funnelColumn { max-height: 80vh; overflow-y: auto; }
+  .taskCard-Hot { border-left: 3px solid var(--bad); }
+  .taskCard-High { border-left: 3px solid var(--warn); }
+  .taskCard-Medium { border-left: 3px solid var(--accent2); }
+  .taskCard-Low { border-left: 3px solid var(--muted); }
+  .tag.taskPriority-Hot { background: rgba(224,82,60,0.15); color: var(--bad); }
+  .tag.taskPriority-High { background: rgba(224,168,60,0.15); color: var(--warn); }
+  .tag.taskPriority-Medium { background: rgba(79,140,255,0.15); color: var(--accent2); }
+  .tag.taskPriority-Low { background: rgba(154,160,171,0.15); color: var(--muted); }
 
   .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); align-items: center; justify-content: center; padding: 16px; z-index: 10; }
   .overlay.open { display: flex; }
@@ -751,10 +760,27 @@
 <div class="overlay" id="taskOverlay">
   <div class="modal">
     <h2 id="taskModalTitle">Нова задача</h2>
+    <div class="field" id="taskCreatorWrap" style="display:none;">
+      <label>Постановник</label>
+      <div id="taskCreatorDisplay" style="padding:8px 2px; color:var(--muted); font-size:13px;"></div>
+    </div>
     <div class="field"><label>Назва</label><input type="text" id="taskTitle"></div>
-    <div class="field"><label>Опис</label><textarea id="taskDescription" rows="3"></textarea></div>
-    <div class="field"><label>Виконавець</label><select id="taskAssignee"><option value="">— не призначено —</option></select></div>
-    <div class="field"><label>Дедлайн</label><input type="date" id="taskDueDate"></div>
+    <div class="field"><label>Опис задачі</label><textarea id="taskDescription" rows="3"></textarea></div>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Виконавець</label><select id="taskAssignee"><option value="">— не призначено —</option></select></div>
+      <div class="fieldItem"><label>Пріоритет</label><select id="taskPriority"></select></div>
+    </div>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Дата постановки</label><input type="date" id="taskSetDate"></div>
+      <div class="fieldItem">
+        <label>Дедлайн <span class="ⓘ" title="Без дедлайну — задача піде в колонку «Без терміну» після взяття в роботу.">ⓘ</span></label>
+        <input type="date" id="taskDueDate">
+      </div>
+    </div>
+    <div class="field" id="taskDeadlineReasonWrap" style="display:none;">
+      <label>Причина перенесення дедлайну</label>
+      <input type="text" id="taskDeadlineReason" placeholder="чому дедлайн змінюється">
+    </div>
     <div class="modal-actions">
       <button class="secondary" id="btnDeleteTask" style="display:none; margin-right:auto;" onclick="deleteCurrentTask()">Видалити</button>
       <button class="secondary" onclick="closeOverlay('taskOverlay')">Скасувати</button>
@@ -1385,7 +1411,8 @@ const STATUS_LABELS_UK = {
   'HR Screening': 'Первинний скринінг (HR)', 'Technical/Professional': 'Технічне/Професійне', 'Final': 'Фінальне',
   'Test Task Review': 'Розгляд тестового завдання', 'Reference Check': 'Перевірка рекомендацій',
   'Scheduled': 'Заплановано', 'Completed': 'Завершено', 'No Show': "Не з'явився",
-  'To Do': 'До виконання', 'In Progress': 'В роботі', 'Done': 'Виконано', 'Cancelled': 'Скасовано'
+  'To Do': 'До виконання', 'In Progress': 'В роботі', 'Done': 'Виконано', 'Cancelled': 'Скасовано',
+  'Hot': 'Гаряча', 'High': 'Високий', 'Medium': 'Середній', 'Low': 'Низький'
 };
 function statusLabel(s) { return STATUS_LABELS_UK[s] || s; }
 function fmt(n) { return (Number(n) || 0).toLocaleString('uk-UA', { maximumFractionDigits: 2 }); }
@@ -1638,6 +1665,28 @@ function showTasksSubTab(tab) {
   if (tab === 'stats') loadTaskStats();
 }
 
+// Колонки дошки — НЕ статус напряму (принцип з Bitrix24 "Сроки", приклад
+// від Тетяни): кожна картка потрапляє в колонку за поєднанням статусу й
+// дедлайна (computeTaskBoardBucket у db.js — те саме правило тут для
+// відображення). tip — текст під ⓘ в заголовку колонки. drop: false —
+// колонка обчислюється лише з дати, перетягнути картку туди не можна
+// (стає протермінованою сама, коли настає час).
+const TASK_BUCKET_META = {
+  todo: { label: 'До виконання', tip: 'Задачу поставлено, але ще не взято в роботу.', drop: true },
+  today: { label: 'Сьогодні', tip: 'У роботі, дедлайн сьогодні.', drop: true },
+  next2weeks: { label: 'На наступні два тижні', tip: 'У роботі, заплановано на найближчий час.', drop: true },
+  noDeadline: { label: 'Без терміну', tip: 'У роботі, дата старту й дедлайн ще не визначені.', drop: true },
+  done: { label: 'Виконано', tip: 'Задача завершена.', drop: true },
+  overdue: { label: 'Протерміновані задачі', tip: 'Дедлайн минув, задача ще не виконана. Сюди картку не перетягнути — колонка рахується від дати.', drop: false },
+  cancelled: { label: 'Скасовано', tip: 'Задача скасована — стала неактуальною.', drop: true }
+};
+const TASK_BOARD_ORDER = ['todo', 'today', 'next2weeks', 'noDeadline', 'done', 'overdue', 'cancelled'];
+
+function taskPriorityHtml(priority) {
+  const icon = priority === 'Hot' ? '🔥 ' : '';
+  return `<span class="tag taskPriority-${priority}">${icon}${escAttr(statusLabel(priority))}</span>`;
+}
+
 async function loadTasksBoard() {
   await ensureRecruitmentRefsLoaded();
   const assigneeSelect = document.getElementById('taskFilterAssignee');
@@ -1654,16 +1703,18 @@ async function loadTasksBoard() {
   window._tasksCache = tasks;
 
   const board = document.getElementById('tasksBoard');
-  board.innerHTML = window._dict.taskStatuses.map((status) => {
-    const items = tasks.filter((t) => t.status === status);
+  board.innerHTML = TASK_BOARD_ORDER.map((bucket) => {
+    const meta = TASK_BUCKET_META[bucket];
+    const items = tasks.filter((t) => t.board_bucket === bucket);
     return `
-      <div class="funnelColumn" ondragover="event.preventDefault()" ondrop="taskDrop(event, '${status}')">
-        <h4><span>${escAttr(statusLabel(status))}</span><span>${items.length}</span></h4>
+      <div class="funnelColumn" ${meta.drop ? `ondragover="event.preventDefault()" ondrop="taskDrop(event, '${bucket}')"` : ''}>
+        <h4><span>${escAttr(meta.label)} <span class="ⓘ" title="${escAttr(meta.tip)}">ⓘ</span></span><span>${items.length}</span></h4>
         ${items.map((t) => `
-          <div class="funnelCard" draggable="true" ondragstart="taskDragStart(event, ${t.id})" onclick="openEditTask(${t.id})">
-            <div class="funnelCandidate">${escAttr(t.title)}</div>
+          <div class="funnelCard taskCard-${t.priority}" draggable="true" ondragstart="taskDragStart(event, ${t.id})" onclick="openEditTask(${t.id})">
+            <div class="funnelCandidate">${t.priority === 'Hot' ? '🔥 ' : ''}${escAttr(t.title)}</div>
             <div class="funnelVacancy">${t.assignee_name ? escAttr(t.assignee_name) : 'Не призначено'}</div>
             <div class="funnelMeta">${t.due_date ? (t.is_overdue ? '⚠ ' : '') + 'до ' + new Date(t.due_date).toLocaleDateString('uk-UA') : 'без дедлайну'}</div>
+            <div class="funnelMeta">${taskPriorityHtml(t.priority)}</div>
           </div>
         `).join('')}
       </div>
@@ -1676,25 +1727,39 @@ function taskDragStart(event, id) {
   event.dataTransfer.setData('text/plain', String(id));
 }
 
-async function taskDrop(event, status) {
+async function taskDrop(event, bucket) {
   event.preventDefault();
   const id = event.dataTransfer.getData('text/plain');
   if (!id) return;
-  const resp = await apiFetch('/api/tasks/' + id + '/status', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+  const resp = await apiFetch('/api/tasks/' + id + '/move', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bucket })
   });
   const data = await resp.json();
-  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  if (!data.ok) { showToast(data.error || 'Не вдалося перемістити задачу'); return; }
   loadTasksBoard();
 }
 
+function toggleTaskDeadlineReason() {
+  const dueEl = document.getElementById('taskDueDate');
+  const wasSet = !!window._editingTaskDueDateOriginal;
+  const changed = wasSet && dueEl.value !== window._editingTaskDueDateOriginal;
+  document.getElementById('taskDeadlineReasonWrap').style.display = changed ? '' : 'none';
+}
+document.getElementById('taskDueDate').addEventListener('change', toggleTaskDeadlineReason);
+
 function openAddTask() {
   window._editingTaskId = null;
+  window._editingTaskDueDateOriginal = '';
   document.getElementById('taskModalTitle').textContent = 'Нова задача';
+  document.getElementById('taskCreatorWrap').style.display = 'none';
   document.getElementById('taskTitle').value = '';
   document.getElementById('taskDescription').value = '';
   document.getElementById('taskAssignee').innerHTML = '<option value="">— не призначено —</option>' + window._employeesCache.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
+  document.getElementById('taskPriority').innerHTML = window._dict.taskPriorities.map((p) => `<option value="${p}" ${p === 'Medium' ? 'selected' : ''}>${escAttr(statusLabel(p))}</option>`).join('');
+  document.getElementById('taskSetDate').value = isoDate(new Date());
   document.getElementById('taskDueDate').value = '';
+  document.getElementById('taskDeadlineReason').value = '';
+  document.getElementById('taskDeadlineReasonWrap').style.display = 'none';
   document.getElementById('btnDeleteTask').style.display = 'none';
   document.getElementById('taskOverlay').classList.add('open');
 }
@@ -1704,11 +1769,18 @@ function openEditTask(id) {
   const t = (window._tasksCache || []).find((x) => x.id === id);
   if (!t) return;
   window._editingTaskId = id;
+  window._editingTaskDueDateOriginal = t.due_date ? t.due_date.slice(0, 10) : '';
   document.getElementById('taskModalTitle').textContent = 'Задача';
+  document.getElementById('taskCreatorWrap').style.display = '';
+  document.getElementById('taskCreatorDisplay').textContent = t.created_by_display_name || t.created_by || '—';
   document.getElementById('taskTitle').value = t.title;
   document.getElementById('taskDescription').value = t.description || '';
   document.getElementById('taskAssignee').innerHTML = '<option value="">— не призначено —</option>' + window._employeesCache.map((e) => `<option value="${e.id}" ${e.id === t.assignee_employee_id ? 'selected' : ''}>${escAttr(e.full_name)}</option>`).join('');
-  document.getElementById('taskDueDate').value = t.due_date ? t.due_date.slice(0, 10) : '';
+  document.getElementById('taskPriority').innerHTML = window._dict.taskPriorities.map((p) => `<option value="${p}" ${p === t.priority ? 'selected' : ''}>${escAttr(statusLabel(p))}</option>`).join('');
+  document.getElementById('taskSetDate').value = t.set_date ? t.set_date.slice(0, 10) : '';
+  document.getElementById('taskDueDate').value = window._editingTaskDueDateOriginal;
+  document.getElementById('taskDeadlineReason').value = '';
+  document.getElementById('taskDeadlineReasonWrap').style.display = 'none';
   document.getElementById('btnDeleteTask').style.display = '';
   document.getElementById('taskOverlay').classList.add('open');
 }
@@ -1731,8 +1803,14 @@ document.getElementById('btnSaveTask').addEventListener('click', async () => {
     title,
     description: document.getElementById('taskDescription').value.trim(),
     assignee_employee_id: document.getElementById('taskAssignee').value || null,
+    priority: document.getElementById('taskPriority').value,
+    set_date: document.getElementById('taskSetDate').value || null,
     due_date: document.getElementById('taskDueDate').value || null
   };
+  if (document.getElementById('taskDeadlineReasonWrap').style.display !== 'none') {
+    body.due_date_change_reason = document.getElementById('taskDeadlineReason').value.trim();
+    if (!body.due_date_change_reason) { showToast('Вкажи причину перенесення дедлайну'); return; }
+  }
   const url = window._editingTaskId ? '/api/tasks/' + window._editingTaskId : '/api/tasks';
   const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await resp.json();

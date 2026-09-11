@@ -26,6 +26,25 @@ const EMPLOYEE_STATUSES = [
 ];
 const POSITION_STATUSES = ['Filled', 'Vacant', 'Recruitment Active', 'Planned', 'Frozen', 'Closed'];
 const TASK_STATUSES = ['To Do', 'In Progress', 'Done', 'Cancelled'];
+const TASK_PRIORITIES = ['Hot', 'High', 'Medium', 'Low'];
+// Дошка "Задачі" — колонки не є прямим відображенням статусу (Bitrix24
+// "Сроки" — приклад від Тетяни): "До виконання" — ще не взято в роботу
+// (status To Do), "Протерміновані" — дедлайн минув (перекриває все інше,
+// крім Done/Cancelled/To Do — прострочена нерозпочата задача важливіша,
+// ніж "просто нерозпочата"), решта — активна (In Progress) задача,
+// розкладена за дедлайном. computeTaskBoardBucket() — єдине джерело цієї
+// логіки, використовується і на бекенді (listTasks), і при перетягуванні
+// картки (moveTaskToBoardBucket).
+const TASK_BOARD_BUCKETS = ['overdue', 'todo', 'today', 'next2weeks', 'noDeadline', 'done', 'cancelled'];
+function computeTaskBoardBucket(status, dueDateStr, todayStr) {
+  if (status === 'Cancelled') return 'cancelled';
+  if (status === 'Done') return 'done';
+  if (dueDateStr && dueDateStr < todayStr) return 'overdue';
+  if (status === 'To Do') return 'todo';
+  if (dueDateStr === todayStr) return 'today';
+  if (!dueDateStr) return 'noDeadline';
+  return 'next2weeks';
+}
 const RESERVATION_STATUSES = ['Not Reserved', 'In Progress', 'Reserved', 'Expiring', 'Other'];
 
 // Recruitment / ATS (ТЗ розділи 9-19)
@@ -924,6 +943,15 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_hr_tasks_assignee ON hr_tasks(assignee_employee_id);
     CREATE INDEX IF NOT EXISTS idx_hr_tasks_status ON hr_tasks(status);
+    -- priority: Гаряча/Високий/Середній/Низький (ТЗ від Тетяни — дошка як
+    -- у Bitrix24). set_date: коли задачу ФАКТИЧНО поставили (могла бути
+    -- дана усно раніше, ніж заведена в системі) — окремо від created_at,
+    -- який завжди "коли натиснули Зберегти". due_date_change_reason —
+    -- причина останнього перенесення дедлайну (обов'язкова при зміні вже
+    -- встановленого дедлайну).
+    ALTER TABLE hr_tasks ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'Medium';
+    ALTER TABLE hr_tasks ADD COLUMN IF NOT EXISTS set_date DATE;
+    ALTER TABLE hr_tasks ADD COLUMN IF NOT EXISTS due_date_change_reason TEXT NOT NULL DEFAULT '';
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -4562,42 +4590,74 @@ async function listTasks({ assignee_employee_id = null, status = null, created_b
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const { rows } = await pool.query(`
-    SELECT t.*, per.full_name AS assignee_name
+    SELECT t.*, per.full_name AS assignee_name, acc.display_name AS created_by_display_name
     FROM hr_tasks t
     LEFT JOIN hr_employees e ON e.id = t.assignee_employee_id
     LEFT JOIN hr_persons per ON per.id = e.person_id
+    LEFT JOIN hr_accounts acc ON acc.username = t.created_by
     ${where}
     ORDER BY t.due_date NULLS LAST, t.created_at DESC
   `, params);
   const today = new Date().toISOString().slice(0, 10);
-  return rows.map((t) => ({
-    ...t,
-    is_overdue: !!(t.due_date && t.due_date.toISOString().slice(0, 10) < today && t.status !== 'Done' && t.status !== 'Cancelled')
-  }));
+  return rows.map((t) => {
+    const dueStr = t.due_date ? t.due_date.toISOString().slice(0, 10) : null;
+    return {
+      ...t,
+      board_bucket: computeTaskBoardBucket(t.status, dueStr, today),
+      is_overdue: !!(dueStr && dueStr < today && t.status !== 'Done' && t.status !== 'Cancelled')
+    };
+  });
 }
 
-async function createTask({ title, description, assignee_employee_id, due_date }, createdBy) {
+async function createTask({ title, description, assignee_employee_id, due_date, set_date, priority }, createdBy) {
   if (!title || !title.trim()) throw new Error('Потрібна назва задачі');
+  if (priority && !TASK_PRIORITIES.includes(priority)) throw new Error(`Unknown task priority: ${priority}`);
   const { rows } = await pool.query(
-    `INSERT INTO hr_tasks (title, description, assignee_employee_id, due_date, created_by)
-     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-    [title.trim(), description || '', assignee_employee_id || null, due_date || null, createdBy || '']
+    `INSERT INTO hr_tasks (title, description, assignee_employee_id, due_date, set_date, priority, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [title.trim(), description || '', assignee_employee_id || null, due_date || null,
+      set_date || new Date().toISOString().slice(0, 10), priority || 'Medium', createdBy || '']
   );
   await writeAudit({ actor: createdBy, action: 'create', entity_type: 'task', entity_id: rows[0].id, new_value: { title } });
   return rows[0];
 }
 
-async function updateTask(id, { title, description, assignee_employee_id, due_date }) {
+// Дедлайн, що вже був встановлений, не можна перенести без причини (явне
+// прохання Тетяни) — updateTask сам виявляє "це перенесення, а не перше
+// встановлення" (було не null і стало іншим значенням) і вимагає
+// due_date_change_reason у такому випадку; причина логується в audit
+// (entity_type='task', action='deadline_change') і лишається на самій
+// задачі — видно останню причину без походу в історію.
+async function updateTask(id, { title, description, assignee_employee_id, due_date, due_date_change_reason, set_date, priority }, actor) {
+  if (priority && !TASK_PRIORITIES.includes(priority)) throw new Error(`Unknown task priority: ${priority}`);
+  const { rows: before } = await pool.query('SELECT due_date FROM hr_tasks WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  const prevDue = before[0].due_date ? before[0].due_date.toISOString().slice(0, 10) : null;
+  const nextDue = due_date || null;
+  const isReschedule = prevDue && nextDue !== prevDue;
+  if (isReschedule && !due_date_change_reason) {
+    throw new Error('Для перенесення дедлайну потрібно вказати причину');
+  }
   const { rows } = await pool.query(
     `UPDATE hr_tasks SET
        title = COALESCE($2, title),
        description = COALESCE($3, description),
        assignee_employee_id = $4,
        due_date = $5,
+       due_date_change_reason = CASE WHEN $6 THEN $7 ELSE due_date_change_reason END,
+       set_date = COALESCE($8, set_date),
+       priority = COALESCE($9, priority),
        updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [id, title ?? null, description ?? null, assignee_employee_id ?? null, due_date ?? null]
+    [id, title ?? null, description ?? null, assignee_employee_id ?? null, nextDue,
+      isReschedule, due_date_change_reason || '', set_date ?? null, priority ?? null]
   );
+  if (isReschedule) {
+    await writeAudit({
+      actor, action: 'deadline_change', entity_type: 'task', entity_id: id,
+      old_value: { due_date: prevDue }, new_value: { due_date, reason: due_date_change_reason }
+    });
+  }
   return rows[0] || null;
 }
 
@@ -4617,6 +4677,29 @@ async function updateTaskStatus(id, status, actor) {
     await writeAudit({ actor, action: 'status_change', entity_type: 'task', entity_id: id, old_value: { status: before[0].status }, new_value: { status } });
   }
   return rows[0];
+}
+
+// Перетягування картки на дошці — bucket визначає, ЯКІ поля задачі мають
+// змінитись, щоб вона туди дійсно потрапила (bucket — не окреме поле, а
+// computeTaskBoardBucket() від статусу+дедлайну). "Протерміновані" не
+// приймає перетягування — це наслідок дати, а не дія користувача.
+async function moveTaskToBoardBucket(id, bucket, actor) {
+  const today = new Date().toISOString().slice(0, 10);
+  const patch = {
+    todo: { status: 'To Do' },
+    done: { status: 'Done' },
+    cancelled: { status: 'Cancelled' },
+    today: { status: 'In Progress', due_date: today },
+    noDeadline: { status: 'In Progress', due_date: null },
+    next2weeks: { status: 'In Progress', due_date: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10) }
+  }[bucket];
+  if (!patch) throw new Error(`Bucket is not a valid drop target: ${bucket}`);
+  if (patch.status) await updateTaskStatus(id, patch.status, actor);
+  if ('due_date' in patch) {
+    await pool.query('UPDATE hr_tasks SET due_date = $2, updated_at = now() WHERE id = $1', [id, patch.due_date]);
+  }
+  const { rows } = await pool.query('SELECT * FROM hr_tasks WHERE id = $1', [id]);
+  return rows[0] || null;
 }
 
 async function deleteTask(id) {
@@ -4846,10 +4929,13 @@ export default {
   getDashboardMetrics,
   getRecruitmentMetrics,
   TASK_STATUSES,
+  TASK_PRIORITIES,
+  TASK_BOARD_BUCKETS,
   listTasks,
   createTask,
   updateTask,
   updateTaskStatus,
+  moveTaskToBoardBucket,
   deleteTask,
   getTaskCompletionStats
 };
