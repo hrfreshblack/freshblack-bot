@@ -146,6 +146,7 @@
   .funnelCard .funnelCandidate { font-weight: 700; font-size: 13px; }
   .funnelCard .funnelVacancy { color: var(--accent2); font-size: 12px; margin-top: 2px; }
   .funnelCard .funnelMeta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  #journeyMapBoard .funnelColumn { max-height: 80vh; overflow-y: auto; }
 
   .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); align-items: center; justify-content: center; padding: 16px; z-index: 10; }
   .overlay.open { display: flex; }
@@ -392,6 +393,10 @@
       <label>Коментар</label>
       <input type="text" id="appRejectionComment">
     </div>
+    <div class="field" id="appHireStartDateWrap" style="display:none;">
+      <label>Дата виходу на роботу</label>
+      <input type="date" id="appHireStartDate">
+    </div>
     <button onclick="saveApplicationStageStatus()">Зберегти</button>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Резюме</h3>
@@ -407,14 +412,27 @@
   </div>
 
   <div id="viewOnboardingTemplates" style="display:none;">
-    <div class="viewToolbar">
-      <select id="obtFilterDepartment"><option value="">— усі департаменти —</option></select>
-      <select id="obtFilterPosition"><option value="">— усі посади —</option></select>
-      <button id="btnAddOnboardingTemplate">+ Шаблон</button>
+    <div class="profileTabs">
+      <button class="active" id="adaptSubTemplates" onclick="showAdaptationSubTab('templates')">Шаблони</button>
+      <button id="adaptSubJourneyMap" onclick="showAdaptationSubTab('journeyMap')">Employee Journey Map</button>
     </div>
-    <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Бібліотека задач адаптації — компанія в цілому, або конкретний департамент/посада. При прийнятті офера (і кнопкою "Згенерувати з шаблонів" у профілі співробітника) підходящі шаблони перетворюються на особисті задачі співробітника.</p>
-    <div class="tableWrap"><table><thead><tr><th>Етап</th><th>Назва</th><th>Область</th><th>Дедлайн (днів від старту)</th><th>Відповідальний</th><th></th></tr></thead><tbody id="obtTemplatesBody"></tbody></table></div>
-    <div class="empty" id="obtTemplatesEmpty" style="display:none;">Шаблонів ще немає.</div>
+
+    <div class="profilePanel active" id="adaptPanelTemplates">
+      <div class="viewToolbar">
+        <select id="obtFilterDepartment"><option value="">— усі департаменти —</option></select>
+        <select id="obtFilterPosition"><option value="">— усі посади —</option></select>
+        <button id="btnAddOnboardingTemplate">+ Шаблон</button>
+      </div>
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Бібліотека задач адаптації — компанія в цілому, або конкретний департамент/посада. При прийнятті офера (і прямій зміні статусу заявки на "Найнято", і кнопкою "Згенерувати з шаблонів" у профілі співробітника) підходящі шаблони перетворюються на особисті задачі співробітника.</p>
+      <div class="tableWrap"><table><thead><tr><th>Етап</th><th>Назва</th><th>Область</th><th>Дедлайн (днів від старту)</th><th>Відповідальний</th><th></th></tr></thead><tbody id="obtTemplatesBody"></tbody></table></div>
+      <div class="empty" id="obtTemplatesEmpty" style="display:none;">Шаблонів ще немає.</div>
+    </div>
+
+    <div class="profilePanel" id="adaptPanelJourneyMap">
+      <p style="color: var(--muted); font-size: 12px; margin: 0 0 14px;">Повний шлях адаптації співробітника — етап за етапом, так, як його імпортовано з Employee Journey Map. Довідково: сюди потрапляють ті самі шаблони, що й у вкладці "Шаблони", лише в іншому, поетапному вигляді. Редагування — там.</p>
+      <div class="funnelBoard" id="journeyMapBoard"></div>
+      <div class="empty" id="journeyMapEmpty" style="display:none;">Шаблонів ще немає.</div>
+    </div>
   </div>
 
   <div id="viewOkr" style="display:none;">
@@ -1468,7 +1486,7 @@ function showTab(tab) {
   if (tab === 'people') loadPeople();
   if (tab === 'org') showOrgSubTab(window._orgSubTab || 'list');
   if (tab === 'recruitment') showRecruitmentSubTab(window._recruitmentSubTab || 'requests');
-  if (tab === 'onboardingTemplates') loadOnboardingTemplates();
+  if (tab === 'onboardingTemplates') showAdaptationSubTab(window._adaptationSubTab || 'templates');
   if (tab === 'okr') loadOkrView();
   if (tab === 'knowledge') showKnowledgeSubTab(window._knowledgeSubTab || 'articles');
   if (tab === 'surveys') loadSurveys();
@@ -2310,6 +2328,67 @@ async function loadOnboardingTemplates() {
 }
 document.getElementById('obtFilterDepartment').addEventListener('change', loadOnboardingTemplates);
 document.getElementById('obtFilterPosition').addEventListener('change', loadOnboardingTemplates);
+
+function showAdaptationSubTab(tab) {
+  window._adaptationSubTab = tab;
+  document.getElementById('adaptPanelTemplates').classList.toggle('active', tab === 'templates');
+  document.getElementById('adaptPanelJourneyMap').classList.toggle('active', tab === 'journeyMap');
+  document.getElementById('adaptSubTemplates').classList.toggle('active', tab === 'templates');
+  document.getElementById('adaptSubJourneyMap').classList.toggle('active', tab === 'journeyMap');
+  if (tab === 'templates') loadOnboardingTemplates();
+  if (tab === 'journeyMap') loadJourneyMap();
+}
+
+// Дедлайн шаблону — зсув у днях від дати старту (може бути й'ємним для
+// pre-onboarding задач, які треба зробити ще до виходу співробітника) —
+// перетворюємо на людську мітку етапу для наочності на дошці.
+function journeyMapStageLabel(dueOffsetDays) {
+  if (dueOffsetDays < 0) return `До старту (${-dueOffsetDays} дн.)`;
+  if (dueOffsetDays === 0) return 'День 1';
+  if (dueOffsetDays < 14) return `Перший тиждень (день ${dueOffsetDays})`;
+  return `День ${dueOffsetDays}`;
+}
+
+async function loadJourneyMap() {
+  const resp = await apiFetch('/api/onboarding-templates');
+  const data = await resp.json();
+  const board = document.getElementById('journeyMapBoard');
+  const empty = document.getElementById('journeyMapEmpty');
+  const templates = data.ok ? data.templates : [];
+  if (!templates.length) { board.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+
+  // "Day 1 / Week 1" — один milestone-бакет у базі й на нього одного
+  // виходить майже половина всіх шаблонів (pre-onboarding + день 1 +
+  // тиждень 1 разом), тому на дошці для наочності ділимо його додатково
+  // на дві колонки за знаком зсуву — сам milestone у базі не міняється.
+  const columnDefs = [
+    { label: 'Pre-onboarding', match: (t) => t.milestone === 'Day 1 / Week 1' && t.due_offset_days < 0 },
+    { label: 'Day 1 / Week 1', match: (t) => t.milestone === 'Day 1 / Week 1' && t.due_offset_days >= 0 },
+    { label: '14 days', match: (t) => t.milestone === '14 days' },
+    { label: '30 days', match: (t) => t.milestone === '30 days' },
+    { label: '60 days', match: (t) => t.milestone === '60 days' },
+    { label: '90 days', match: (t) => t.milestone === '90 days' }
+  ];
+  const columns = columnDefs.map((def) => ({
+    label: def.label,
+    items: templates.filter(def.match).sort((a, b) => a.due_offset_days - b.due_offset_days)
+  }));
+
+  board.innerHTML = columns.map((col) => `
+    <div class="funnelColumn">
+      <h4><span>${escAttr(col.label)}</span><span>${col.items.length}</span></h4>
+      ${col.items.map((t) => `
+        <div class="funnelCard" style="cursor:default;">
+          <div class="funnelCandidate">${escAttr(t.title)}</div>
+          <div class="funnelVacancy">${journeyMapStageLabel(t.due_offset_days)} · ${t.scope === 'Company' ? 'Уся компанія' : t.scope === 'Department' ? escAttr(t.department_name || '') : escAttr(t.position_title || '')}</div>
+          ${t.description ? `<div class="funnelMeta">${escAttr(t.description)}</div>` : ''}
+          ${t.owner_role ? `<div class="funnelMeta">Відповідальний: ${escAttr(t.owner_role)}</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+}
 
 function deactivateOnboardingTemplate(id) {
   apiFetch('/api/onboarding-templates/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: false }) })
@@ -4793,13 +4872,19 @@ document.getElementById('candSearch').addEventListener('input', () => {
 });
 
 // Швидка зміна статусу заявки прямо з переліку кандидатів, без відкриття
-// картки. Відмову (потрібна обов'язкова причина) сюди не пускаємо — для
-// неї відкривається картка заявки, де є поле причини.
+// картки. Відмову (потрібна обов'язкова причина) і Найнято (потрібна дата
+// виходу — від неї рахуються дедлайни онбординг-задач) сюди не пускаємо —
+// для них відкривається картка заявки з відповідним полем.
 async function quickSetApplicationStatus(applicationId, selectEl) {
   const status = selectEl.value;
   const prev = selectEl.dataset.current;
   if (status === 'Rejected by Company' || status === 'Rejected by Candidate') {
     showToast('Для відмови потрібна причина — відкрий картку кандидата');
+    selectEl.value = prev;
+    return;
+  }
+  if (status === 'Hired') {
+    showToast('Для найму потрібна дата виходу — відкрий картку кандидата');
     selectEl.value = prev;
     return;
   }
@@ -5087,6 +5172,13 @@ function toggleRejectionFields() {
     document.getElementById('appRejectionReason').innerHTML = reasons.map((s) => `<option value="${s}">${s}</option>`).join('');
     if (reasons.includes(current)) document.getElementById('appRejectionReason').value = current;
   }
+
+  const isHired = status === 'Hired';
+  document.getElementById('appHireStartDateWrap').style.display = isHired ? '' : 'none';
+  if (isHired && !document.getElementById('appHireStartDate').value) {
+    const acceptedOffer = (window._currentApplication.offers || []).find((o) => o.status === 'Accepted');
+    document.getElementById('appHireStartDate').value = acceptedOffer?.start_date ? acceptedOffer.start_date.slice(0, 10) : isoDate(new Date());
+  }
 }
 document.getElementById('appStatusSelect').addEventListener('change', toggleRejectionFields);
 
@@ -5104,6 +5196,10 @@ async function saveApplicationStageStatus() {
       body.rejection_reason = document.getElementById('appRejectionReason').value;
       body.rejection_comment = document.getElementById('appRejectionComment').value.trim();
       if (!body.rejection_reason) { showToast('Вкажи причину відмови'); return; }
+    }
+    if (status === 'Hired') {
+      body.start_date = document.getElementById('appHireStartDate').value;
+      if (!body.start_date) { showToast('Вкажи дату виходу на роботу'); return; }
     }
     const r2 = await apiFetch('/api/applications/' + currentApplicationId + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d2 = await r2.json();

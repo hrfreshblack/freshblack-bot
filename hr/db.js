@@ -2268,7 +2268,7 @@ async function updateApplicationStage(id, stage, actor) {
   return rows[0];
 }
 
-async function updateApplicationStatus(id, { status, rejection_reason, rejection_comment, next_action, next_action_date }, actor) {
+async function updateApplicationStatus(id, { status, rejection_reason, rejection_comment, next_action, next_action_date, start_date }, actor) {
   if (!APPLICATION_STATUSES.includes(status)) {
     throw new Error(`Unknown application status: ${status}`);
   }
@@ -2301,7 +2301,87 @@ async function updateApplicationStatus(id, { status, rejection_reason, rejection
     [id, status, rejection_reason ?? null, rejection_comment ?? null, next_action ?? null, next_action_date ?? null, isRejected]
   );
   await writeAudit({ actor, action: 'status_change', entity_type: 'application', entity_id: id, old_value: { status: before[0].status }, new_value: { status, rejection_reason } });
+
+  // Статус "Найнято" без формального офера (рекрутер чи HRD поставили
+  // його напряму — з переліку кандидатів, воронки чи картки заявки) теж
+  // має запускати найм: Future Employee + онбординг-задачі, а не лише
+  // прийняття офера (ТЗ: "коли по кандидату поставили статус Найнято -
+  // одразу формувались задачі з онбордингу"). Best-effort — сам факт
+  // зміни статусу заявки вже зафіксовано вище і не залежить від цього.
+  if (status === 'Hired' && before[0].status !== 'Hired') {
+    try {
+      await hireFromApplication(id, { start_date: start_date || new Date().toISOString().slice(0, 10) }, actor);
+    } catch (hireError) {
+      console.error('updateApplicationStatus hire side effect ERROR:', hireError?.message || hireError);
+    }
+  }
+
   return rows[0];
+}
+
+// Спільний "найм" без формального офера — Future Employee + employment
+// period + позначення посади/вакансії Filled + пробація/онбординг/
+// навчання, той самий набір дій, що й після Accepted-офера (ТЗ п.37), але
+// без самого офера. Ідемпотентно за person_id (одна людина — один запис
+// hr_employees): якщо співробітника вже створено раніше (цим шляхом чи
+// через офер), просто повертає його, нічого не дублює.
+async function hireFromApplication(applicationId, { start_date }, actor) {
+  const application = await getApplication(applicationId);
+  if (!application) return null;
+
+  const { rows: candRows } = await pool.query(`SELECT person_id FROM hr_candidates WHERE id = $1`, [application.candidate_id]);
+  const personId = candRows[0]?.person_id;
+  if (!personId) return null;
+
+  const { rows: existingEmp } = await pool.query(`SELECT * FROM hr_employees WHERE person_id = $1`, [personId]);
+  if (existingEmp[0]) return existingEmp[0];
+
+  const { rows: vacRows } = await pool.query(
+    `SELECT position_id, department_id, hiring_manager_employee_id FROM hr_vacancies WHERE id = $1`,
+    [application.vacancy_id]
+  );
+  const vacancy = vacRows[0];
+
+  const client = await pool.connect();
+  let employee;
+  try {
+    await client.query('BEGIN');
+    const { rows: empRows } = await client.query(
+      `INSERT INTO hr_employees (person_id, status, first_hire_date) VALUES ($1,'Future Employee',$2) RETURNING *`,
+      [personId, start_date || null]
+    );
+    employee = empRows[0];
+
+    if (vacancy?.position_id && vacancy?.department_id && start_date) {
+      await client.query(
+        `INSERT INTO hr_employment_periods (employee_id, position_id, department_id, manager_employee_id, start_date, change_reason)
+         VALUES ($1,$2,$3,$4,$5,'Статус заявки змінено на Найнято')`,
+        [employee.id, vacancy.position_id, vacancy.department_id, vacancy.hiring_manager_employee_id || null, start_date]
+      );
+      await client.query(`UPDATE hr_positions SET status = 'Filled', updated_at = now() WHERE id = $1`, [vacancy.position_id]);
+    }
+    await client.query(`UPDATE hr_vacancies SET status = 'Filled', updated_at = now() WHERE id = $1`, [application.vacancy_id]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  await writeAudit({ actor, action: 'hired_from_application', entity_type: 'employee', entity_id: employee.id, new_value: { application_id: applicationId } });
+
+  try {
+    await setProbation(employee.id, { probation_goals: '' });
+    if (vacancy?.position_id || vacancy?.department_id) {
+      await generateOnboardingTasks(employee.id, { department_id: vacancy.department_id, position_id: vacancy.position_id, start_date }, actor);
+      await generateLearningAssignments(employee.id, { department_id: vacancy.department_id, position_id: vacancy.position_id }, actor);
+    }
+  } catch (sideEffectError) {
+    console.error('hireFromApplication onboarding/probation side effect ERROR:', sideEffectError?.message || sideEffectError);
+  }
+
+  return employee;
 }
 
 // ---------------------------------------------------------------------
@@ -2506,6 +2586,46 @@ async function createOnboardingTemplate({ scope, department_id, position_id, mil
       description || '', owner_role || '', due_offset_days ?? 0, required ?? true]
   );
   return rows[0];
+}
+
+// Ідемпотентний імпорт бібліотеки шаблонів онбордингу з Employee Journey
+// Map (seed-onboarding-library.js), за принципом seedOrgImport: викликається
+// при кожному старті сервера, за збігом (scope, milestone, title) шаблон,
+// що вже існує (в т.ч. якщо Тетяна його відредагувала чи додала вручну),
+// повторно не створює.
+async function seedOnboardingLibrary(templateDefs) {
+  let imported = 0;
+  let skipped = 0;
+  for (const t of templateDefs) {
+    let departmentId = null;
+    if (t.scope === 'Department' && t.department) {
+      const { rows } = await pool.query('SELECT id FROM hr_departments WHERE name = $1', [t.department]);
+      departmentId = rows[0]?.id || null;
+      if (!departmentId) { skipped += 1; continue; }
+    }
+    // Ключ збігу включає due_offset_days: "Day 1 / Week 1" — один
+    // мілстоун-бакет і на Day 1, і на Week 1 з файлу, тому лише
+    // scope+milestone+title недостатньо — у джерелі трапляються різні
+    // задачі з однаковою назвою на цих двох підетапах.
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM hr_onboarding_templates WHERE scope = $1 AND milestone = $2 AND title = $3 AND due_offset_days = $4`,
+      [t.scope, t.milestone, t.title, t.due_offset_days ?? 0]
+    );
+    if (existing.length) { skipped += 1; continue; }
+    await createOnboardingTemplate({
+      scope: t.scope,
+      department_id: departmentId,
+      position_id: null,
+      milestone: t.milestone,
+      title: t.title,
+      description: t.description || '',
+      owner_role: t.owner_role || '',
+      due_offset_days: t.due_offset_days ?? 0,
+      required: t.required ?? true
+    });
+    imported += 1;
+  }
+  return { imported, skipped };
 }
 
 async function updateOnboardingTemplate(id, { title, description, owner_role, due_offset_days, required, active }) {
@@ -4435,6 +4555,7 @@ export default {
   createEmployee,
   importEmployeesFromRows,
   seedOrgImport,
+  seedOnboardingLibrary,
   parseVacancyRequestFieldsFromText,
   parseVacancyFieldsFromText,
   parseVacancyFileForFields,

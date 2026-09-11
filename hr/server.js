@@ -6,6 +6,7 @@ import mammoth from 'mammoth';
 import db from './db.js';
 import seedAccounts from './seed-accounts.js';
 import { DEPARTMENTS as SEED_DEPARTMENTS, POSITIONS as SEED_POSITIONS, LEGACY_TOP_LEVEL_DEPARTMENTS } from './seed-org-import.js';
+import { ONBOARDING_LIBRARY as SEED_ONBOARDING_LIBRARY } from './seed-onboarding-library.js';
 import { signSsoToken, verifySsoToken } from './sso.js';
 import { parseEmployeesFile } from './parse-employees-file.js';
 
@@ -2140,6 +2141,9 @@ app.get('/api/resumes/:id/view', async (req, res) => {
 
     const orgImportResult = await db.seedOrgImport(SEED_DEPARTMENTS, SEED_POSITIONS);
     console.log(`Org structure import: ${orgImportResult.imported} imported, ${orgImportResult.skipped} already existed`);
+
+    const onboardingLibraryResult = await db.seedOnboardingLibrary(SEED_ONBOARDING_LIBRARY);
+    console.log(`Onboarding library import: ${onboardingLibraryResult.imported} imported, ${onboardingLibraryResult.skipped} already existed`);
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);
     process.exit(1);
