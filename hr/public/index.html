@@ -16,6 +16,7 @@
     --ok: #35c281;
     --warn: #e0a83c;
     --bad: #e0523c;
+    --sidebar-w: 220px;
   }
   * { box-sizing: border-box; }
   body {
@@ -25,18 +26,49 @@
     background: var(--bg);
     color: var(--text);
   }
-  header { padding: 14px 24px 0; display: flex; flex-direction: column; position: sticky; top: 0; background: var(--bg); z-index: 20; }
-  .brandRow { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; }
-  h1 { font-size: 16px; margin: 0; font-weight: 700; display: flex; align-items: center; gap: 8px; }
-  .workspaceSwitch { font-size: 12px; color: var(--muted); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; }
-  .workspaceSwitch:hover { color: var(--text); border-color: var(--accent); }
-  nav.tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  nav.tabs button {
-    background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
-    color: var(--muted); padding: 9px 2px; font-weight: 600; font-size: 13px; cursor: pointer;
+  /* Ліва панель — завжди закріплена (position: fixed на всю висоту), не
+     зникає при скролі, на відміну від колишнього верхнього хедера. */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: var(--sidebar-w);
+    background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; z-index: 30; overflow-y: auto;
   }
-  nav.tabs button:hover { color: var(--text); }
-  nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .sidebar .brand { padding: 18px 16px 14px; }
+  h1 { font-size: 15px; margin: 0; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .sidebar nav { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; flex: 1; }
+  .navItemWithFlyout { position: relative; }
+  .sidebar nav button {
+    width: 100%; background: none; border: none; border-radius: 8px; text-align: left;
+    color: var(--muted); padding: 10px 12px; font-weight: 600; font-size: 13px; cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  }
+  .sidebar nav button:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+  .sidebar nav button.active { color: var(--text); background: rgba(201,162,75,0.14); }
+  .navFlyoutArrow { color: var(--muted); font-size: 14px; }
+  /* position: fixed, не absolute — sidebar сам скролиться (overflow-y:
+     auto), і absolute-позиціонований елемент всередині нього обрізався б
+     цим overflow, навіть виходячи за left:100%. fixed рахується відносно
+     вікна, а не sidebar, тож координати виставляються з JS (bounding rect
+     кнопки "Рекрутинг") у toggleRecruitmentFlyout(). */
+  .navFlyout {
+    display: none; position: fixed;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 6px; min-width: 210px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 40;
+    flex-direction: column; gap: 2px;
+  }
+  .navFlyout.open { display: flex; }
+  .navFlyout button {
+    width: 100%; text-align: left; background: none; border: none; color: var(--text);
+    padding: 9px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .navFlyout button:hover { background: rgba(255,255,255,0.07); }
+  .navFlyout button.active { color: var(--accent); }
+  .sidebar .sidebarFooter {
+    padding: 12px 14px 16px; border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted);
+  }
+  .workspaceSwitch { font-size: 12px; color: var(--muted); text-decoration: none; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; text-align: center; }
+  .workspaceSwitch:hover { color: var(--text); border-color: var(--accent); }
 
   .viewToolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 14px 0 14px; }
 
@@ -49,13 +81,13 @@
   button.secondary { background: transparent; color: var(--text); border-color: var(--border); }
   button.bad { background: transparent; color: var(--bad); border-color: var(--bad); }
   button:active { transform: translateY(1px); }
-  main { padding: 0 24px 40px; }
+  main { margin-left: var(--sidebar-w); padding: 24px 24px 40px; }
   .tableWrap { }
   table { width: 100%; border-collapse: collapse; min-width: 720px; }
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th {
     color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em;
-    position: sticky; top: var(--header-h, 92px); background: var(--bg); z-index: 2; box-shadow: 0 1px 0 var(--border);
+    position: sticky; top: 0; background: var(--bg); z-index: 2; box-shadow: 0 1px 0 var(--border);
   }
   tr:hover td { background: #1b1f28; }
   .clickable { cursor: pointer; }
@@ -185,21 +217,22 @@
 </div>
 
 <div id="appShell" style="display: none;">
-<header>
-  <div class="brandRow">
-    <h1>🗂 Fresh Black HR CRM</h1>
-    <div style="display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted);">
-      <a class="workspaceSwitch" href="#" onclick="switchWorkspace('https://splendid-tenderness-production-f002.up.railway.app'); return false;" title="Перейти у Виробництво (ERP)">📦 Виробництво</a>
-      <span id="currentUserLabel"></span>
-      <button class="secondary" id="btnLogout" style="padding: 5px 10px; font-size: 12px;">Вийти</button>
-    </div>
-  </div>
-  <nav class="tabs">
+<aside class="sidebar">
+  <div class="brand"><h1>🗂 Fresh Black HR CRM</h1></div>
+  <nav>
     <button id="tabDashboard" onclick="showTab('dashboard')">Дашборд</button>
     <button id="tabTasks" onclick="showTab('tasks')">Задачі</button>
     <button id="tabPeople" onclick="showTab('people')">Співробітники</button>
     <button id="tabOrg" onclick="showTab('org')">Оргструктура</button>
-    <button id="tabRecruitment" onclick="showTab('recruitment')">Рекрутинг</button>
+    <div class="navItemWithFlyout">
+      <button id="tabRecruitment" onclick="toggleRecruitmentFlyout(event)"><span>Рекрутинг</span><span class="navFlyoutArrow">›</span></button>
+      <div class="navFlyout" id="recruitmentFlyout">
+        <button data-subtab="requests" onclick="goToRecruitmentSubTab('requests')">Заявки на вакансії</button>
+        <button data-subtab="vacancies" onclick="goToRecruitmentSubTab('vacancies')">Вакансії</button>
+        <button data-subtab="candidates" onclick="goToRecruitmentSubTab('candidates')">Кандидати</button>
+        <button data-subtab="funnel" onclick="goToRecruitmentSubTab('funnel')">Воронка</button>
+      </div>
+    </div>
     <button id="tabOnboardingTemplates" onclick="showTab('onboardingTemplates')">Адаптація</button>
     <button id="tabOkr" onclick="showTab('okr')">OKR</button>
     <button id="tabKnowledge" onclick="showTab('knowledge')">Знання</button>
@@ -208,7 +241,14 @@
     <button id="tabOffboarding" onclick="showTab('offboarding')">Звільнення</button>
     <button id="tabRecruitmentMetrics" onclick="showTab('recruitmentMetrics')">Метрики найму</button>
   </nav>
-</header>
+  <div class="sidebarFooter">
+    <a class="workspaceSwitch" href="#" onclick="switchWorkspace('https://splendid-tenderness-production-f002.up.railway.app'); return false;" title="Перейти у Виробництво (ERP)">📦 Виробництво</a>
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+      <span id="currentUserLabel"></span>
+      <button class="secondary" id="btnLogout" style="padding: 5px 10px; font-size: 12px;">Вийти</button>
+    </div>
+  </div>
+</aside>
 
 <main>
 
@@ -1374,21 +1414,37 @@ async function initApp() {
   document.getElementById('appShell').style.display = '';
   document.getElementById('currentUserLabel').textContent = window._me.display_name || window._me.username;
 
-  syncHeaderHeight();
-  window.addEventListener('resize', syncHeaderHeight);
-
   await loadDictionaries();
   showTab('dashboard');
 }
 
-// Хедер тепер завжди прилипає до верху (щоб не треба було гортати вгору,
-// аби перейти на іншу вкладку) — заголовки таблиць теж липкі, тож їм
-// треба знати справжню висоту хедера, а не вгадану, інакше вони ховаються
-// під ним замість того, щоб стати одразу під ним.
-function syncHeaderHeight() {
-  const header = document.querySelector('header');
-  if (header) document.documentElement.style.setProperty('--header-h', header.offsetHeight + 'px');
+// Клік на "Рекрутинг" у боковій панелі не переходить одразу на якусь
+// сторінку — відкриває список вкладок розділу (заявка на вакансію/
+// вакансія/кандидати/воронка), щоб одразу стрибнути в потрібну, а не
+// заходити спершу в розділ і тоді ще раз обирати підвкладку.
+function toggleRecruitmentFlyout(event) {
+  event.stopPropagation();
+  const flyout = document.getElementById('recruitmentFlyout');
+  if (flyout.classList.contains('open')) { closeRecruitmentFlyout(); return; }
+  const rect = document.getElementById('tabRecruitment').getBoundingClientRect();
+  flyout.style.left = (rect.right + 6) + 'px';
+  flyout.style.top = rect.top + 'px';
+  flyout.classList.add('open');
 }
+function closeRecruitmentFlyout() {
+  document.getElementById('recruitmentFlyout').classList.remove('open');
+}
+function goToRecruitmentSubTab(subtab) {
+  closeRecruitmentFlyout();
+  window._recruitmentSubTab = subtab;
+  showTab('recruitment');
+}
+document.addEventListener('click', (e) => {
+  const flyout = document.getElementById('recruitmentFlyout');
+  if (flyout && flyout.classList.contains('open') && !flyout.contains(e.target) && !e.target.closest('#tabRecruitment')) {
+    closeRecruitmentFlyout();
+  }
+});
 
 function showLoginScreen() {
   document.getElementById('appShell').style.display = 'none';
@@ -4580,6 +4636,7 @@ function showRecruitmentSubTab(tab) {
     document.getElementById('recrPanel' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
     document.getElementById('recrSub' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
   });
+  document.querySelectorAll('#recruitmentFlyout button').forEach((b) => b.classList.toggle('active', b.dataset.subtab === tab));
   if (tab === 'requests') loadVacancyRequests();
   if (tab === 'vacancies') loadVacancies();
   if (tab === 'candidates') loadCandidates();
