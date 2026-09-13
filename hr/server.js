@@ -1981,6 +1981,21 @@ app.post('/api/tasks/:id/status', requireRole('Recruiter'), async (req, res) => 
   }
 });
 
+app.post('/api/tasks/:id/review', requireRole('Recruiter'), async (req, res) => {
+  try {
+    const { decision, comment } = req.body || {};
+    const task = await db.reviewTask(Number(req.params.id), decision, comment, req.account.username);
+    if (!task) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.json({ ok: true, task });
+  } catch (error) {
+    console.error('POST /api/tasks/:id/review ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти рішення' });
+  }
+});
+
 app.post('/api/tasks/:id/move', requireRole('Recruiter'), async (req, res) => {
   try {
     const task = await db.moveTaskToBoardBucket(Number(req.params.id), (req.body || {}).bucket, req.account.username);

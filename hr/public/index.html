@@ -764,6 +764,13 @@
       <label>Постановник</label>
       <div id="taskCreatorDisplay" style="padding:8px 2px; color:var(--muted); font-size:13px;"></div>
     </div>
+    <div class="field" id="taskReworkNote" style="display:none; background:rgba(224,82,60,0.1); border:1px solid var(--bad); border-radius:8px; padding:8px 10px; font-size:13px;">
+      <strong>На доопрацювання:</strong> <span id="taskReworkNoteText"></span>
+    </div>
+    <div class="field" id="taskStatusWrap" style="display:none;">
+      <label>Статус</label>
+      <select id="taskStatus"></select>
+    </div>
     <div class="field"><label>Назва</label><input type="text" id="taskTitle"></div>
     <div class="field"><label>Опис задачі</label><textarea id="taskDescription" rows="3"></textarea></div>
     <div class="fieldGrid">
@@ -774,12 +781,20 @@
       <div class="fieldItem"><label>Дата постановки</label><input type="date" id="taskSetDate"></div>
       <div class="fieldItem">
         <label>Дедлайн <span class="ⓘ" title="Без дедлайну — задача піде в колонку «Без терміну» після взяття в роботу.">ⓘ</span></label>
-        <input type="date" id="taskDueDate">
+        <div style="display:flex; gap:6px;">
+          <input type="date" id="taskDueDate" style="flex:1;">
+          <button type="button" class="secondary" onclick="clearTaskDueDate()" title="Прибрати дедлайн">Без терміну</button>
+        </div>
       </div>
     </div>
     <div class="field" id="taskDeadlineReasonWrap" style="display:none;">
       <label>Причина перенесення дедлайну</label>
       <input type="text" id="taskDeadlineReason" placeholder="чому дедлайн змінюється">
+    </div>
+    <div class="modal-actions" id="taskReviewActions" style="display:none;">
+      <input type="text" id="taskReworkComment" placeholder="що саме треба доопрацювати" style="flex:1;">
+      <button class="secondary" onclick="submitTaskReview('rework')">↺ На доопрацювання</button>
+      <button onclick="submitTaskReview('accept')">✓ Прийнято</button>
     </div>
     <div class="modal-actions">
       <button class="secondary" id="btnDeleteTask" style="display:none; margin-right:auto;" onclick="deleteCurrentTask()">Видалити</button>
@@ -1411,7 +1426,7 @@ const STATUS_LABELS_UK = {
   'HR Screening': 'Первинний скринінг (HR)', 'Technical/Professional': 'Технічне/Професійне', 'Final': 'Фінальне',
   'Test Task Review': 'Розгляд тестового завдання', 'Reference Check': 'Перевірка рекомендацій',
   'Scheduled': 'Заплановано', 'Completed': 'Завершено', 'No Show': "Не з'явився",
-  'To Do': 'До виконання', 'In Progress': 'В роботі', 'Done': 'Виконано', 'Cancelled': 'Скасовано',
+  'To Do': 'До виконання', 'In Progress': 'В роботі', 'Review': 'На перевірці', 'Done': 'Виконано', 'Cancelled': 'Скасовано',
   'Hot': 'Гаряча', 'High': 'Високий', 'Medium': 'Середній', 'Low': 'Низький'
 };
 function statusLabel(s) { return STATUS_LABELS_UK[s] || s; }
@@ -1676,11 +1691,19 @@ const TASK_BUCKET_META = {
   today: { label: 'Сьогодні', tip: 'У роботі, дедлайн сьогодні.', drop: true },
   next2weeks: { label: 'На наступні два тижні', tip: 'У роботі, заплановано на найближчий час.', drop: true },
   noDeadline: { label: 'Без терміну', tip: 'У роботі, дата старту й дедлайн ще не визначені.', drop: true },
-  done: { label: 'Виконано', tip: 'Задача завершена.', drop: true },
+  review: { label: 'На перевірці', tip: 'Виконавець позначив задачу виконаною — постановник має прийняти або повернути на доопрацювання. Сюди картку не перетягнути — це наслідок дії "Виконано", а не прямий вибір.', drop: false },
+  done: { label: 'Виконано', tip: 'Задача завершена й прийнята.', drop: true },
   overdue: { label: 'Протерміновані задачі', tip: 'Дедлайн минув, задача ще не виконана. Сюди картку не перетягнути — колонка рахується від дати.', drop: false },
   cancelled: { label: 'Скасовано', tip: 'Задача скасована — стала неактуальною.', drop: true }
 };
-const TASK_BOARD_ORDER = ['todo', 'today', 'next2weeks', 'noDeadline', 'done', 'overdue', 'cancelled'];
+const TASK_BOARD_ORDER = ['todo', 'today', 'next2weeks', 'noDeadline', 'review', 'done', 'overdue', 'cancelled'];
+
+// 'Review' не пропонується у випадаючому списку статусів — це проміжний
+// стан, куди задача потрапляє лише автоматично (з позначки "Виконано"
+// не-постановником), не прямий вибір.
+function taskSelectableStatuses() {
+  return window._dict.taskStatuses.filter((s) => s !== 'Review');
+}
 
 function taskPriorityHtml(priority) {
   const icon = priority === 'Hot' ? '🔥 ' : '';
@@ -1715,6 +1738,7 @@ async function loadTasksBoard() {
             <div class="funnelVacancy">${t.assignee_name ? escAttr(t.assignee_name) : 'Не призначено'}</div>
             <div class="funnelMeta">${t.due_date ? (t.is_overdue ? '⚠ ' : '') + 'до ' + new Date(t.due_date).toLocaleDateString('uk-UA') : 'без дедлайну'}</div>
             <div class="funnelMeta">${taskPriorityHtml(t.priority)}</div>
+            ${t.rework_comment ? `<div class="funnelMeta" style="color:var(--bad);">↺ ${escAttr(t.rework_comment)}</div>` : ''}
           </div>
         `).join('')}
       </div>
@@ -1736,6 +1760,12 @@ async function taskDrop(event, bucket) {
   });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося перемістити задачу'); return; }
+  // "Виконано", коли позначає не постановник, насправді йде на перевірку
+  // (updateTaskStatus у db.js) — картка опиниться не в тій колонці, куди
+  // її кинули, тож попереджаємо, щоб не виглядало як баг.
+  if (bucket === 'done' && data.task.status === 'Review') {
+    showToast('Відправлено на перевірку постановнику');
+  }
   loadTasksBoard();
 }
 
@@ -1747,11 +1777,22 @@ function toggleTaskDeadlineReason() {
 }
 document.getElementById('taskDueDate').addEventListener('change', toggleTaskDeadlineReason);
 
+// Нативний <input type="date"> на мобільних (зокрема iOS Safari) не має
+// зручного способу очистити вже вибрану дату — звідси кнопка "Без
+// терміну" поруч із полем, а не покладання на ручне стирання тексту.
+function clearTaskDueDate() {
+  document.getElementById('taskDueDate').value = '';
+  toggleTaskDeadlineReason();
+}
+
 function openAddTask() {
   window._editingTaskId = null;
   window._editingTaskDueDateOriginal = '';
   document.getElementById('taskModalTitle').textContent = 'Нова задача';
   document.getElementById('taskCreatorWrap').style.display = 'none';
+  document.getElementById('taskReworkNote').style.display = 'none';
+  document.getElementById('taskStatusWrap').style.display = 'none';
+  document.getElementById('taskReviewActions').style.display = 'none';
   document.getElementById('taskTitle').value = '';
   document.getElementById('taskDescription').value = '';
   document.getElementById('taskAssignee').innerHTML = '<option value="">— не призначено —</option>' + window._employeesCache.map((e) => `<option value="${e.id}">${escAttr(e.full_name)}</option>`).join('');
@@ -1761,6 +1802,7 @@ function openAddTask() {
   document.getElementById('taskDeadlineReason').value = '';
   document.getElementById('taskDeadlineReasonWrap').style.display = 'none';
   document.getElementById('btnDeleteTask').style.display = 'none';
+  document.getElementById('btnSaveTask').style.display = '';
   document.getElementById('taskOverlay').classList.add('open');
 }
 document.getElementById('btnAddTask').addEventListener('click', openAddTask);
@@ -1782,7 +1824,50 @@ function openEditTask(id) {
   document.getElementById('taskDeadlineReason').value = '';
   document.getElementById('taskDeadlineReasonWrap').style.display = 'none';
   document.getElementById('btnDeleteTask').style.display = '';
+
+  if (t.rework_comment) {
+    document.getElementById('taskReworkNote').style.display = '';
+    document.getElementById('taskReworkNoteText').textContent = t.rework_comment;
+  } else {
+    document.getElementById('taskReworkNote').style.display = 'none';
+  }
+
+  const isCreator = window._me && t.created_by === window._me.username;
+  if (t.status === 'Review') {
+    // Статус тут не редагується напряму — рішення лише через
+    // "Прийнято"/"На доопрацювання" (постановник) чи очікування (решта).
+    document.getElementById('taskStatusWrap').style.display = 'none';
+    if (isCreator) {
+      document.getElementById('taskReviewActions').style.display = 'flex';
+      document.getElementById('taskReworkComment').value = '';
+      document.getElementById('btnSaveTask').style.display = 'none';
+    } else {
+      document.getElementById('taskReviewActions').style.display = 'none';
+      document.getElementById('taskReworkNote').style.display = '';
+      document.getElementById('taskReworkNoteText').textContent = 'Очікує підтвердження від ' + (t.created_by_display_name || t.created_by || 'постановника') + '.';
+      document.getElementById('btnSaveTask').style.display = '';
+    }
+  } else {
+    document.getElementById('taskReviewActions').style.display = 'none';
+    document.getElementById('btnSaveTask').style.display = '';
+    document.getElementById('taskStatusWrap').style.display = '';
+    document.getElementById('taskStatus').innerHTML = taskSelectableStatuses().map((s) => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${escAttr(statusLabel(s))}</option>`).join('');
+  }
+
   document.getElementById('taskOverlay').classList.add('open');
+}
+
+async function submitTaskReview(decision) {
+  const comment = document.getElementById('taskReworkComment').value.trim();
+  if (decision === 'rework' && !comment) { showToast('Вкажи, що саме треба доопрацювати'); return; }
+  const resp = await apiFetch('/api/tasks/' + window._editingTaskId + '/review', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, comment })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти рішення'); return; }
+  closeOverlay('taskOverlay');
+  showToast(decision === 'accept' ? 'Прийнято' : 'Повернено на доопрацювання');
+  loadTasksBoard();
 }
 
 async function deleteCurrentTask() {
@@ -1815,6 +1900,26 @@ document.getElementById('btnSaveTask').addEventListener('click', async () => {
   const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+
+  // Статус — окреме поле лише в режимі редагування (не в "Нова задача") і
+  // лише коли не чекає на перевірку (там своя логіка — submitTaskReview).
+  if (window._editingTaskId && document.getElementById('taskStatusWrap').style.display !== 'none') {
+    const newStatus = document.getElementById('taskStatus').value;
+    if (newStatus !== data.task.status) {
+      const statusResp = await apiFetch('/api/tasks/' + window._editingTaskId + '/status', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: newStatus })
+      });
+      const statusData = await statusResp.json();
+      if (!statusData.ok) { showToast(statusData.error || 'Збережено, але статус змінити не вдалося'); loadTasksBoard(); return; }
+      if (newStatus === 'Done' && statusData.task.status === 'Review') {
+        closeOverlay('taskOverlay');
+        showToast('Відправлено на перевірку постановнику');
+        loadTasksBoard();
+        return;
+      }
+    }
+  }
+
   closeOverlay('taskOverlay');
   showToast('Збережено');
   loadTasksBoard();

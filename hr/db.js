@@ -25,20 +25,25 @@ const EMPLOYEE_STATUSES = [
   'Maternity/Parental Leave', 'Mobilized', 'Suspended', 'Long Absence', 'Leaving', 'Former Employee'
 ];
 const POSITION_STATUSES = ['Filled', 'Vacant', 'Recruitment Active', 'Planned', 'Frozen', 'Closed'];
-const TASK_STATUSES = ['To Do', 'In Progress', 'Done', 'Cancelled'];
+// 'Review' — не самостійний вибір користувача, а проміжний стан: коли
+// задачу позначає виконаною хтось, хто не є постановником, вона йде на
+// підтвердження постановнику (setTaskDone нижче), а не одразу в Done.
+const TASK_STATUSES = ['To Do', 'In Progress', 'Review', 'Done', 'Cancelled'];
 const TASK_PRIORITIES = ['Hot', 'High', 'Medium', 'Low'];
 // Дошка "Задачі" — колонки не є прямим відображенням статусу (Bitrix24
 // "Сроки" — приклад від Тетяни): "До виконання" — ще не взято в роботу
 // (status To Do), "Протерміновані" — дедлайн минув (перекриває все інше,
-// крім Done/Cancelled/To Do — прострочена нерозпочата задача важливіша,
-// ніж "просто нерозпочата"), решта — активна (In Progress) задача,
+// крім Done/Cancelled/Review/To Do — прострочена нерозпочата задача
+// важливіша, ніж "просто нерозпочата"), "На перевірці" — Review (чекає
+// підтвердження постановника), решта — активна (In Progress) задача,
 // розкладена за дедлайном. computeTaskBoardBucket() — єдине джерело цієї
 // логіки, використовується і на бекенді (listTasks), і при перетягуванні
 // картки (moveTaskToBoardBucket).
-const TASK_BOARD_BUCKETS = ['overdue', 'todo', 'today', 'next2weeks', 'noDeadline', 'done', 'cancelled'];
+const TASK_BOARD_BUCKETS = ['overdue', 'todo', 'today', 'next2weeks', 'noDeadline', 'review', 'done', 'cancelled'];
 function computeTaskBoardBucket(status, dueDateStr, todayStr) {
   if (status === 'Cancelled') return 'cancelled';
   if (status === 'Done') return 'done';
+  if (status === 'Review') return 'review';
   if (dueDateStr && dueDateStr < todayStr) return 'overdue';
   if (status === 'To Do') return 'todo';
   if (dueDateStr === todayStr) return 'today';
@@ -952,6 +957,9 @@ async function initSchema() {
     ALTER TABLE hr_tasks ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'Medium';
     ALTER TABLE hr_tasks ADD COLUMN IF NOT EXISTS set_date DATE;
     ALTER TABLE hr_tasks ADD COLUMN IF NOT EXISTS due_date_change_reason TEXT NOT NULL DEFAULT '';
+    -- Коментар постановника, коли він повертає задачу на доопрацювання
+    -- (setTaskReview нижче) — що саме треба виправити.
+    ALTER TABLE hr_tasks ADD COLUMN IF NOT EXISTS rework_comment TEXT NOT NULL DEFAULT '';
 
     -- Audit Log: хто/що/коли для чутливих змін (статус, компенсація,
     -- працевлаштування) — ТЗ п.3 Auditability і п.39 Audit.
@@ -4661,21 +4669,65 @@ async function updateTask(id, { title, description, assignee_employee_id, due_da
   return rows[0] || null;
 }
 
+// 'Review' не можна ставити напряму (лише через логіку нижче) — інакше
+// задача могла б застрягти в стані очікування без реальної причини.
 async function updateTaskStatus(id, status, actor) {
   if (!TASK_STATUSES.includes(status)) throw new Error(`Unknown task status: ${status}`);
-  const { rows: before } = await pool.query('SELECT status FROM hr_tasks WHERE id = $1', [id]);
+  if (status === 'Review') throw new Error('Статус "На перевірці" встановлюється автоматично, не напряму');
+  const { rows: before } = await pool.query('SELECT status, created_by FROM hr_tasks WHERE id = $1', [id]);
   if (!before[0]) return null;
+
+  // Якщо задачу позначає виконаною не той, хто її поставив — вона йде на
+  // підтвердження постановнику (Тетяна: "щоб постановнику прийшла ця
+  // задача на перевірку"), а не одразу в Done. Якщо постановник невідомий
+  // (старі задачі до цієї функції) — перевіряти нема з ким, тому одразу
+  // Done, як і для само-задач.
+  const actualStatus = (status === 'Done' && before[0].created_by && actor && actor !== before[0].created_by)
+    ? 'Review'
+    : status;
+
   const { rows } = await pool.query(
     `UPDATE hr_tasks SET
        status = $2,
        completed_at = CASE WHEN $2 = 'Done' THEN now() ELSE NULL END,
+       rework_comment = CASE WHEN $2 = 'Review' THEN '' ELSE rework_comment END,
        updated_at = now()
      WHERE id = $1 RETURNING *`,
-    [id, status]
+    [id, actualStatus]
   );
-  if (status !== before[0].status) {
-    await writeAudit({ actor, action: 'status_change', entity_type: 'task', entity_id: id, old_value: { status: before[0].status }, new_value: { status } });
+  if (actualStatus !== before[0].status) {
+    await writeAudit({ actor, action: 'status_change', entity_type: 'task', entity_id: id, old_value: { status: before[0].status }, new_value: { status: actualStatus } });
   }
+  return rows[0];
+}
+
+// Рішення постановника по задачі, яку йому повернули на перевірку.
+// 'accept' — справді виконано, стає Done. 'rework' — назад у роботу
+// (In Progress), з обов'язковим коментарем, що саме доробити.
+async function reviewTask(id, decision, comment, actor) {
+  if (!['accept', 'rework'].includes(decision)) throw new Error(`Unknown review decision: ${decision}`);
+  if (decision === 'rework' && !comment?.trim()) throw new Error('Вкажи, що саме треба доопрацювати');
+  const { rows: before } = await pool.query('SELECT status, created_by FROM hr_tasks WHERE id = $1', [id]);
+  if (!before[0]) return null;
+  if (before[0].status !== 'Review') throw new Error('Ця задача не чекає на перевірку');
+  if (actor && before[0].created_by && actor !== before[0].created_by) {
+    throw new Error('Підтвердити чи повернути задачу може лише постановник');
+  }
+
+  const newStatus = decision === 'accept' ? 'Done' : 'In Progress';
+  const { rows } = await pool.query(
+    `UPDATE hr_tasks SET
+       status = $2,
+       completed_at = CASE WHEN $2 = 'Done' THEN now() ELSE NULL END,
+       rework_comment = $3,
+       updated_at = now()
+     WHERE id = $1 RETURNING *`,
+    [id, newStatus, decision === 'rework' ? comment.trim() : '']
+  );
+  await writeAudit({
+    actor, action: decision === 'accept' ? 'review_accepted' : 'review_rework', entity_type: 'task', entity_id: id,
+    old_value: { status: 'Review' }, new_value: { status: newStatus, comment: decision === 'rework' ? comment.trim() : undefined }
+  });
   return rows[0];
 }
 
@@ -4935,6 +4987,7 @@ export default {
   createTask,
   updateTask,
   updateTaskStatus,
+  reviewTask,
   moveTaskToBoardBucket,
   deleteTask,
   getTaskCompletionStats
