@@ -156,6 +156,7 @@
   .orgNodeVacToggle { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); margin-top: 6px; cursor: pointer; }
   .orgNodeVacToggle input { width: auto; }
   .profilePanel.active { display: block; }
+  .avatar { flex-shrink: 0; }
   .fieldGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
   .fieldGrid .fieldItem label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.03em; }
   .fieldGrid .fieldItem input, .fieldGrid .fieldItem select { width: 100%; }
@@ -317,17 +318,17 @@
     <button class="secondary" onclick="showTab('people')">← До списку співробітників</button>
     <div id="employeeProfileHeader" style="margin: 16px 0;"></div>
     <div class="profileTabs">
-      <button class="active" onclick="showProfileTab('overview')">Overview</button>
-      <button onclick="showProfileTab('personal')">Personal</button>
-      <button onclick="showProfileTab('employment')">Employment</button>
-      <button onclick="showProfileTab('compensation')">Compensation</button>
-      <button onclick="showProfileTab('onboarding')">Onboarding</button>
-      <button onclick="showProfileTab('performance')">Performance</button>
+      <button class="active" onclick="showProfileTab('overview')">Огляд</button>
+      <button onclick="showProfileTab('personal')">Особисте</button>
+      <button onclick="showProfileTab('employment')">Працевлаштування</button>
+      <button onclick="showProfileTab('compensation')">Компенсація</button>
+      <button onclick="showProfileTab('onboarding')">Адаптація</button>
+      <button onclick="showProfileTab('performance')">Ефективність</button>
       <button onclick="showProfileTab('okr')">OKR / KPI</button>
-      <button onclick="showProfileTab('learning')">Learning</button>
+      <button onclick="showProfileTab('learning')">Навчання</button>
       <button onclick="showProfileTab('absences')">Відсутності</button>
       <button onclick="showProfileTab('offboarding')">Звільнення</button>
-      <button onclick="showProfileTab('changes')">Changes</button>
+      <button onclick="showProfileTab('changes')">Історія змін</button>
     </div>
     <div class="profilePanel active" id="profileOverview"></div>
     <div class="profilePanel" id="profilePersonal"></div>
@@ -406,7 +407,7 @@
         <button id="btnAddCandidate">+ Кандидат</button>
         <button class="secondary" id="btnUploadResumes">+ Завантажити резюме</button>
       </div>
-      <div class="tableWrap"><table><thead><tr><th>Дата</th><th>ПІБ</th><th>Телефон</th><th>Email</th><th>Джерело</th><th>Статус</th><th>На яку відгукнувся</th><th>На яку розглядаємо</th><th>ЗП по вакансії</th><th>Побажання по ЗП</th><th>Коментар</th></tr></thead><tbody id="candTableBody"></tbody></table></div>
+      <div class="tableWrap"><table><thead><tr><th>Дата</th><th>ПІБ</th><th>Телефон</th><th>Пошта</th><th>Джерело</th><th>Статус</th><th>На яку відгукнувся</th><th>На яку розглядаємо</th><th>ЗП по вакансії</th><th>Побажання по ЗП</th><th>Коментар</th></tr></thead><tbody id="candTableBody"></tbody></table></div>
       <div class="empty" id="candEmpty" style="display:none;">Кандидатів ще немає.</div>
     </div>
 
@@ -490,7 +491,7 @@
   <div id="viewOnboardingTemplates" style="display:none;">
     <div class="profileTabs">
       <button class="active" id="adaptSubTemplates" onclick="showAdaptationSubTab('templates')">Шаблони</button>
-      <button id="adaptSubJourneyMap" onclick="showAdaptationSubTab('journeyMap')">Employee Journey Map</button>
+      <button id="adaptSubJourneyMap" onclick="showAdaptationSubTab('journeyMap')">Карта шляху співробітника</button>
     </div>
 
     <div class="profilePanel active" id="adaptPanelTemplates">
@@ -712,8 +713,8 @@
     <div class="field"><label>ПІБ</label><input type="text" id="empFullName"></div>
     <div class="field"><label>Дата народження</label><input type="date" id="empBirthDate"></div>
     <div class="field"><label>Телефон</label><input type="text" id="empPhone"></div>
-    <div class="field"><label>Email</label><input type="text" id="empPersonalEmail"></div>
-    <div class="field"><label>Employee ID (необов'язково)</label><input type="text" id="empNumber"></div>
+    <div class="field"><label>Пошта</label><input type="text" id="empPersonalEmail"></div>
+    <div class="field"><label>Табельний номер (необов'язково)</label><input type="text" id="empNumber"></div>
     <div class="field"><label>Статус</label><select id="empStatus"></select></div>
     <div class="field"><label>Дата прийому</label><input type="date" id="empStartDate"></div>
     <div class="field"><label>Департамент</label><select id="empDepartment"><option value="">— не вказано —</option></select></div>
@@ -902,7 +903,7 @@
     <input type="hidden" id="candId">
     <div class="field"><label>ПІБ</label><input type="text" id="candFullName"></div>
     <div class="field"><label>Телефон</label><input type="text" id="candPhone"></div>
-    <div class="field"><label>Email</label><input type="text" id="candEmail"></div>
+    <div class="field"><label>Пошта</label><input type="text" id="candEmail"></div>
     <div class="field"><label>Бажана ЗП</label><input type="text" id="candDesiredSalary"></div>
     <div class="field"><label>На яку відгукнувся</label><select id="candAppliedVacancy"><option value="">— не вказано —</option></select></div>
     <div class="field"><label>Тип звернення</label><select id="candContactMethod"><option value="">— не вказано —</option></select></div>
@@ -930,7 +931,7 @@
     <p style="color:var(--muted); font-size:12px; margin:10px 0 4px;">Або створи нового:</p>
     <div class="field"><label>ПІБ нового кандидата</label><input type="text" id="appAddNewName"></div>
     <div class="field"><label>Телефон</label><input type="text" id="appAddNewPhone"></div>
-    <div class="field"><label>Email</label><input type="text" id="appAddNewEmail"></div>
+    <div class="field"><label>Пошта</label><input type="text" id="appAddNewEmail"></div>
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('addApplicationOverlay')">Скасувати</button>
       <button id="btnConfirmAddApplication">Додати</button>
@@ -1034,10 +1035,10 @@
   </div>
 </div>
 
-<!-- Модалка: Performance Review -->
+<!-- Модалка: Оцінка ефективності -->
 <div class="overlay" id="performanceReviewOverlay">
   <div class="modal" style="max-width: 620px;">
-    <h2>Новий Performance Review</h2>
+    <h2>Нова оцінка ефективності</h2>
     <div class="fieldGrid">
       <div class="fieldItem"><label>Період (текст)</label><input type="text" id="prPeriodLabel" placeholder="напр. 2026 H1"></div>
       <div class="fieldItem"><label>Статус</label><select id="prStatus"></select></div>
@@ -1329,10 +1330,10 @@
   </div>
 </div>
 
-<!-- Модалка: Exit Interview -->
+<!-- Модалка: Вихідне інтерв'ю -->
 <div class="overlay" id="exitInterviewOverlay">
   <div class="modal" style="max-width: 640px;">
-    <h2>Exit Interview</h2>
+    <h2>Вихідне інтерв'ю</h2>
     <div class="fieldGrid">
       <div class="fieldItem"><label>Основна причина</label><input type="text" id="eiPrimaryReason"></div>
       <div class="fieldItem"><label>Рекомендує компанію</label><select id="eiRecommendCompany"><option value="">—</option></select></div>
@@ -1961,11 +1962,11 @@ async function loadDashboard() {
   const departments = orgData.departments.length;
 
   document.getElementById('dashboardKpis').innerHTML = [
-    kpiCardHtml(active.length, 'Active headcount', 'Співробітники зі статусом Active, Probation або Part-time.'),
-    kpiCardHtml(probation.length, 'На випробувальному', 'Співробітники зі статусом Probation.'),
-    kpiCardHtml(vacant.length, 'Вакантні посади', 'Посади зі статусом Vacant або Recruitment Active.'),
+    kpiCardHtml(active.length, 'Активна чисельність', 'Співробітники зі статусом Активний, Випробувальний термін або Часткова зайнятість.'),
+    kpiCardHtml(probation.length, 'На випробувальному', 'Співробітники зі статусом Випробувальний термін.'),
+    kpiCardHtml(vacant.length, 'Вакантні посади', 'Посади зі статусом Вакантна або Йде підбір.'),
     kpiCardHtml(departments, 'Департаментів', ''),
-    kpiCardHtml(employees.length, 'Усього в системі', 'Усі картки, включно з Future Employee та Former Employee.')
+    kpiCardHtml(employees.length, 'Усього в системі', 'Усі картки, включно з Майбутній співробітник та Колишній співробітник.')
   ].join('');
 
   if (!metricsData.ok) return;
@@ -1974,13 +1975,13 @@ async function loadDashboard() {
   document.getElementById('dashboardRecruitmentKpis').innerHTML = [
     kpiCardHtml(
       m.timeToFillDays != null ? m.timeToFillDays + ' дн.' : '—',
-      'Час закриття вакансії (Time to Fill)',
-      'Середня кількість днів від створення вакансії до переходу в статус Filled. Рахується по вже закритих вакансіях (' + m.filledVacanciesCount + ' шт.).'
+      'Час закриття вакансії',
+      'Середня кількість днів від створення вакансії до переходу в статус Заповнена. Рахується по вже закритих вакансіях (' + m.filledVacanciesCount + ' шт.).'
     ),
     kpiCardHtml(
       Object.values(m.funnel).reduce((s, v) => s + v, 0),
       'Активних заявок у воронці',
-      'Сума заявок кандидатів (Application) зі статусом Active по всіх етапах.'
+      'Сума заявок кандидатів зі статусом Активна по всіх етапах.'
     )
   ].join('');
 
@@ -2034,11 +2035,11 @@ async function loadRecruitmentMetrics() {
   const m = data.metrics;
 
   document.getElementById('rmVacancyKpis').innerHTML = [
-    kpiCardHtml(m.openVacancies, 'Відкриті вакансії', 'Вакансії зі статусом Open.'),
-    kpiCardHtml(m.onHoldVacancies, 'Заморожені вакансії', 'Вакансії зі статусом On Hold.'),
+    kpiCardHtml(m.openVacancies, 'Відкриті вакансії', 'Вакансії зі статусом Відкрита.'),
+    kpiCardHtml(m.onHoldVacancies, 'Заморожені вакансії', 'Вакансії зі статусом Призупинена.'),
     kpiCardHtml(m.newVacancies30d, 'Нові вакансії (30 дн)', 'Вакансії, створені за останні 30 днів.'),
-    kpiCardHtml(m.closedVacancies30d, 'Закриті вакансії (30 дн)', 'Вакансії зі статусом Filled/Cancelled/Closed, оновлені за останні 30 днів.'),
-    kpiCardHtml(m.avgVacancyAgeDays != null ? m.avgVacancyAgeDays + ' дн.' : '—', 'Середній вік відкритих вакансій', 'Середня кількість днів від створення до сьогодні серед вакансій зі статусом Open.')
+    kpiCardHtml(m.closedVacancies30d, 'Закриті вакансії (30 дн)', 'Вакансії зі статусом Заповнена/Скасовано/Закрито, оновлені за останні 30 днів.'),
+    kpiCardHtml(m.avgVacancyAgeDays != null ? m.avgVacancyAgeDays + ' дн.' : '—', 'Середній вік відкритих вакансій', 'Середня кількість днів від створення до сьогодні серед вакансій зі статусом Відкрита.')
   ].join('');
 
   document.getElementById('rmVacancyAging').innerHTML = attentionListHtml(
@@ -2050,10 +2051,10 @@ async function loadRecruitmentMetrics() {
   document.getElementById('rmCandidateKpis').innerHTML = [
     kpiCardHtml(m.candidatesTotal, 'Отримано кандидатів (усього)', 'Загальна кількість карток кандидатів у системі.'),
     kpiCardHtml(m.candidatesNew30d, 'Нові кандидати (30 дн)', 'Кандидати, додані за останні 30 днів.'),
-    kpiCardHtml(m.candidatesPerVacancy != null ? m.candidatesPerVacancy : '—', 'Кандидатів на вакансію', 'Усього заявок (Application) / усього вакансій.'),
-    kpiCardHtml(m.hiresTotal, 'Найми (усього)', 'Заявки кандидатів зі статусом Hired.'),
-    kpiCardHtml(m.hires30d, 'Найми (30 дн)', 'Заявки, що стали Hired за останні 30 днів.'),
-    kpiCardHtml(m.overallConversionPct != null ? m.overallConversionPct + '%' : '—', 'Загальна конверсія в найм', 'Hires / Candidates × 100%.')
+    kpiCardHtml(m.candidatesPerVacancy != null ? m.candidatesPerVacancy : '—', 'Кандидатів на вакансію', 'Усього заявок / усього вакансій.'),
+    kpiCardHtml(m.hiresTotal, 'Найми (усього)', 'Заявки кандидатів зі статусом Найнято.'),
+    kpiCardHtml(m.hires30d, 'Найми (30 дн)', 'Заявки, що стали Найнято за останні 30 днів.'),
+    kpiCardHtml(m.overallConversionPct != null ? m.overallConversionPct + '%' : '—', 'Загальна конверсія в найм', 'Наймів / Кандидатів × 100%.')
   ].join('');
 
   document.getElementById('rmFunnelBreakdowns').innerHTML = [
@@ -2314,14 +2315,14 @@ function renderOverviewTab(e) {
   const cur = e.current_period;
   document.getElementById('profileOverview').innerHTML = `
     <div class="fieldGrid">
-      <div class="fieldItem"><label>Employee ID</label>${e.employee_number || '—'}</div>
+      <div class="fieldItem"><label>Табельний номер</label>${e.employee_number || '—'}</div>
       <div class="fieldItem"><label>Статус</label>${employeeStatusTag(e.status)}</div>
       <div class="fieldItem"><label>Посада</label>${cur ? escAttr(cur.position_title) : '—'}</div>
       <div class="fieldItem"><label>Департамент</label>${cur ? escAttr(cur.department_name) : '—'}</div>
       <div class="fieldItem"><label>Керівник</label>${cur && cur.manager_name ? escAttr(cur.manager_name) : '—'}</div>
       <div class="fieldItem"><label>Дата прийому (перша)</label>${e.first_hire_date ? new Date(e.first_hire_date).toLocaleDateString('uk-UA') : '—'}</div>
-      <div class="fieldItem"><label>Стаж (tenure)</label>${e.tenure || '—'}</div>
-      <div class="fieldItem"><label>Corporate email</label>${e.corporate_email || '—'}</div>
+      <div class="fieldItem"><label>Стаж</label>${e.tenure || '—'}</div>
+      <div class="fieldItem"><label>Корпоративна пошта</label>${e.corporate_email || '—'}</div>
       <div class="fieldItem"><label>Оформлений на</label>${escAttr(e.employed_under || '—')}</div>
     </div>
     <div style="margin-top:8px;">
@@ -2334,14 +2335,7 @@ function renderPersonalTab(e) {
   document.getElementById('profilePersonal').innerHTML = `
     <div class="fieldGrid">
       <div class="fieldItem"><label>ПІБ</label><input type="text" id="pFullName" value="${escAttr(e.full_name)}"></div>
-      <div class="fieldItem">
-        <label>Фото</label>
-        <input type="text" id="pPhotoUrl" value="${escAttr(e.photo_url || '')}" placeholder="посилання на фото">
-        <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-          <input type="file" id="pPhotoFile" accept="image/*" style="flex:1; font-size:12px;">
-          <button type="button" class="secondary" onclick="uploadEmployeePhoto()">Завантажити файл</button>
-        </div>
-      </div>
+      <div class="fieldItem"><label>Фото (посилання)</label><input type="text" id="pPhotoUrl" value="${escAttr(e.photo_url || '')}" placeholder="посилання на фото"></div>
       <div class="fieldItem"><label>Дата народження</label><input type="date" id="pBirthDate" value="${e.birth_date ? e.birth_date.slice(0, 10) : ''}"></div>
       <div class="fieldItem"><label>Стать</label>
         <select id="pGender">
@@ -2351,12 +2345,19 @@ function renderPersonalTab(e) {
         </select>
       </div>
       <div class="fieldItem"><label>Телефон</label><input type="text" id="pPhone" value="${escAttr(e.phone)}"></div>
-      <div class="fieldItem"><label>Email</label><input type="text" id="pEmail" value="${escAttr(e.personal_email)}"></div>
+      <div class="fieldItem"><label>Особиста пошта</label><input type="text" id="pEmail" value="${escAttr(e.personal_email)}"></div>
       <div class="fieldItem"><label>Telegram</label><input type="text" id="pTelegram" value="${escAttr(e.telegram)}"></div>
       <div class="fieldItem"><label>Місто</label><input type="text" id="pCity" value="${escAttr(e.city)}"></div>
       <div class="fieldItem"><label>Екстрений контакт</label><input type="text" id="pEmergency" value="${escAttr(e.emergency_contact)}"></div>
-      <div class="fieldItem"><label>Corporate email</label><input type="text" id="pCorpEmail" value="${escAttr(e.corporate_email)}"></div>
+      <div class="fieldItem"><label>Корпоративна пошта</label><input type="text" id="pCorpEmail" value="${escAttr(e.corporate_email)}"></div>
       <div class="fieldItem"><label>Оформлений на (юр. особа/ФОП)</label><input type="text" id="pEmployedUnder" value="${escAttr(e.employed_under || '')}"></div>
+    </div>
+    <div class="field">
+      <label>Завантажити фото файлом</label>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+        <input type="file" id="pPhotoFile" accept="image/*" style="flex:1; font-size:12px;">
+        <button type="button" class="secondary" onclick="uploadEmployeePhoto()">Завантажити файл</button>
+      </div>
     </div>
     <div class="field">
       <label>Інформація про себе <span class="ⓘ" title="До 10 000 символів, без урахування пробілів.">ⓘ</span></label>
@@ -2365,26 +2366,26 @@ function renderPersonalTab(e) {
     </div>
     <button onclick="savePersonalTab()">Зберегти особисті дані</button>
 
-    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Reservation / Military status <span class="ⓘ" title="Чутливе поле — обмежений доступ.">ⓘ</span></h3>
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Бронювання / військовий статус <span class="ⓘ" title="Чутливе поле — обмежений доступ.">ⓘ</span></h3>
     <div class="fieldGrid">
-      <div class="fieldItem"><label>Applicable</label>
+      <div class="fieldItem"><label>Застосовність</label>
         <select id="pResApplicable">
-          <option value="Not applicable" ${e.reservation_applicable === 'Not applicable' ? 'selected' : ''}>Not applicable</option>
-          <option value="Yes" ${e.reservation_applicable === 'Yes' ? 'selected' : ''}>Yes</option>
-          <option value="No" ${e.reservation_applicable === 'No' ? 'selected' : ''}>No</option>
+          <option value="Not applicable" ${e.reservation_applicable === 'Not applicable' ? 'selected' : ''}>Не застосовується</option>
+          <option value="Yes" ${e.reservation_applicable === 'Yes' ? 'selected' : ''}>Так</option>
+          <option value="No" ${e.reservation_applicable === 'No' ? 'selected' : ''}>Ні</option>
         </select>
       </div>
-      <div class="fieldItem"><label>Reservation status</label>
+      <div class="fieldItem"><label>Статус бронювання</label>
         <select id="pResStatus">
           <option value="">—</option>
           ${window._dict.reservationStatuses.map((s) => `<option value="${s}" ${e.reservation_status === s ? 'selected' : ''}>${statusLabel(s)}</option>`).join('')}
         </select>
       </div>
-      <div class="fieldItem"><label>Start date</label><input type="date" id="pResStart" value="${e.reservation_start_date ? e.reservation_start_date.slice(0, 10) : ''}"></div>
-      <div class="fieldItem"><label>End date</label><input type="date" id="pResEnd" value="${e.reservation_end_date ? e.reservation_end_date.slice(0, 10) : ''}"></div>
-      <div class="fieldItem"><label>Comment</label><input type="text" id="pResComment" value="${escAttr(e.reservation_comment)}"></div>
+      <div class="fieldItem"><label>Дата початку</label><input type="date" id="pResStart" value="${e.reservation_start_date ? e.reservation_start_date.slice(0, 10) : ''}"></div>
+      <div class="fieldItem"><label>Дата закінчення</label><input type="date" id="pResEnd" value="${e.reservation_end_date ? e.reservation_end_date.slice(0, 10) : ''}"></div>
+      <div class="fieldItem"><label>Коментар</label><input type="text" id="pResComment" value="${escAttr(e.reservation_comment)}"></div>
     </div>
-    <button onclick="saveReservationFields()">Зберегти reservation</button>
+    <button onclick="saveReservationFields()">Зберегти бронювання</button>
   `;
   updateAboutMeCounter();
 }
@@ -2601,7 +2602,7 @@ async function renderOnboardingTab(e) {
   tasks.forEach((t) => { (grouped[t.milestone] = grouped[t.milestone] || []).push(t); });
 
   panel.innerHTML = `
-    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:0 0 8px;">Preboarding / Welcome</h3>
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:0 0 8px;">До виходу на роботу / Привітання</h3>
     <div class="fieldGrid">
       <div class="fieldItem"><label>Локація / робоче місце</label><input type="text" id="preLocation" value="${escAttr(info?.workplace_location)}"></div>
       <div class="fieldItem"><label>Контакт HR</label><input type="text" id="preHrContact" value="${escAttr(info?.hr_contact)}"></div>
@@ -2973,8 +2974,8 @@ async function renderPerformanceTab(e) {
       `).join('') || '<p style="color:var(--muted);">Ще немає зустрічей 1:1.</p>'}
     </div>
 
-    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Performance Review</h3>
-    <button class="secondary" onclick="openAddPerformanceReview()">+ Review</button>
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Оцінка ефективності</h3>
+    <button class="secondary" onclick="openAddPerformanceReview()">+ Оцінка</button>
     <div style="margin-top:12px;">
       ${reviews.map((r) => `
         <div class="historyCard">
@@ -2982,10 +2983,10 @@ async function renderPerformanceTab(e) {
           ${r.final_outcome ? '<div class="historyMeta">Результат: ' + escAttr(r.final_outcome) + '</div>' : ''}
           ${r.manager_feedback ? '<div class="historyMeta">Фідбек керівника: ' + escAttr(r.manager_feedback) + '</div>' : ''}
         </div>
-      `).join('') || '<p style="color:var(--muted);">Ще немає review.</p>'}
+      `).join('') || '<p style="color:var(--muted);">Ще немає оцінок.</p>'}
     </div>
 
-    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Development Plan (PDP)</h3>
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">План розвитку (PDP)</h3>
     <button class="secondary" onclick="openAddPdpItem()">+ Ціль розвитку</button>
     <div style="margin-top:12px;">
       ${pdpItems.map((p) => `
@@ -4180,15 +4181,15 @@ function renderOffboardingCaseBody(containerId, c) {
       `).join('') || '<p style="color:var(--muted); font-size:12px;">Ще немає пунктів.</p>'}
     </div>
 
-    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Exit Interview</h3>
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Вихідне інтерв'ю</h3>
     ${c.exit_interview ? `
       <div class="historyCard">
         <div class="historyTitle">${escAttr(c.exit_interview.primary_reason || 'Причина не вказана')}</div>
-        <div class="historyMeta">Рекомендує компанію: ${escAttr(c.exit_interview.recommend_company || '—')} · Rehire eligible: ${c.exit_interview.rehire_eligible ? 'так' : 'ні'}</div>
+        <div class="historyMeta">Рекомендує компанію: ${escAttr(c.exit_interview.recommend_company || '—')} · Готовність повторно найняти: ${c.exit_interview.rehire_eligible ? 'так' : 'ні'}</div>
         ${c.exit_interview.comments ? '<div class="historyMeta">' + escAttr(c.exit_interview.comments) + '</div>' : ''}
       </div>
       <button class="secondary" onclick="openExitInterview(${c.id}, true)">✎ Редагувати</button>
-    ` : `<p style="color:var(--muted); font-size:12px;">Ще не заповнено.</p><button class="secondary" onclick="openExitInterview(${c.id}, false)">+ Заповнити Exit Interview</button>`}
+    ` : `<p style="color:var(--muted); font-size:12px;">Ще не заповнено.</p><button class="secondary" onclick="openExitInterview(${c.id}, false)">+ Заповнити вихідне інтерв'ю</button>`}
 
     ${c.status !== 'Completed' && c.status !== 'Cancelled' ? `
       <div style="margin-top:20px; display:flex; gap:8px;">
