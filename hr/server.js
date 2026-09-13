@@ -44,7 +44,10 @@ app.get('/health', (_req, res) => {
 });
 
 const SESSION_COOKIE = 'fb_hr_session';
-const SESSION_MAX_AGE_SECONDS = 60 * 60;
+// Синхронізовано з SESSION_IDLE_MINUTES у db.js (12 год) — куці самі по
+// собі не "ковзні", тож клієнтський Max-Age має бути не меншим, інакше
+// браузер сам видалить кукі раніше, ніж дозволяє сервер.
+const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60;
 
 function parseCookies(req) {
   const header = req.get('Cookie') || '';
@@ -441,6 +444,48 @@ app.post('/api/employees/:id/personal', requireRole(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/employees/:id/personal ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.post('/api/employees/:id/photo', requireRole(), async (req, res) => {
+  try {
+    const employee = await db.getEmployee(Number(req.params.id));
+    if (!employee) {
+      res.status(404).json({ ok: false, error: 'Співробітника не знайдено' });
+      return;
+    }
+    await uploadSingleFile(req, res);
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл не завантажено' });
+      return;
+    }
+    if (!req.file.mimetype.startsWith('image/')) {
+      res.status(400).json({ ok: false, error: 'Потрібне зображення (JPG/PNG/...)' });
+      return;
+    }
+    const person = await db.uploadPersonPhoto(employee.person_id, {
+      filename: req.file.originalname, mime_type: req.file.mimetype, file_data: req.file.buffer
+    }, req.account.username);
+    res.json({ ok: true, person });
+  } catch (error) {
+    console.error('POST /api/employees/:id/photo ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося завантажити фото' });
+  }
+});
+
+app.get('/api/persons/:id/photo', async (req, res) => {
+  try {
+    const photo = await db.getPersonPhoto(Number(req.params.id));
+    if (!photo) {
+      res.status(404).json({ ok: false, error: 'Фото не знайдено' });
+      return;
+    }
+    res.set('Content-Type', photo.mime_type || 'application/octet-stream');
+    res.set('Cache-Control', 'private, max-age=31536000');
+    res.send(photo.file_data);
+  } catch (error) {
+    console.error('GET /api/persons/:id/photo ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося завантажити фото' });
   }
 });
 

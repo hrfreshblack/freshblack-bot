@@ -2334,7 +2334,14 @@ function renderPersonalTab(e) {
   document.getElementById('profilePersonal').innerHTML = `
     <div class="fieldGrid">
       <div class="fieldItem"><label>ПІБ</label><input type="text" id="pFullName" value="${escAttr(e.full_name)}"></div>
-      <div class="fieldItem"><label>Фото (URL)</label><input type="text" id="pPhotoUrl" value="${escAttr(e.photo_url || '')}" placeholder="посилання на фото"></div>
+      <div class="fieldItem">
+        <label>Фото</label>
+        <input type="text" id="pPhotoUrl" value="${escAttr(e.photo_url || '')}" placeholder="посилання на фото">
+        <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+          <input type="file" id="pPhotoFile" accept="image/*" style="flex:1; font-size:12px;">
+          <button type="button" class="secondary" onclick="uploadEmployeePhoto()">Завантажити файл</button>
+        </div>
+      </div>
       <div class="fieldItem"><label>Дата народження</label><input type="date" id="pBirthDate" value="${e.birth_date ? e.birth_date.slice(0, 10) : ''}"></div>
       <div class="fieldItem"><label>Стать</label>
         <select id="pGender">
@@ -2350,6 +2357,11 @@ function renderPersonalTab(e) {
       <div class="fieldItem"><label>Екстрений контакт</label><input type="text" id="pEmergency" value="${escAttr(e.emergency_contact)}"></div>
       <div class="fieldItem"><label>Corporate email</label><input type="text" id="pCorpEmail" value="${escAttr(e.corporate_email)}"></div>
       <div class="fieldItem"><label>Оформлений на (юр. особа/ФОП)</label><input type="text" id="pEmployedUnder" value="${escAttr(e.employed_under || '')}"></div>
+    </div>
+    <div class="field">
+      <label>Інформація про себе <span class="ⓘ" title="До 10 000 символів, без урахування пробілів.">ⓘ</span></label>
+      <textarea id="pAboutMe" rows="6" oninput="updateAboutMeCounter()">${escAttr(e.about_me || '')}</textarea>
+      <div id="pAboutMeCounter" style="color:var(--muted); font-size:11px; margin-top:2px;"></div>
     </div>
     <button onclick="savePersonalTab()">Зберегти особисті дані</button>
 
@@ -2374,6 +2386,7 @@ function renderPersonalTab(e) {
     </div>
     <button onclick="saveReservationFields()">Зберегти reservation</button>
   `;
+  updateAboutMeCounter();
 }
 
 async function savePersonalTab() {
@@ -2386,8 +2399,10 @@ async function savePersonalTab() {
     personal_email: document.getElementById('pEmail').value.trim(),
     telegram: document.getElementById('pTelegram').value.trim(),
     city: document.getElementById('pCity').value.trim(),
-    emergency_contact: document.getElementById('pEmergency').value.trim()
+    emergency_contact: document.getElementById('pEmergency').value.trim(),
+    about_me: document.getElementById('pAboutMe').value
   };
+  if (body.about_me.replace(/\s/g, '').length > 10000) { showToast('«Інформація про себе» — максимум 10 000 символів без пробілів'); return; }
   const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/personal', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
@@ -2400,6 +2415,37 @@ async function savePersonalTab() {
   });
   showToast('Збережено');
   renderEmployeeProfile();
+}
+
+function updateAboutMeCounter() {
+  const el = document.getElementById('pAboutMe');
+  const counterEl = document.getElementById('pAboutMeCounter');
+  if (!el || !counterEl) return;
+  const len = el.value.replace(/\s/g, '').length;
+  counterEl.textContent = len.toLocaleString('uk-UA') + ' / 10 000 символів (без пробілів)';
+  counterEl.style.color = len > 10000 ? '#e05555' : 'var(--muted)';
+}
+
+async function uploadEmployeePhoto() {
+  const fileInput = document.getElementById('pPhotoFile');
+  const file = fileInput.files[0];
+  if (!file) { showToast('Оберіть файл фото'); return; }
+  const formData = new FormData();
+  formData.append('file', file);
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/photo', { method: 'POST', body: formData });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити фото'); return; }
+  fileInput.value = '';
+  showToast('Фото завантажено');
+  // Оновлюємо лише аватар (шапка + поле URL), а не весь профіль — full
+  // re-render (renderEmployeeProfile) стер би нещодавно введений, ще не
+  // збережений текст в інших полях вкладки (наприклад «Інформація про себе»).
+  const photoUrl = data.person.photo_url;
+  if (window._currentEmployee) window._currentEmployee.photo_url = photoUrl;
+  const pPhotoUrlEl = document.getElementById('pPhotoUrl');
+  if (pPhotoUrlEl) pPhotoUrlEl.value = photoUrl;
+  const headerAvatar = document.querySelector('#employeeProfileHeader .avatar');
+  if (headerAvatar) headerAvatar.innerHTML = `<img src="${escAttr(photoUrl)}" style="width:100%;height:100%;object-fit:cover;">`;
 }
 
 async function saveReservationFields() {

@@ -18,7 +18,12 @@ const pool = new Pool({
 // стосуються модулів, яких ще нема (employee self-service портал) —
 // поле лишається розширюваним.
 const ACCOUNT_ROLES = ['HRD', 'Recruiter', 'Manager', 'Employee'];
-const SESSION_IDLE_MINUTES = 60;
+// Було 60 (годину) — Тетяна скаржилась, що вилітає з системи, якщо
+// відволіклась на пару годин (наприклад, на співбесіди) протягом
+// робочого дня. 12 годин ковзного тайм-ауту з запасом перекриває будь-яку
+// паузу в межах одного робочого дня (навіть повний день 9:00-18:00),
+// лишаючись розумним тайм-аутом на ніч.
+const SESSION_IDLE_MINUTES = 12 * 60;
 
 const EMPLOYEE_STATUSES = [
   'Future Employee', 'Probation', 'Active', 'Part-time',
@@ -210,6 +215,27 @@ async function initSchema() {
       photo_url TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    -- "Інформація про себе" — короткий самоопис у профілі (до 10 000
+    -- символів без урахування пробілів при підрахунку — перевіряється в
+    -- updatePersonFields). Задум Тетяни — щоб кожен заповнював сам, але
+    -- self-service логіну для рядових співробітників ще нема (див.
+    -- коментар про це в docs/HR.md біля "Задачі"), тож поки редагує HRD.
+    ALTER TABLE hr_persons ADD COLUMN IF NOT EXISTS about_me TEXT NOT NULL DEFAULT '';
+
+    -- Фото — окремо від photo_url: сам файл лежить тут (BYTEA, як і
+    -- резюме кандидатів — Railway стирає диск при редеплої), photo_url на
+    -- hr_persons після завантаження вказує на /api/persons/:id/photo, щоб
+    -- увесь наявний код відображення аватара (img src = photo_url)
+    -- працював без змін. Один рядок на людину — новий файл заміняє
+    -- попередній (ON CONFLICT), не накопичується історія версій фото.
+    CREATE TABLE IF NOT EXISTS hr_person_photos (
+      person_id INTEGER PRIMARY KEY REFERENCES hr_persons(id),
+      filename TEXT NOT NULL DEFAULT '',
+      mime_type TEXT NOT NULL DEFAULT '',
+      file_data BYTEA NOT NULL,
+      uploaded_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS hr_employees (
@@ -1480,7 +1506,10 @@ async function seedOrgImport(departmentDefs, positionDefs) {
 }
 
 async function updatePersonFields(personId, fields) {
-  const { full_name, birth_date, gender, phone, personal_email, telegram, city, emergency_contact, photo_url } = fields;
+  const { full_name, birth_date, gender, phone, personal_email, telegram, city, emergency_contact, photo_url, about_me } = fields;
+  if (about_me != null && about_me.replace(/\s/g, '').length > 10000) {
+    throw new Error('«Інформація про себе» — максимум 10 000 символів без пробілів');
+  }
   const { rows } = await pool.query(
     `UPDATE hr_persons SET
        full_name = COALESCE($2, full_name),
@@ -1492,11 +1521,37 @@ async function updatePersonFields(personId, fields) {
        city = COALESCE($8, city),
        emergency_contact = COALESCE($9, emergency_contact),
        photo_url = COALESCE($10, photo_url),
+       about_me = COALESCE($11, about_me),
        updated_at = now()
      WHERE id = $1 RETURNING *`,
     [personId, full_name ?? null, birth_date ?? null, gender ?? null, phone ?? null, personal_email ?? null,
-      telegram ?? null, city ?? null, emergency_contact ?? null, photo_url ?? null]
+      telegram ?? null, city ?? null, emergency_contact ?? null, photo_url ?? null, about_me ?? null]
   );
+  return rows[0] || null;
+}
+
+// Один файл на людину — повторне завантаження замінює попереднє (ON
+// CONFLICT), не накопичує версії. photo_url одразу перевказується на
+// URL, що його роздає, з міткою часу для скидання кешу браузера (щоб
+// нове фото не ховалось за старим закешованим).
+async function uploadPersonPhoto(personId, { filename, mime_type, file_data }, uploadedBy) {
+  await pool.query(
+    `INSERT INTO hr_person_photos (person_id, filename, mime_type, file_data, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (person_id) DO UPDATE SET
+       filename = $2, mime_type = $3, file_data = $4, uploaded_by = $5, created_at = now()`,
+    [personId, filename || '', mime_type || '', file_data, uploadedBy || '']
+  );
+  const photoUrl = `/api/persons/${personId}/photo?v=${Date.now()}`;
+  const { rows } = await pool.query(
+    `UPDATE hr_persons SET photo_url = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [personId, photoUrl]
+  );
+  return rows[0] || null;
+}
+
+async function getPersonPhoto(personId) {
+  const { rows } = await pool.query('SELECT filename, mime_type, file_data FROM hr_person_photos WHERE person_id = $1', [personId]);
   return rows[0] || null;
 }
 
@@ -4825,6 +4880,8 @@ export default {
   parseVacancyFileForFields,
   cleanupLegacyFlatOrgImport,
   updatePersonFields,
+  uploadPersonPhoto,
+  getPersonPhoto,
   updateEmployeeStatus,
   updateEmployeeFields,
   changeEmployment,
