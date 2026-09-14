@@ -437,6 +437,12 @@ app.get('/api/employees/:id', async (req, res) => {
       res.status(404).json({ ok: false, error: 'Співробітника не знайдено' });
       return;
     }
+    // Компенсація — чутливі дані (ТЗ п.4.1 Sensitive fields): бачить лише
+    // HRD. Поки реально існують лише акаунти HRD/Recruiter, тому сьогодні
+    // це не має видимого ефекту — але щойно з'явиться акаунт керівника чи
+    // співробітника (self-service портал), цей маршрут вже не віддасть їм
+    // чужу зарплату.
+    if (req.account.role !== 'HRD') employee.compensation_records = [];
     res.json({ ok: true, employee });
   } catch (error) {
     console.error('GET /api/employees/:id ERROR:', error?.message || error);
@@ -1450,6 +1456,9 @@ app.post('/api/employees/:id/probation-decision', requireRole(), async (req, res
 app.get('/api/employees/:id/one-on-ones', async (req, res) => {
   try {
     const meetings = await db.listOneOnOnes(Number(req.params.id));
+    // private_notes — нотатки для HR/керівника, не для самого співробітника
+    // чи стороннього перегляду; ховаємо так само, як компенсацію.
+    if (req.account.role !== 'HRD') meetings.forEach((m) => { m.private_notes = ''; });
     res.json({ ok: true, meetings });
   } catch (error) {
     console.error('GET /api/employees/:id/one-on-ones ERROR:', error?.message || error);
@@ -2523,6 +2532,9 @@ app.get('/api/resumes/:id/view', async (req, res) => {
 
     const orgImportResult = await db.seedOrgImport(SEED_DEPARTMENTS, SEED_POSITIONS);
     console.log(`Org structure import: ${orgImportResult.imported} imported, ${orgImportResult.skipped} already existed`);
+
+    const dedupedPositions = await db.deduplicatePositions();
+    if (dedupedPositions) console.log(`Removed duplicate positions (old seedOrgImport re-run bug): ${dedupedPositions}`);
 
     const onboardingLibraryResult = await db.seedOnboardingLibrary(SEED_ONBOARDING_LIBRARY);
     console.log(`Onboarding library import: ${onboardingLibraryResult.imported} imported, ${onboardingLibraryResult.skipped} already existed`);
