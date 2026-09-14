@@ -749,7 +749,13 @@
 <div class="overlay" id="empStatusChangeOverlay">
   <div class="modal">
     <h2>Зміна статусу співробітника</h2>
-    <div class="field"><label>Новий статус</label><select id="empStatusChangeSelect"></select></div>
+    <div class="field"><label>Новий статус</label><select id="empStatusChangeSelect" onchange="toggleResignationFields()"></select></div>
+    <div id="resignationFields" style="display:none;">
+      <div class="fieldGrid">
+        <div class="fieldItem"><label>Заява від (необов'язково)</label><input type="date" id="empResignationNoticeDate"></div>
+        <div class="fieldItem"><label>Номер наказу (необов'язково)</label><input type="text" id="empDismissalOrderNumber"></div>
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('empStatusChangeOverlay')">Скасувати</button>
       <button id="btnSaveEmpStatusChange">Зберегти</button>
@@ -2351,6 +2357,8 @@ function renderPersonalTab(e) {
       <div class="fieldItem"><label>Екстрений контакт</label><input type="text" id="pEmergency" value="${escAttr(e.emergency_contact)}"></div>
       <div class="fieldItem"><label>Корпоративна пошта</label><input type="text" id="pCorpEmail" value="${escAttr(e.corporate_email)}"></div>
       <div class="fieldItem"><label>Оформлений на (юр. особа/ФОП)</label><input type="text" id="pEmployedUnder" value="${escAttr(e.employed_under || '')}"></div>
+      <div class="fieldItem"><label>Табельний номер</label><input type="text" id="pEmployeeNumber" value="${escAttr(e.employee_number || '')}"></div>
+      <div class="fieldItem"><label>Дата прийому (перша)</label><input type="date" id="pFirstHireDate" value="${e.first_hire_date ? e.first_hire_date.slice(0, 10) : ''}"></div>
     </div>
     <div class="field">
       <label>Завантажити фото файлом</label>
@@ -2384,6 +2392,7 @@ function renderPersonalTab(e) {
       <div class="fieldItem"><label>Дата початку</label><input type="date" id="pResStart" value="${e.reservation_start_date ? e.reservation_start_date.slice(0, 10) : ''}"></div>
       <div class="fieldItem"><label>Дата закінчення</label><input type="date" id="pResEnd" value="${e.reservation_end_date ? e.reservation_end_date.slice(0, 10) : ''}"></div>
       <div class="fieldItem"><label>Коментар</label><input type="text" id="pResComment" value="${escAttr(e.reservation_comment)}"></div>
+      <div class="fieldItem"><label>Посилання на документ</label><input type="text" id="pResDocUrl" value="${escAttr(e.reservation_document_url || '')}"></div>
     </div>
     <button onclick="saveReservationFields()">Зберегти бронювання</button>
   `;
@@ -2411,9 +2420,14 @@ async function savePersonalTab() {
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
   const corp = document.getElementById('pCorpEmail').value.trim();
   const employedUnder = document.getElementById('pEmployedUnder').value.trim();
-  await apiFetch('/api/employees/' + currentEmployeeId + '/fields', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ corporate_email: corp, employed_under: employedUnder })
+  const employeeNumber = document.getElementById('pEmployeeNumber').value.trim();
+  const firstHireDate = document.getElementById('pFirstHireDate').value || null;
+  const fieldsResp = await apiFetch('/api/employees/' + currentEmployeeId + '/fields', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ corporate_email: corp, employed_under: employedUnder, employee_number: employeeNumber || null, first_hire_date: firstHireDate })
   });
+  const fieldsData = await fieldsResp.json();
+  if (!fieldsData.ok) { showToast(fieldsData.error || 'Не вдалося зберегти'); return; }
   showToast('Збережено');
   renderEmployeeProfile();
 }
@@ -2455,7 +2469,8 @@ async function saveReservationFields() {
     reservation_status: document.getElementById('pResStatus').value,
     reservation_start_date: document.getElementById('pResStart').value || null,
     reservation_end_date: document.getElementById('pResEnd').value || null,
-    reservation_comment: document.getElementById('pResComment').value.trim()
+    reservation_comment: document.getElementById('pResComment').value.trim(),
+    reservation_document_url: document.getElementById('pResDocUrl').value.trim()
   };
   const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/fields', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
@@ -4396,7 +4411,15 @@ async function renderChangesTab(e) {
 function openStatusChange() {
   const select = document.getElementById('empStatusChangeSelect');
   select.innerHTML = window._dict.employeeStatuses.map((s) => `<option value="${escAttr(s)}" ${s === window._currentEmployee.status ? 'selected' : ''}>${escAttr(statusLabel(s))}</option>`).join('');
+  document.getElementById('empResignationNoticeDate').value = window._currentEmployee.resignation_notice_date ? window._currentEmployee.resignation_notice_date.slice(0, 10) : '';
+  document.getElementById('empDismissalOrderNumber').value = window._currentEmployee.dismissal_order_number || '';
+  toggleResignationFields();
   document.getElementById('empStatusChangeOverlay').classList.add('open');
+}
+
+function toggleResignationFields() {
+  const status = document.getElementById('empStatusChangeSelect').value;
+  document.getElementById('resignationFields').style.display = (status === 'Leaving' || status === 'Former Employee') ? '' : 'none';
 }
 
 document.getElementById('btnSaveEmpStatusChange').onclick = async () => {
@@ -4406,6 +4429,15 @@ document.getElementById('btnSaveEmpStatusChange').onclick = async () => {
   });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  if (status === 'Leaving' || status === 'Former Employee') {
+    const resignation_notice_date = document.getElementById('empResignationNoticeDate').value || null;
+    const dismissal_order_number = document.getElementById('empDismissalOrderNumber').value.trim();
+    if (resignation_notice_date || dismissal_order_number) {
+      await apiFetch('/api/employees/' + currentEmployeeId + '/fields', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resignation_notice_date, dismissal_order_number })
+      });
+    }
+  }
   closeOverlay('empStatusChangeOverlay');
   showToast('Статус змінено');
   renderEmployeeProfile();

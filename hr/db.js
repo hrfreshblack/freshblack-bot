@@ -260,6 +260,14 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_employees_status ON hr_employees(status);
+    -- "Заява від" і "Номер наказу" — Тетяна просила ці два поля саме на
+    -- зміні статусу на звільнення (Leaving/Former Employee), необов'язкові.
+    -- Живуть на hr_employees (не в окремому hr_offboarding_cases), бо
+    -- проста зміна статусу — окремий, легший шлях від повного offboarding
+    -- case з чеклистом/exit interview, і ці два поля мають бути доступні
+    -- в обох.
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS resignation_notice_date DATE;
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS dismissal_order_number TEXT NOT NULL DEFAULT '';
 
     -- Employment Period: кожна зміна посади/департаменту/керівника —
     -- НОВИЙ рядок (закриває попередній end_date), а не перезапис (ТЗ п.3
@@ -1652,11 +1660,13 @@ async function updateEmployeeStatus(employeeId, status, actor) {
 
 async function updateEmployeeFields(employeeId, { employee_number, corporate_email, first_hire_date, rehire_eligible,
   reservation_applicable, reservation_status, reservation_start_date, reservation_end_date, reservation_comment, reservation_document_url,
-  employed_under }) {
+  employed_under, resignation_notice_date, dismissal_order_number }) {
   if (reservation_status && !RESERVATION_STATUSES.includes(reservation_status)) {
     throw new Error(`Unknown reservation status: ${reservation_status}`);
   }
-  const { rows } = await pool.query(
+  let rows;
+  try {
+    ({ rows } = await pool.query(
     `UPDATE hr_employees SET
        employee_number = COALESCE($2, employee_number),
        corporate_email = COALESCE($3, corporate_email),
@@ -1669,12 +1679,37 @@ async function updateEmployeeFields(employeeId, { employee_number, corporate_ema
        reservation_comment = COALESCE($10, reservation_comment),
        reservation_document_url = COALESCE($11, reservation_document_url),
        employed_under = COALESCE($12, employed_under),
+       resignation_notice_date = COALESCE($13, resignation_notice_date),
+       dismissal_order_number = COALESCE($14, dismissal_order_number),
        updated_at = now()
      WHERE id = $1 RETURNING *`,
     [employeeId, employee_number ?? null, corporate_email ?? null, first_hire_date ?? null, rehire_eligible ?? null,
       reservation_applicable ?? null, reservation_status ?? null, reservation_start_date ?? null, reservation_end_date ?? null,
-      reservation_comment ?? null, reservation_document_url ?? null, employed_under ?? null]
-  );
+      reservation_comment ?? null, reservation_document_url ?? null, employed_under ?? null,
+      resignation_notice_date ?? null, dismissal_order_number ?? null]
+    ));
+  } catch (error) {
+    if (error.code === '23505' && error.constraint === 'hr_employees_employee_number_key') {
+      throw new Error(`Табельний номер «${employee_number}» вже використовується іншим співробітником`);
+    }
+    throw error;
+  }
+  // Стаж на картці рахується від start_date поточного Employment Period,
+  // не від first_hire_date напряму (тенюр у поточній ролі може бути
+  // коротшим за загальний, якщо людина колись міняла посаду). Тому при
+  // ручному редагуванні first_hire_date підтягуємо це саме значення і в
+  // поточний період — але лише якщо в людини за все життя був рівно один
+  // період (жодної зміни посади/департаменту ще не було): тоді "тенюр у
+  // ролі" і "загальний тенюр" — те саме, і синхронізація коректна. Якщо
+  // періодів більше одного, не займаємо — це вже не той самий випадок.
+  if (first_hire_date) {
+    await pool.query(
+      `UPDATE hr_employment_periods SET start_date = $2::date
+       WHERE employee_id = $1 AND end_date IS NULL
+         AND (SELECT COUNT(*) FROM hr_employment_periods WHERE employee_id = $1) = 1`,
+      [employeeId, first_hire_date]
+    );
+  }
   return rows[0] || null;
 }
 
