@@ -586,6 +586,190 @@ app.post('/api/employees/:id/compensation', requireRole(), async (req, res) => {
   }
 });
 
+// Джоб-офери на картці співробітника — доступ лише HRD (requireRole() без
+// аргументів), як і решта чутливих даних.
+app.get('/api/employees/:id/offer-files', requireRole(), async (req, res) => {
+  try {
+    const files = await db.listOfferFilesForEmployee(Number(req.params.id));
+    res.json({ ok: true, files });
+  } catch (error) {
+    console.error('GET /api/employees/:id/offer-files ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати файли офферу' });
+  }
+});
+
+app.post('/api/employees/:id/offer-files', requireRole(), async (req, res) => {
+  try {
+    await uploadSingleFile(req, res);
+    if (!req.file) {
+      res.status(400).json({ ok: false, error: 'Файл обов’язковий' });
+      return;
+    }
+    const file = await db.addOfferFileToEmployee(
+      Number(req.params.id),
+      { buffer: req.file.buffer, filename: req.file.originalname, mimeType: req.file.mimetype },
+      req.account.username
+    );
+    res.json({ ok: true, file });
+  } catch (error) {
+    console.error('POST /api/employees/:id/offer-files ERROR:', error?.message || error);
+    const message = error?.message?.includes('File too large') ? 'Файл завеликий (максимум 15МБ)' : (error?.message || 'Не вдалося завантажити файл офферу');
+    res.status(400).json({ ok: false, error: message });
+  }
+});
+
+app.get('/api/offer-files/:id/download', requireRole(), async (req, res) => {
+  try {
+    const file = await db.getOfferFile(Number(req.params.id));
+    if (!file) {
+      res.status(404).json({ ok: false, error: 'Не знайдено' });
+      return;
+    }
+    res.set('Content-Type', file.mime_type || 'application/octet-stream');
+    res.set('Content-Disposition', `inline; filename="${encodeURIComponent(file.filename)}"`);
+    res.send(file.file_data);
+  } catch (error) {
+    console.error('GET /api/offer-files/:id/download ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося завантажити файл' });
+  }
+});
+
+app.post('/api/offer-files/:id/delete', requireRole(), async (req, res) => {
+  try {
+    await db.deleteOfferFile(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/offer-files/:id/delete ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося видалити файл' });
+  }
+});
+
+// ROI: ручні записи виручки по співробітнику (відділ продажів) + зведення
+// "вклали/принесли". HRD-only, як і компенсація.
+app.get('/api/employees/:id/revenue', requireRole(), async (req, res) => {
+  try {
+    const entries = await db.listEmployeeRevenue(Number(req.params.id));
+    res.json({ ok: true, entries });
+  } catch (error) {
+    console.error('GET /api/employees/:id/revenue ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати дані виручки' });
+  }
+});
+
+app.post('/api/employees/:id/revenue', requireRole(), async (req, res) => {
+  try {
+    const entry = await db.upsertEmployeeRevenue(
+      { ...(req.body || {}), employee_id: Number(req.params.id) },
+      req.account.username
+    );
+    res.json({ ok: true, entry });
+  } catch (error) {
+    console.error('POST /api/employees/:id/revenue ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти виручку' });
+  }
+});
+
+app.get('/api/employees/:id/roi', requireRole(), async (req, res) => {
+  try {
+    const roi = await db.getEmployeeROI(Number(req.params.id));
+    res.json({ ok: true, roi });
+  } catch (error) {
+    console.error('GET /api/employees/:id/roi ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося порахувати ROI' });
+  }
+});
+
+// ---- People Dashboard (HRD-only) ----
+
+app.get('/api/people-dashboard', requireRole(), async (req, res) => {
+  try {
+    const rows = await db.listPeopleDashboard(req.query.year ? Number(req.query.year) : undefined);
+    res.json({ ok: true, rows });
+  } catch (error) {
+    console.error('GET /api/people-dashboard ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося завантажити People Dashboard' });
+  }
+});
+
+app.post('/api/people-dashboard/goals', requireRole(), async (req, res) => {
+  try {
+    const goal = await db.upsertMonthlyGoal(req.body || {}, req.account.username);
+    res.json({ ok: true, goal });
+  } catch (error) {
+    console.error('POST /api/people-dashboard/goals ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти ціль' });
+  }
+});
+
+// ---- Табель обліку робочого часу ----
+
+app.get('/api/timesheet', async (req, res) => {
+  try {
+    const month = String(req.query.month || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      res.status(400).json({ ok: false, error: 'Некоректний місяць' });
+      return;
+    }
+    const timesheet = await db.getTimesheet(month);
+    res.json({ ok: true, timesheet });
+  } catch (error) {
+    console.error('GET /api/timesheet ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося завантажити табель' });
+  }
+});
+
+app.get('/api/timesheet-norms', async (req, res) => {
+  try {
+    const norms = await db.listTimesheetNorms();
+    res.json({ ok: true, norms });
+  } catch (error) {
+    console.error('GET /api/timesheet-norms ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося завантажити норми' });
+  }
+});
+
+app.post('/api/timesheet-norms', requireRole(), async (req, res) => {
+  try {
+    const norm = await db.upsertTimesheetNorm(req.body || {}, req.account.username);
+    res.json({ ok: true, norm });
+  } catch (error) {
+    console.error('POST /api/timesheet-norms ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти норму' });
+  }
+});
+
+// ---- Cost per Hire ----
+
+app.get('/api/vacancies/:id/cost', requireRole('Recruiter'), async (req, res) => {
+  try {
+    const cost = await db.getRecruitmentCost(Number(req.params.id));
+    res.json({ ok: true, cost });
+  } catch (error) {
+    console.error('GET /api/vacancies/:id/cost ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати вартість найму' });
+  }
+});
+
+app.post('/api/vacancies/:id/cost', requireRole('Recruiter'), async (req, res) => {
+  try {
+    const cost = await db.upsertRecruitmentCost(Number(req.params.id), req.body || {}, req.account.username);
+    res.json({ ok: true, cost });
+  } catch (error) {
+    console.error('POST /api/vacancies/:id/cost ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти вартість найму' });
+  }
+});
+
+app.get('/api/cost-per-hire-summary', requireRole('Recruiter'), async (req, res) => {
+  try {
+    const summary = await db.listCostPerHireSummary();
+    res.json({ ok: true, summary });
+  } catch (error) {
+    console.error('GET /api/cost-per-hire-summary ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося порахувати вартість найму' });
+  }
+});
+
 app.get('/api/audit-log', requireRole(), async (req, res) => {
   try {
     const entity_type = String(req.query.entity_type || '');

@@ -1009,6 +1009,92 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_hr_audit_entity ON hr_audit_log(entity_type, entity_id);
     CREATE INDEX IF NOT EXISTS idx_hr_audit_created ON hr_audit_log(created_at);
+
+    -- Табель обліку робочого часу: норма робочих днів/годин по місяцях.
+    -- Самі відмітки (початок/кінець дня) не зберігаються тут — вони наживо
+    -- підтягуються з checkins/timeoff_requests (кореневий бот, той самий
+    -- Postgres). Законодавчий календар робочих днів нізвідки автоматично
+    -- не береться (немає надійного джерела в коді), тому HRD заповнює
+    -- вручну робочі дні на місяць, а норма годин рахується як
+    -- working_days * 9 (робочий день 9 год включно з обідом).
+    CREATE TABLE IF NOT EXISTS hr_timesheet_norms (
+      month DATE PRIMARY KEY,
+      working_days INTEGER NOT NULL DEFAULT 0,
+      norm_hours NUMERIC NOT NULL DEFAULT 0,
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Джоб-офери на картці співробітника (People Dashboard п. "Файл
+    -- офферу") — доступ лише HRD, перевіряється на рівні routes
+    -- (requireRole() без аргументів = тільки HRD).
+    CREATE TABLE IF NOT EXISTS hr_employee_offer_files (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT '',
+      file_size INTEGER NOT NULL DEFAULT 0,
+      file_data BYTEA NOT NULL,
+      uploaded_by TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_offer_files_employee ON hr_employee_offer_files(employee_id);
+
+    -- People Dashboard: помісячні цілі/результати по співробітнику (окремо
+    -- від probation_goals — той один текст на випробувальний, а тут повний
+    -- рік по місяцях для рев'ю ефективності).
+    CREATE TABLE IF NOT EXISTS hr_monthly_goals (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      goal TEXT NOT NULL DEFAULT '',
+      result TEXT NOT NULL DEFAULT '',
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (employee_id, year, month)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_monthly_goals_employee ON hr_monthly_goals(employee_id);
+
+    -- Вартість найму (Cost per Hire) — по вакансії: вартість розміщення,
+    -- час рекрутера/HRD/керівника (година * ставка), адаптація, ознайомчий
+    -- день. Прив'язана до вакансії, а не до співробітника, бо витрати
+    -- накопичуються ще до самого найму.
+    CREATE TABLE IF NOT EXISTS hr_recruitment_costs (
+      vacancy_id INTEGER PRIMARY KEY REFERENCES hr_vacancies(id),
+      job_ad_cost NUMERIC NOT NULL DEFAULT 0,
+      postings_count INTEGER NOT NULL DEFAULT 0,
+      recruiter_hours NUMERIC NOT NULL DEFAULT 0,
+      recruiter_hourly_rate NUMERIC NOT NULL DEFAULT 0,
+      hrd_hours NUMERIC NOT NULL DEFAULT 0,
+      hrd_hourly_rate NUMERIC NOT NULL DEFAULT 0,
+      manager_hours NUMERIC NOT NULL DEFAULT 0,
+      manager_hourly_rate NUMERIC NOT NULL DEFAULT 0,
+      adaptation_cost NUMERIC NOT NULL DEFAULT 0,
+      onboarding_day_cost NUMERIC NOT NULL DEFAULT 0,
+      other_cost NUMERIC NOT NULL DEFAULT 0,
+      other_cost_comment TEXT NOT NULL DEFAULT '',
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- ROI / чиста цінність співробітника: "скільки вклали" рахується
+    -- автоматично (вартість найму + виплачена компенсація), а "скільки
+    -- приносить" ніде в системі не існує (це не CRM продажів) — ручне
+    -- поле по місяцях, яке заповнює керівник відділу продажів чи HRD.
+    -- Для посад поза продажами лишається порожнім — на People Dashboard
+    -- тоді показуємо тільки "Вкладено", без вигаданого ROI.
+    CREATE TABLE IF NOT EXISTS hr_employee_revenue (
+      id SERIAL PRIMARY KEY,
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL,
+      revenue NUMERIC NOT NULL DEFAULT 0,
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (employee_id, year, month)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_employee_revenue_employee ON hr_employee_revenue(employee_id);
   `);
 }
 
@@ -5010,9 +5096,398 @@ async function getTaskCompletionStats({ from = null, to = null } = {}) {
   return rows;
 }
 
+// ---------------------------------------------------------------------
+// Табель обліку робочого часу — наживо з checkins/timeoff_requests
+// (кореневий бот), той самий Postgres. Принцип парсингу дат/graceful
+// degradation — той самий, що й у listAbsences вище.
+// ---------------------------------------------------------------------
+
+async function listTimesheetNorms() {
+  const { rows } = await pool.query(`SELECT * FROM hr_timesheet_norms ORDER BY month`);
+  return rows;
+}
+
+async function upsertTimesheetNorm({ month, working_days }, actor) {
+  const days = Number(working_days) || 0;
+  const norm_hours = days * 9;
+  const { rows } = await pool.query(
+    `INSERT INTO hr_timesheet_norms (month, working_days, norm_hours, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4,now())
+     ON CONFLICT (month) DO UPDATE SET working_days = $2, norm_hours = $3, updated_by = $4, updated_at = now()
+     RETURNING *`,
+    [month, days, norm_hours, actor || '']
+  );
+  return rows[0];
+}
+
+function fmtKyivTime(ts) {
+  if (!ts) return null;
+  return new Date(ts).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Kyiv' });
+}
+
+// month у форматі 'YYYY-MM'.
+async function getTimesheet(month) {
+  const [y, m] = month.split('-').map(Number);
+  const monthStart = `${month}-01`;
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const monthEnd = `${month}-${String(daysInMonth).padStart(2, '0')}`;
+
+  const { rows: employees } = await pool.query(`
+    SELECT e.id, e.employee_number, per.full_name
+    FROM hr_employees e
+    JOIN hr_persons per ON per.id = e.person_id
+    WHERE e.active = true AND e.employee_number <> ''
+    ORDER BY lower(per.full_name)
+  `);
+
+  let checkinRows = [];
+  try {
+    const { rows } = await pool.query(`
+      SELECT employee_id, kyiv_date, type, created_at
+      FROM checkins
+      WHERE kyiv_date >= $1 AND kyiv_date <= $2
+      ORDER BY employee_id, kyiv_date, created_at
+    `, [monthStart, monthEnd]);
+    checkinRows = rows;
+  } catch (error) {
+    if (error?.code !== '42P01') throw error;
+    console.warn('getTimesheet: checkins відсутня в цій базі —', error.message);
+  }
+
+  const byEmpDate = new Map();
+  for (const row of checkinRows) {
+    const key = row.employee_id + '|' + dateKey(row.kyiv_date);
+    let entry = byEmpDate.get(key);
+    if (!entry) { entry = { start: null, end: null }; byEmpDate.set(key, entry); }
+    if (row.type === 'in' && !entry.start) entry.start = row.created_at;
+    if (row.type === 'out') entry.end = row.created_at;
+  }
+
+  const absences = await listAbsences({ from: monthStart, to: monthEnd });
+  const approvedAbsences = absences.filter((a) => a.status === 'Approved');
+
+  const { rows: normRows } = await pool.query(`SELECT * FROM hr_timesheet_norms WHERE month = $1`, [monthStart]);
+  const norm = normRows[0] || null;
+
+  const employeeRows = employees.map((emp) => {
+    const days = [];
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${month}-${String(d).padStart(2, '0')}`;
+      const entry = byEmpDate.get(emp.employee_number + '|' + dateStr);
+      const absence = approvedAbsences.find((a) =>
+        a.hr_employee_id === emp.id && dateKey(a.start_date) <= dateStr && dateKey(a.end_date) >= dateStr);
+      let hours = null;
+      if (entry?.start && entry?.end) {
+        hours = Math.round(((new Date(entry.end) - new Date(entry.start)) / 3600000) * 100) / 100;
+      }
+      days.push({
+        date: dateStr,
+        start: fmtKyivTime(entry?.start),
+        end: fmtKyivTime(entry?.end),
+        hours,
+        absence_type: absence ? absence.type : null
+      });
+    }
+    const worked_hours = Math.round(days.reduce((sum, d) => sum + (d.hours || 0), 0) * 100) / 100;
+    return { employee_id: emp.id, employee_number: emp.employee_number, full_name: emp.full_name, days, worked_hours };
+  });
+
+  return { month, norm, employees: employeeRows };
+}
+
+// ---------------------------------------------------------------------
+// Джоб-офери на картці співробітника (HRD-only)
+// ---------------------------------------------------------------------
+
+async function addOfferFileToEmployee(employeeId, { buffer, filename, mimeType }, uploadedBy) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_employee_offer_files (employee_id, filename, mime_type, file_size, file_data, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, employee_id, filename, mime_type, file_size, uploaded_by, created_at`,
+    [employeeId, filename, mimeType || '', buffer.length, buffer, uploadedBy || '']
+  );
+  return rows[0];
+}
+
+async function listOfferFilesForEmployee(employeeId) {
+  const { rows } = await pool.query(
+    `SELECT id, employee_id, filename, mime_type, file_size, uploaded_by, created_at
+     FROM hr_employee_offer_files WHERE employee_id = $1 ORDER BY created_at DESC`,
+    [employeeId]
+  );
+  return rows;
+}
+
+async function getOfferFile(id) {
+  const { rows } = await pool.query(`SELECT * FROM hr_employee_offer_files WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+
+async function deleteOfferFile(id) {
+  await pool.query(`DELETE FROM hr_employee_offer_files WHERE id = $1`, [id]);
+}
+
+// ---------------------------------------------------------------------
+// People Dashboard (HRD-only) — зведена таблиця ефективності
+// ---------------------------------------------------------------------
+
+async function listPeopleDashboard(year) {
+  const y = Number(year) || new Date().getFullYear();
+  const { rows: employees } = await pool.query(`
+    SELECT e.id, e.employee_number, e.status, e.probation_end_date, e.probation_goals,
+      per.full_name,
+      pos.title AS position_title, pos.purpose AS position_purpose,
+      mgr_per.full_name AS manager_name,
+      ep.start_date AS employment_start_date,
+      ep.employment_format
+    FROM hr_employees e
+    JOIN hr_persons per ON per.id = e.person_id
+    LEFT JOIN hr_employment_periods ep ON ep.employee_id = e.id AND ep.end_date IS NULL
+    LEFT JOIN hr_positions pos ON pos.id = ep.position_id
+    LEFT JOIN hr_employees mgr ON mgr.id = ep.manager_employee_id
+    LEFT JOIN hr_persons mgr_per ON mgr_per.id = mgr.person_id
+    WHERE e.active = true
+    ORDER BY lower(per.full_name) ASC
+  `);
+  if (employees.length === 0) return [];
+  const ids = employees.map((e) => e.id);
+
+  const { rows: comp } = await pool.query(`
+    SELECT DISTINCT ON (employee_id) employee_id, fixed_salary, currency
+    FROM hr_compensation_records
+    WHERE employee_id = ANY($1::int[])
+    ORDER BY employee_id, effective_from DESC, id DESC
+  `, [ids]);
+  const compByEmp = new Map(comp.map((c) => [c.employee_id, c]));
+
+  const { rows: offerFiles } = await pool.query(`
+    SELECT DISTINCT ON (employee_id) employee_id, id, filename
+    FROM hr_employee_offer_files
+    WHERE employee_id = ANY($1::int[])
+    ORDER BY employee_id, created_at DESC
+  `, [ids]);
+  const offerFileByEmp = new Map(offerFiles.map((f) => [f.employee_id, f]));
+
+  // Хто "провів" 1:1 не фіксується окремим полем — визначаємо за роллю
+  // акаунту, який створив запис (created_by): HRD -> "1:1 з HR", інакше
+  // (керівник/рекрутер) -> "1:1 з керівником". Найкраще наближення з
+  // наявних даних без додавання нового обов'язкового поля у форму 1:1.
+  const { rows: oneOnOnes } = await pool.query(`
+    SELECT o.employee_id,
+      MAX(o.meeting_date) FILTER (WHERE acc.role = 'HRD') AS last_hr_1on1,
+      MAX(o.meeting_date) FILTER (WHERE acc.role IS DISTINCT FROM 'HRD') AS last_manager_1on1
+    FROM hr_one_on_ones o
+    LEFT JOIN hr_accounts acc ON acc.username = o.created_by
+    WHERE o.employee_id = ANY($1::int[]) AND o.status = 'Completed'
+    GROUP BY o.employee_id
+  `, [ids]);
+  const oneOnOneByEmp = new Map(oneOnOnes.map((r) => [r.employee_id, r]));
+
+  const { rows: goals } = await pool.query(`
+    SELECT employee_id, month, goal, result FROM hr_monthly_goals
+    WHERE employee_id = ANY($1::int[]) AND year = $2
+  `, [ids, y]);
+  const goalsByEmp = new Map();
+  for (const g of goals) {
+    if (!goalsByEmp.has(g.employee_id)) goalsByEmp.set(g.employee_id, {});
+    goalsByEmp.get(g.employee_id)[g.month] = { goal: g.goal, result: g.result };
+  }
+
+  return employees.map((e) => ({
+    ...e,
+    tenure: humanTenure(e.employment_start_date),
+    compensation: compByEmp.get(e.id) || null,
+    offer_file: offerFileByEmp.get(e.id) || null,
+    last_hr_1on1: oneOnOneByEmp.get(e.id)?.last_hr_1on1 || null,
+    last_manager_1on1: oneOnOneByEmp.get(e.id)?.last_manager_1on1 || null,
+    monthly_goals: goalsByEmp.get(e.id) || {}
+  }));
+}
+
+// goal/result можуть прийти по одному (клітинки в People Dashboard
+// зберігаються окремо при onchange) — COALESCE проти вже збереженого
+// значення, щоб редагування цілі не затирало вже введений результат.
+async function upsertMonthlyGoal({ employee_id, year, month, goal, result }, actor) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_monthly_goals (employee_id, year, month, goal, result, updated_by, updated_at)
+     VALUES ($1,$2,$3,COALESCE($4,''),COALESCE($5,''),$6,now())
+     ON CONFLICT (employee_id, year, month) DO UPDATE SET
+       goal = COALESCE($4, hr_monthly_goals.goal),
+       result = COALESCE($5, hr_monthly_goals.result),
+       updated_by = $6, updated_at = now()
+     RETURNING *`,
+    [employee_id, year, month, goal ?? null, result ?? null, actor || '']
+  );
+  return rows[0];
+}
+
+// ---------------------------------------------------------------------
+// Вартість найму (Cost per Hire) + ROI співробітника
+// ---------------------------------------------------------------------
+
+function sumRecruitmentCost(c) {
+  if (!c) return 0;
+  return Number(c.job_ad_cost || 0)
+    + Number(c.recruiter_hours || 0) * Number(c.recruiter_hourly_rate || 0)
+    + Number(c.hrd_hours || 0) * Number(c.hrd_hourly_rate || 0)
+    + Number(c.manager_hours || 0) * Number(c.manager_hourly_rate || 0)
+    + Number(c.adaptation_cost || 0)
+    + Number(c.onboarding_day_cost || 0)
+    + Number(c.other_cost || 0);
+}
+
+async function getRecruitmentCost(vacancyId) {
+  const { rows } = await pool.query(`SELECT * FROM hr_recruitment_costs WHERE vacancy_id = $1`, [vacancyId]);
+  const record = rows[0] || null;
+  return { record, total: sumRecruitmentCost(record) };
+}
+
+async function upsertRecruitmentCost(vacancyId, fields, actor) {
+  const f = {
+    job_ad_cost: Number(fields.job_ad_cost) || 0,
+    postings_count: Number(fields.postings_count) || 0,
+    recruiter_hours: Number(fields.recruiter_hours) || 0,
+    recruiter_hourly_rate: Number(fields.recruiter_hourly_rate) || 0,
+    hrd_hours: Number(fields.hrd_hours) || 0,
+    hrd_hourly_rate: Number(fields.hrd_hourly_rate) || 0,
+    manager_hours: Number(fields.manager_hours) || 0,
+    manager_hourly_rate: Number(fields.manager_hourly_rate) || 0,
+    adaptation_cost: Number(fields.adaptation_cost) || 0,
+    onboarding_day_cost: Number(fields.onboarding_day_cost) || 0,
+    other_cost: Number(fields.other_cost) || 0,
+    other_cost_comment: fields.other_cost_comment || ''
+  };
+  const { rows } = await pool.query(
+    `INSERT INTO hr_recruitment_costs (
+       vacancy_id, job_ad_cost, postings_count, recruiter_hours, recruiter_hourly_rate,
+       hrd_hours, hrd_hourly_rate, manager_hours, manager_hourly_rate,
+       adaptation_cost, onboarding_day_cost, other_cost, other_cost_comment, updated_by, updated_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())
+     ON CONFLICT (vacancy_id) DO UPDATE SET
+       job_ad_cost = $2, postings_count = $3, recruiter_hours = $4, recruiter_hourly_rate = $5,
+       hrd_hours = $6, hrd_hourly_rate = $7, manager_hours = $8, manager_hourly_rate = $9,
+       adaptation_cost = $10, onboarding_day_cost = $11, other_cost = $12, other_cost_comment = $13,
+       updated_by = $14, updated_at = now()
+     RETURNING *`,
+    [vacancyId, f.job_ad_cost, f.postings_count, f.recruiter_hours, f.recruiter_hourly_rate,
+      f.hrd_hours, f.hrd_hourly_rate, f.manager_hours, f.manager_hourly_rate,
+      f.adaptation_cost, f.onboarding_day_cost, f.other_cost, f.other_cost_comment, actor || '']
+  );
+  return { record: rows[0], total: sumRecruitmentCost(rows[0]) };
+}
+
+// Вакансія, через яку найняли конкретного співробітника — по ланцюжку
+// person_id -> hr_candidates -> hr_applications (status='Hired') ->
+// vacancy_id. Найм без формального офера (hireFromApplication) теж
+// проходить через hr_applications, тому ланцюжок спільний для обох шляхів.
+async function getHiringVacancyForEmployee(employeeId) {
+  const { rows } = await pool.query(`
+    SELECT a.vacancy_id
+    FROM hr_employees e
+    JOIN hr_candidates c ON c.person_id = e.person_id
+    JOIN hr_applications a ON a.candidate_id = c.id AND a.status = 'Hired'
+    WHERE e.id = $1
+    ORDER BY a.updated_at DESC LIMIT 1
+  `, [employeeId]);
+  return rows[0]?.vacancy_id || null;
+}
+
+async function listCostPerHireSummary() {
+  const { rows: vacancies } = await pool.query(`
+    SELECT v.id, v.title, v.status, dep.name AS department_name
+    FROM hr_vacancies v
+    LEFT JOIN hr_departments dep ON dep.id = v.department_id
+    WHERE v.status = 'Filled'
+    ORDER BY v.updated_at DESC
+  `);
+  const { rows: costs } = await pool.query(`SELECT * FROM hr_recruitment_costs`);
+  const costByVacancy = new Map(costs.map((c) => [c.vacancy_id, c]));
+
+  const items = vacancies.map((v) => {
+    const record = costByVacancy.get(v.id) || null;
+    return { vacancy_id: v.id, title: v.title, department_name: v.department_name, record, total: sumRecruitmentCost(record) };
+  });
+  const withData = items.filter((i) => i.record);
+  const average = withData.length ? Math.round((withData.reduce((s, i) => s + i.total, 0) / withData.length) * 100) / 100 : 0;
+  return { items, average, filled_count: vacancies.length, filled_with_cost_data: withData.length };
+}
+
+// "Вклали" = вартість найму (через вакансію, якщо є costs) + виплачена
+// компенсація (по кожному compensation-запису: fixed_salary * кількість
+// місяців дії запису, від effective_from до effective_to або сьогодні).
+// "Принесли" — сума ручних записів hr_employee_revenue (тільки якщо
+// заповнено хоч раз, інакше ROI не показуємо, а не вигадуємо 0 = збиток).
+async function getEmployeeROI(employeeId) {
+  const vacancyId = await getHiringVacancyForEmployee(employeeId);
+  let costPerHire = 0;
+  if (vacancyId) {
+    const cost = await getRecruitmentCost(vacancyId);
+    costPerHire = cost.total;
+  }
+
+  const { rows: compRows } = await pool.query(
+    `SELECT fixed_salary, effective_from, effective_to FROM hr_compensation_records WHERE employee_id = $1`,
+    [employeeId]
+  );
+  const today = new Date();
+  let compensationPaid = 0;
+  for (const c of compRows) {
+    if (!c.fixed_salary) continue;
+    const from = new Date(c.effective_from);
+    const to = c.effective_to ? new Date(c.effective_to) : today;
+    const months = Math.max(0, monthsBetween(from, to) + 1);
+    compensationPaid += Number(c.fixed_salary) * months;
+  }
+
+  const invested = Math.round((costPerHire + compensationPaid) * 100) / 100;
+
+  const { rows: revRows } = await pool.query(
+    `SELECT COALESCE(SUM(revenue), 0) AS total, COUNT(*) AS entries FROM hr_employee_revenue WHERE employee_id = $1`,
+    [employeeId]
+  );
+  const hasRevenueData = Number(revRows[0].entries) > 0;
+  const returned = hasRevenueData ? Number(revRows[0].total) : null;
+  const net = hasRevenueData ? Math.round((returned - invested) * 100) / 100 : null;
+
+  return { cost_per_hire: costPerHire, compensation_paid: Math.round(compensationPaid * 100) / 100, invested, returned, net, has_revenue_data: hasRevenueData };
+}
+
+async function listEmployeeRevenue(employeeId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM hr_employee_revenue WHERE employee_id = $1 ORDER BY year DESC, month DESC`,
+    [employeeId]
+  );
+  return rows;
+}
+
+async function upsertEmployeeRevenue({ employee_id, year, month, revenue }, actor) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_employee_revenue (employee_id, year, month, revenue, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4,$5,now())
+     ON CONFLICT (employee_id, year, month) DO UPDATE SET revenue = $4, updated_by = $5, updated_at = now()
+     RETURNING *`,
+    [employee_id, year, month, Number(revenue) || 0, actor || '']
+  );
+  return rows[0];
+}
+
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
+  listTimesheetNorms,
+  upsertTimesheetNorm,
+  getTimesheet,
+  addOfferFileToEmployee,
+  listOfferFilesForEmployee,
+  getOfferFile,
+  deleteOfferFile,
+  listPeopleDashboard,
+  upsertMonthlyGoal,
+  getRecruitmentCost,
+  upsertRecruitmentCost,
+  listCostPerHireSummary,
+  getEmployeeROI,
+  listEmployeeRevenue,
+  upsertEmployeeRevenue,
   ACCOUNT_ROLES,
   POSITION_STATUSES,
   RESERVATION_STATUSES,
