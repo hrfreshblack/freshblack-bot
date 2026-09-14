@@ -102,6 +102,13 @@ function requireRole(...roles) {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Chart.js самостійно захостити з npm-залежності, а не тягнути з CDN —
+// щоб дашборд не залежав від зовнішнього хосту, який може бути
+// заблокований мережею компанії чи просто лежати.
+app.get('/vendor/chart.js', (req, res) => {
+  res.sendFile(path.join(__dirname, 'node_modules', 'chart.js', 'dist', 'chart.umd.js'));
+});
+
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body || {};
