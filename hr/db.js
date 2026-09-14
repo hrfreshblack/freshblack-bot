@@ -1596,6 +1596,67 @@ async function cleanupLegacyFlatOrgImport(legacyDepartmentNames) {
   return deptIds.length;
 }
 
+// Одноразове прибирання дублів посад, наплоджених `seedOrgImport` до
+// виправлення — та функція раніше створювала нову посаду на КОЖНОМУ
+// старті сервера (на відміну від департаментів/співробітників, де вже
+// була перевірка "чи існує"), тож 20+ деплоїв за сесію = 20+ копій
+// кожної посади. Тетяна: "Нащо мені там купа однакових CEO / Загальне
+// управління". Групує посади за (title, department_id); лишає одну —
+// ту, на яку реально посилається hr_employment_periods (живий
+// співробітник), якщо така є, інакше найстарішу (найменший id); усі
+// інші видаляє, попередньо перенісши на "вижившу" всі посилання з
+// інших таблиць (щоб не впертись у FK-помилку і нічого не осиротити).
+// Ідемпотентно — якщо дублів уже нема, groupBy нічого не знаходить і
+// функція одразу повертає 0.
+async function deduplicatePositions() {
+  const { rows: positions } = await pool.query('SELECT id, title, department_id FROM hr_positions ORDER BY id');
+  const { rows: periods } = await pool.query('SELECT DISTINCT position_id FROM hr_employment_periods');
+  const positionIdsWithEmployees = new Set(periods.map((p) => p.position_id));
+
+  const groups = new Map();
+  for (const p of positions) {
+    const key = p.title + '|' + p.department_id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+
+  const duplicateToSurvivor = new Map();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const withEmployee = group.find((p) => positionIdsWithEmployees.has(p.id));
+    const survivor = withEmployee || group[0];
+    for (const p of group) {
+      if (p.id !== survivor.id) duplicateToSurvivor.set(p.id, survivor.id);
+    }
+  }
+
+  if (duplicateToSurvivor.size === 0) return 0;
+  const duplicateIds = [...duplicateToSurvivor.keys()];
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const [dupId, survivorId] of duplicateToSurvivor) {
+      await client.query('UPDATE hr_positions SET reports_to_position_id = $2 WHERE reports_to_position_id = $1', [dupId, survivorId]);
+      await client.query('UPDATE hr_employment_periods SET position_id = $2 WHERE position_id = $1', [dupId, survivorId]);
+      await client.query('UPDATE hr_vacancies SET position_id = $2 WHERE position_id = $1', [dupId, survivorId]);
+      await client.query('UPDATE hr_onboarding_templates SET position_id = $2 WHERE position_id = $1', [dupId, survivorId]);
+      await client.query('UPDATE hr_kpi_templates SET position_id = $2 WHERE position_id = $1', [dupId, survivorId]);
+      await client.query('UPDATE hr_kb_articles SET audience_position_id = $2 WHERE audience_position_id = $1', [dupId, survivorId]);
+      await client.query('UPDATE hr_learning_paths SET position_id = $2 WHERE position_id = $1', [dupId, survivorId]);
+    }
+    await client.query('DELETE FROM hr_positions WHERE id = ANY($1::int[])', [duplicateIds]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  return duplicateIds.length;
+}
+
 // Реальна орг-структура Fresh Black за Miro-схемою (контури й ЦКП) з
 // реальними людьми з переліку співробітників (seed-org-import.js).
 // Ідемпотентно за ПІБ — людину з таким full_name повторно не створює.
@@ -1621,14 +1682,19 @@ async function seedOrgImport(departmentDefs, positionDefs) {
 
   for (const row of positionDefs) {
     const departmentId = deptIdByKey[row.department];
-    const position = await createPosition({
-      title: row.title,
-      department_id: departmentId,
-      reports_to_position_id: row.reports_to ? positionIdByKey[row.reports_to] || null : null,
-      status: row.status || undefined,
-      purpose: row.purpose || '',
-      note: row.note || ''
-    });
+    const { rows: existingPositionRows } = await pool.query(
+      'SELECT * FROM hr_positions WHERE title = $1 AND department_id = $2', [row.title, departmentId]
+    );
+    const position = existingPositionRows.length
+      ? existingPositionRows[0]
+      : await createPosition({
+          title: row.title,
+          department_id: departmentId,
+          reports_to_position_id: row.reports_to ? positionIdByKey[row.reports_to] || null : null,
+          status: row.status || undefined,
+          purpose: row.purpose || '',
+          note: row.note || ''
+        });
     positionIdByKey[row.key] = position.id;
 
     if (!row.employee) continue;
@@ -5542,6 +5608,7 @@ export default {
   createEmployee,
   importEmployeesFromRows,
   seedOrgImport,
+  deduplicatePositions,
   seedEmployeeRosterUpdate,
   seedOnboardingLibrary,
   parseVacancyRequestFieldsFromText,
