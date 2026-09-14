@@ -109,11 +109,11 @@
   .breakdownGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 4px; }
   .breakdownCard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
   .breakdownCard .breakdownTitle { font-size: 12px; font-weight: 700; margin-bottom: 10px; color: var(--text); }
-  .metricBarRow { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 12px; }
-  .metricBarLabel { width: 90px; flex-shrink: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .metricBarTrack { flex: 1; background: rgba(255,255,255,0.06); border-radius: 4px; height: 10px; overflow: hidden; }
+  .metricBarRow { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 7px; font-size: 12px; }
+  .metricBarLabel { width: 140px; flex-shrink: 0; color: var(--muted); white-space: normal; line-height: 1.3; }
+  .metricBarTrack { flex: 1; background: rgba(255,255,255,0.06); border-radius: 4px; height: 10px; overflow: hidden; margin-top: 3px; }
   .metricBarFill { background: var(--accent); height: 100%; border-radius: 4px; }
-  .metricBarValue { width: 28px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .metricBarValue { width: 28px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; margin-top: 1px; }
 
   .cardsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
   .personCard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer; }
@@ -429,6 +429,7 @@
     <div id="vacancyDetailHeader" style="margin:16px 0;"></div>
     <div class="viewToolbar">
       <button class="secondary" onclick="openVacancyEdit(currentVacancyId)">✎ Редагувати</button>
+      <button class="secondary" onclick="openVacancyStatusChange()">Змінити статус</button>
       <button id="btnAddApplicationToVacancy">+ Кандидат на вакансію</button>
     </div>
     <div id="vacancyDetailFields" style="margin-bottom:16px;"></div>
@@ -798,6 +799,18 @@
   </div>
 </div>
 
+<!-- Модалка: зміна статусу вакансії -->
+<div class="overlay" id="vacStatusChangeOverlay">
+  <div class="modal">
+    <h2>Зміна статусу вакансії</h2>
+    <div class="field"><label>Новий статус</label><select id="vacStatusChangeSelect"></select></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('vacStatusChangeOverlay')">Скасувати</button>
+      <button id="btnSaveVacStatusChange">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <!-- Модалка: задача -->
 <div class="overlay" id="taskOverlay">
   <div class="modal">
@@ -874,7 +887,7 @@
       <div class="fieldItem"><label>Керівник (ініціатор)</label><select id="vrHiringManager"><option value="">— не вказано —</option></select></div>
       <div class="fieldItem"><label>Кількість</label><input type="number" id="vrQuantity" min="1" step="1" value="1"></div>
       <div class="fieldItem"><label>Пріоритет</label>
-        <select id="vrPriority"><option value="">—</option><option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option><option value="Urgent">Urgent</option></select>
+        <select id="vrPriority"><option value="">—</option><option value="Low">Низький</option><option value="Medium">Середній</option><option value="High">Високий</option><option value="Urgent">Терміново</option></select>
       </div>
       <div class="fieldItem"><label>Бажана дата старту</label><input type="date" id="vrDesiredStartDate"></div>
     </div>
@@ -923,7 +936,7 @@
     <div class="field"><label>Керівник</label><select id="vacHiringManager"><option value="">— не вказано —</option></select></div>
     <div class="field"><label>Рекрутер (username)</label><input type="text" id="vacRecruiterUsername"></div>
     <div class="field"><label>Пріоритет</label>
-      <select id="vacPriority"><option value="">—</option><option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option><option value="Urgent">Urgent</option></select>
+      <select id="vacPriority"><option value="">—</option><option value="Low">Низький</option><option value="Medium">Середній</option><option value="High">Високий</option><option value="Urgent">Терміново</option></select>
     </div>
     <div class="field"><label>Досвід роботи</label><textarea id="vacExperienceRequired" rows="2"></textarea></div>
     <div class="field"><label>Заробітна плата</label><textarea id="vacSalaryRange" rows="2"></textarea></div>
@@ -1447,12 +1460,11 @@ function escAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;');
 
 // Значення статусів у базі й запитах лишаються англійськими (стабільні
 // "wire"-значення, на них зав'язані порівняння в db.js/dashboards) — тут
-// лише український підпис для показу. Навмисно НЕ покриває геть усі
-// довідники статусів у системі (OKR/KPI/навчання/опитування/звільнення) —
-// лише ті, з якими щодня працює недосвідчений рекрутер: співробітники,
-// посади, бронювання, заявки на вакансію, вакансії, заявки кандидатів,
-// офери, інтерв'ю. Часткового перекладу конкретного довідника уникаємо
-// свідомо (або весь довідник, або жоден) — інакше вийде мішанина мов.
+// лише український підпис для показу. Покриває всі довідники статусів у
+// системі (Тетяна явно попросила: усе українською, окрім самої назви
+// вкладки "OKR / KPI" — акроніми лишені як є). statusLabel() — тотальна
+// функція з fallback на сам ключ, тож нею безпечно обгортати геть усі
+// значення довідників при виводі в UI, навіть ті, що вже українською.
 const STATUS_LABELS_UK = {
   'Future Employee': 'Майбутній співробітник', 'Probation': 'Випробувальний термін', 'Active': 'Активний',
   'Part-time': 'Часткова зайнятість', 'Maternity/Parental Leave': 'Декретна відпустка', 'Mobilized': 'Мобілізований в ЗСУ', 'Suspended': 'Призупинено',
@@ -1469,9 +1481,43 @@ const STATUS_LABELS_UK = {
   'Test Task Review': 'Розгляд тестового завдання', 'Reference Check': 'Перевірка рекомендацій',
   'Scheduled': 'Заплановано', 'Completed': 'Завершено', 'No Show': "Не з'явився",
   'To Do': 'До виконання', 'In Progress': 'В роботі', 'Review': 'На перевірці', 'Done': 'Виконано', 'Cancelled': 'Скасовано',
-  'Hot': 'Гаряча', 'High': 'Високий', 'Medium': 'Середній', 'Low': 'Низький'
+  'Hot': 'Гаряча', 'High': 'Високий', 'Medium': 'Середній', 'Low': 'Низький', 'Urgent': 'Терміново',
+  // Випробувальний термін (probation decision)
+  'Passed': 'Пройшов', 'Extended': 'Продовжено', 'Failed': 'Не пройшов',
+  // Onboarding-задачі
+  'Not Started': 'Не розпочато', 'Waiting': 'Очікує', 'Skipped': 'Пропущено',
+  // 1:1 / Performance / PDP / OKR / KPI
+  'On Track': 'В графіку', 'At Risk': 'Під загрозою', 'Off Track': 'Зірвано',
+  // Knowledge Base / Learning
+  'Assigned': 'Призначено', 'Started': 'Розпочато', 'Acknowledged': 'Ознайомився',
+  // Відсутності
+  'Requested': 'Заявлено',
+  // Звільнення (offboarding)
+  'Initiated': 'Ініційовано', 'Pending': 'Очікує',
+  'Employee Initiative': 'З ініціативи співробітника', 'Company Initiative': 'З ініціативи компанії',
+  'End of Contract': 'Закінчення контракту', 'Probation Failed': 'Не пройшов випробувальний термін', 'Mutual Agreement': 'За згодою сторін',
+  'Voluntary': 'За власним бажанням', 'Involuntary': 'Зі сторони компанії',
+  // Стать
+  'Female': 'Жінка', 'Male': 'Чоловік',
+  // Knowledge Base — категорії статей
+  'About Fresh Black': 'Про Fresh Black', 'Welcome': 'Привітання', 'Rules': 'Правила', 'HR Policies': 'HR-політики',
+  'Departments': 'Департаменти', 'Products': 'Продукти', 'Processes': 'Процеси', 'Tools': 'Інструменти',
+  'Sales': 'Продажі', 'Production': 'Виробництво', 'Finance': 'Фінанси', 'Templates': 'Шаблони',
+  // Learning — типи елементів
+  'Article': 'Стаття', 'Task': 'Завдання', 'Test': 'Тест',
+  // Опитування — типи й типи питань
+  'Pulse': 'Пульс-опитування', 'Adaptation': 'Адаптаційне', 'Exit': 'Вихідне', 'Custom': 'Довільне',
+  'Scale': 'Шкала', 'Single Select': 'Один варіант', 'Multi Select': 'Декілька варіантів', 'Text': 'Текст',
+  // Відсутності — типи
+  'Vacation': 'Відпустка', 'Sick Leave': 'Лікарняний', 'Unpaid Leave': 'Відпустка за свій рахунок',
+  'Business Trip': 'Відрядження', 'Remote': 'Віддалена робота',
+  // Exit interview
+  'Yes': 'Так', 'No': 'Ні', 'Maybe': 'Можливо',
+  // Onboarding-віхи
+  'Day 1 / Week 1': '1 день / 1 тиждень', '14 days': '14 днів', '30 days': '30 днів', '60 days': '60 днів', '90 days': '90 днів'
 };
 function statusLabel(s) { return STATUS_LABELS_UK[s] || s; }
+function translateKeys(obj) { return Object.fromEntries(Object.entries(obj).map(([k, v]) => [statusLabel(k), v])); }
 function fmt(n) { return (Number(n) || 0).toLocaleString('uk-UA', { maximumFractionDigits: 2 }); }
 function isoDate(d) { return d.toISOString().slice(0, 10); }
 
@@ -1609,29 +1655,29 @@ async function loadDictionaries() {
 
   document.getElementById('vrStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.vacancyRequestStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
   document.getElementById('vacStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.vacancyStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
-  document.getElementById('appStageSelect').innerHTML = data.applicationStages.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('appStageSelect').innerHTML = data.applicationStages.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
   document.getElementById('appStatusSelect').innerHTML = data.applicationStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
-  document.getElementById('appRejectionReason').innerHTML = [...data.rejectionReasonsCompany, ...data.rejectionReasonsCandidate].map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('appRejectionReason').innerHTML = [...data.rejectionReasonsCompany, ...data.rejectionReasonsCandidate].map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
   document.getElementById('ivType').innerHTML = data.interviewTypes.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
 
-  document.getElementById('oooStatus').innerHTML = data.oneOnOneStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
-  document.getElementById('prStatus').innerHTML = data.performanceReviewStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('oooStatus').innerHTML = data.oneOnOneStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
+  document.getElementById('prStatus').innerHTML = data.performanceReviewStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
 
-  document.getElementById('kbCategory').innerHTML = data.kbCategories.map((c) => `<option value="${c}">${c}</option>`).join('');
-  document.getElementById('kbCategoryFilter').innerHTML = '<option value="">— усі категорії —</option>' + data.kbCategories.map((c) => `<option value="${c}">${c}</option>`).join('');
-  document.getElementById('lpiType').innerHTML = data.learningItemTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
+  document.getElementById('kbCategory').innerHTML = data.kbCategories.map((c) => `<option value="${c}">${statusLabel(c)}</option>`).join('');
+  document.getElementById('kbCategoryFilter').innerHTML = '<option value="">— усі категорії —</option>' + data.kbCategories.map((c) => `<option value="${c}">${statusLabel(c)}</option>`).join('');
+  document.getElementById('lpiType').innerHTML = data.learningItemTypes.map((t) => `<option value="${t}">${statusLabel(t)}</option>`).join('');
 
-  document.getElementById('survType').innerHTML = data.surveyTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
-  document.getElementById('surveyTypeFilter').innerHTML = '<option value="">— усі типи —</option>' + data.surveyTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
-  document.getElementById('surveyStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.surveyStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
-  document.getElementById('sqType').innerHTML = data.surveyQuestionTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
+  document.getElementById('survType').innerHTML = data.surveyTypes.map((t) => `<option value="${t}">${statusLabel(t)}</option>`).join('');
+  document.getElementById('surveyTypeFilter').innerHTML = '<option value="">— усі типи —</option>' + data.surveyTypes.map((t) => `<option value="${t}">${statusLabel(t)}</option>`).join('');
+  document.getElementById('surveyStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.surveyStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
+  document.getElementById('sqType').innerHTML = data.surveyQuestionTypes.map((t) => `<option value="${t}">${statusLabel(t)}</option>`).join('');
 
-  document.getElementById('absType').innerHTML = data.absenceTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
-  document.getElementById('absStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.absenceStatusFilterOptions.map((s) => `<option value="${s}">${s}</option>`).join('');
+  document.getElementById('absType').innerHTML = data.absenceTypes.map((t) => `<option value="${t}">${statusLabel(t)}</option>`).join('');
+  document.getElementById('absStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.absenceStatusFilterOptions.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
 
-  document.getElementById('offbInitiationType').innerHTML = data.offboardingInitiationTypes.map((t) => `<option value="${t}">${t}</option>`).join('');
-  document.getElementById('offbStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.offboardingStatuses.map((s) => `<option value="${s}">${s}</option>`).join('');
-  document.getElementById('eiRecommendCompany').innerHTML = '<option value="">—</option>' + data.recommendCompanyOptions.map((o) => `<option value="${o}">${o}</option>`).join('');
+  document.getElementById('offbInitiationType').innerHTML = data.offboardingInitiationTypes.map((t) => `<option value="${t}">${statusLabel(t)}</option>`).join('');
+  document.getElementById('offbStatusFilter').innerHTML = '<option value="">— усі статуси —</option>' + data.offboardingStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
+  document.getElementById('eiRecommendCompany').innerHTML = '<option value="">—</option>' + data.recommendCompanyOptions.map((o) => `<option value="${o}">${statusLabel(o)}</option>`).join('');
 }
 
 // ---- Tabs ----
@@ -2133,10 +2179,10 @@ async function loadDashboard() {
   ].join('');
 
   document.getElementById('dashboardBreakdowns').innerHTML = [
-    breakdownCardHtml('Плинність за типом (12 міс)', "Voluntary — з ініціативи співробітника/за згодою сторін. Involuntary — з ініціативи компанії/закінчення контракту. Probation — не пройшов випробувальний термін.", m.turnoverBreakdown),
-    breakdownCardHtml('Стать (активні)', 'Розподіл активних співробітників за полем Gender у Personal.', m.genderBreakdown),
+    breakdownCardHtml('Плинність за типом (12 міс)', "За власним бажанням — з ініціативи співробітника/за згодою сторін. Зі сторони компанії — з ініціативи компанії/закінчення контракту. Випробувальний термін — не пройшов випробувальний термін.", translateKeys(m.turnoverBreakdown)),
+    breakdownCardHtml('Стать (активні)', 'Розподіл активних співробітників за полем «Стать» у вкладці «Особисте».', translateKeys(m.genderBreakdown)),
     breakdownCardHtml('Стаж (активні)', 'Розподіл активних співробітників за стажем: <3міс, 3-6міс, 6-12міс, 1-2р, 2-3р, 3+р.', m.tenureBuckets),
-    breakdownCardHtml('Випробувальний термін (усього)', 'Кількість зафіксованих рішень по кожному типу за весь час.', m.probationCounts)
+    breakdownCardHtml('Випробувальний термін (усього)', 'Кількість зафіксованих рішень по кожному типу за весь час.', translateKeys(m.probationCounts))
   ].join('');
 }
 
@@ -2181,8 +2227,8 @@ async function loadRecruitmentMetrics() {
   ].join('');
 
   document.getElementById('rmFunnelBreakdowns').innerHTML = [
-    breakdownCardHtml('Інтерв\'ю за типом', 'Кількість проведених інтерв\'ю кожного типу (HR Screening, Technical/Professional, Final, Test Task Review, Reference Check).', m.interviewsByType),
-    breakdownCardHtml('Офери за статусом', 'Поточний статус усіх оферів: Draft/Sent/Accepted/Declined/Expired/Withdrawn.', m.offersByStatus)
+    breakdownCardHtml('Інтерв\'ю за типом', 'Кількість проведених інтерв\'ю кожного типу.', translateKeys(m.interviewsByType)),
+    breakdownCardHtml('Офери за статусом', 'Поточний статус усіх оферів.', translateKeys(m.offersByStatus))
   ].join('');
 
   document.getElementById('rmTimeKpis').innerHTML = [
@@ -2448,8 +2494,9 @@ function renderOverviewTab(e) {
       <div class="fieldItem"><label>Корпоративна пошта</label>${e.corporate_email || '—'}</div>
       <div class="fieldItem"><label>Оформлений на</label>${escAttr(e.employed_under || '—')}</div>
     </div>
-    <div style="margin-top:8px;">
+    <div style="margin-top:8px; display:flex; gap:8px;">
       <button class="secondary" onclick="openStatusChange()">Змінити статус</button>
+      <button class="secondary" onclick="openEmploymentChange()">Змінити посаду / департамент / керівника</button>
     </div>
   `;
 }
@@ -2711,12 +2758,12 @@ document.getElementById('btnSaveCompensation').onclick = async () => {
 
 function probationDecisionTag(decision) {
   const cls = decision === 'Passed' ? 'ok' : decision === 'Failed' ? 'bad' : decision === 'Extended' ? 'warn' : 'neutral';
-  return `<span class="tag ${cls}">${decision}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(decision)}</span>`;
 }
 function onboardingTaskStatusTag(t) {
-  if (t.is_overdue) return '<span class="tag bad">Overdue</span>';
+  if (t.is_overdue) return '<span class="tag bad">Протерміновано</span>';
   const cls = t.status === 'Completed' ? 'ok' : t.status === 'Skipped' ? 'neutral' : (t.status === 'In Progress' || t.status === 'Waiting') ? 'warn' : 'neutral';
-  return `<span class="tag ${cls}">${t.status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(t.status)}</span>`;
 }
 
 async function renderOnboardingTab(e) {
@@ -2846,7 +2893,7 @@ async function generateOnboardingTasksForCurrent() {
 }
 
 function openAddOnboardingTask() {
-  document.getElementById('obtMilestone').innerHTML = (window._dict.onboardingMilestones || []).map((m) => `<option value="${m}">${m}</option>`).join('');
+  document.getElementById('obtMilestone').innerHTML = (window._dict.onboardingMilestones || []).map((m) => `<option value="${m}">${statusLabel(m)}</option>`).join('');
   document.getElementById('obtTitle').value = '';
   document.getElementById('obtDescription').value = '';
   document.getElementById('obtOwnerRole').value = '';
@@ -3009,7 +3056,7 @@ document.getElementById('btnAddOnboardingTemplate').onclick = async () => {
   const posResp = await apiFetch('/api/positions');
   const posData = await posResp.json();
   document.getElementById('otPosition').innerHTML = (posData.ok ? posData.positions : []).map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
-  document.getElementById('otMilestone').innerHTML = (window._dict.onboardingMilestones || []).map((m) => `<option value="${m}">${m}</option>`).join('');
+  document.getElementById('otMilestone').innerHTML = (window._dict.onboardingMilestones || []).map((m) => `<option value="${m}">${statusLabel(m)}</option>`).join('');
   document.getElementById('otTitle').value = '';
   document.getElementById('otDescription').value = '';
   document.getElementById('otOwnerRole').value = '';
@@ -3050,27 +3097,27 @@ document.getElementById('btnSaveOnboardingTemplate').onclick = async () => {
 
 function oneOnOneStatusTag(status) {
   const cls = status === 'Completed' ? 'ok' : status === 'Cancelled' ? 'bad' : 'warn';
-  return `<span class="tag ${cls}">${status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(status)}</span>`;
 }
 function performanceReviewStatusTag(status) {
   const cls = status === 'Completed' ? 'ok' : status === 'In Progress' ? 'warn' : 'neutral';
-  return `<span class="tag ${cls}">${status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(status)}</span>`;
 }
 function pdpStatusTag(status) {
   const cls = status === 'Completed' ? 'ok' : status === 'Cancelled' ? 'bad' : status === 'In Progress' ? 'warn' : 'neutral';
-  return `<span class="tag ${cls}">${status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(status)}</span>`;
 }
 function okrObjectiveStatusTag(status) {
   const cls = status === 'Active' ? 'ok' : status === 'Completed' ? 'accent' : status === 'Cancelled' ? 'bad' : 'neutral';
-  return `<span class="tag ${cls}">${status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(status)}</span>`;
 }
 function confidenceTag(confidence) {
   const cls = confidence === 'On Track' ? 'ok' : confidence === 'At Risk' ? 'warn' : 'bad';
-  return `<span class="tag ${cls}">${confidence}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(confidence)}</span>`;
 }
 function kpiStatusTag(status) {
   const cls = status === 'Active' ? 'ok' : status === 'Completed' ? 'accent' : 'bad';
-  return `<span class="tag ${cls}">${status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(status)}</span>`;
 }
 
 async function renderPerformanceTab(e) {
@@ -3571,13 +3618,13 @@ function quickUpdateKpi(id) {
 // ---- Knowledge Base + Learning ----
 
 function kbAssignmentStatusTag(a) {
-  if (a.status === 'Acknowledged') return '<span class="tag ok">Acknowledged</span>';
+  if (a.status === 'Acknowledged') return '<span class="tag ok">Ознайомився</span>';
   const overdue = a.due_date && new Date(a.due_date) < new Date(new Date().toDateString());
-  return overdue ? '<span class="tag bad">Overdue</span>' : '<span class="tag warn">Assigned</span>';
+  return overdue ? '<span class="tag bad">Протерміновано</span>' : '<span class="tag warn">Призначено</span>';
 }
 function learningAssignmentStatusTag(status) {
   const cls = status === 'Completed' ? 'ok' : status === 'Started' ? 'warn' : 'neutral';
-  return `<span class="tag ${cls}">${status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(status)}</span>`;
 }
 
 async function renderLearningTab(e) {
@@ -3914,7 +3961,7 @@ document.getElementById('btnSaveLearningPathItem').onclick = async () => {
 
 function surveyStatusTag(status) {
   const cls = status === 'Active' ? 'ok' : status === 'Closed' ? 'neutral' : 'warn';
-  return `<span class="tag ${cls}">${status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(status)}</span>`;
 }
 
 async function loadSurveys() {
@@ -4137,7 +4184,7 @@ function fmtAbsDate(v) {
 }
 function absenceStatusTag(status) {
   const cls = status === 'Approved' ? 'ok' : (status === 'Rejected' || status === 'Cancelled') ? 'bad' : 'warn';
-  return `<span class="tag ${cls}">${status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(status)}</span>`;
 }
 
 async function renderAbsencesTab(e) {
@@ -4265,14 +4312,14 @@ document.getElementById('absToFilter').addEventListener('change', loadAbsencesVi
 
 function offboardingStatusTag(status) {
   const cls = status === 'Completed' ? 'ok' : status === 'Cancelled' ? 'bad' : 'warn';
-  return `<span class="tag ${cls}">${status}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(status)}</span>`;
 }
 function turnoverTag(classification) {
   const cls = classification === 'Involuntary' ? 'bad' : classification === 'Probation' ? 'warn' : 'neutral';
-  return `<span class="tag ${cls}">${classification}</span>`;
+  return `<span class="tag ${cls}">${statusLabel(classification)}</span>`;
 }
 function checklistStatusTag(status) {
-  return status === 'Done' ? '<span class="tag ok">Done</span>' : '<span class="tag warn">Pending</span>';
+  return status === 'Done' ? '<span class="tag ok">Виконано</span>' : '<span class="tag warn">Очікує</span>';
 }
 
 async function renderOffboardingTab(e) {
@@ -5082,7 +5129,7 @@ async function loadVacancyRequests() {
       <td>${escAttr(r.position_title)}</td>
       <td>${escAttr(r.department_name)}</td>
       <td>${r.quantity}</td>
-      <td>${escAttr(r.priority || '—')}</td>
+      <td>${escAttr(statusLabel(r.priority) || '—')}</td>
       <td>${vrStatusTag(r.status)}</td>
       <td>${new Date(r.created_at).toLocaleDateString('uk-UA')}</td>
     </tr>
@@ -5362,9 +5409,10 @@ async function renderVacancyDetail() {
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося завантажити вакансію'); return; }
   const v = data.vacancy;
+  window._currentVacancyStatus = v.status;
   document.getElementById('vacancyDetailHeader').innerHTML = `
     <div style="font-size:20px; font-weight:700;">${escAttr(v.title)}</div>
-    <div style="color:var(--muted); font-size:13px;">${escAttr(v.department_name)} ${vacStatusTag(v.status)} ${v.priority ? '· ' + escAttr(v.priority) : ''} ${v.recruiter_username ? '· рекрутер: ' + escAttr(v.recruiter_username) : ''}</div>
+    <div style="color:var(--muted); font-size:13px;">${escAttr(v.department_name)} ${vacStatusTag(v.status)} ${v.priority ? '· ' + escAttr(statusLabel(v.priority)) : ''} ${v.recruiter_username ? '· рекрутер: ' + escAttr(v.recruiter_username) : ''}</div>
   `;
   const fieldsHtml = [
     ['Досвід роботи', v.experience_required],
@@ -5391,6 +5439,24 @@ async function renderVacancyDetail() {
     </tr>
   `).join('');
 }
+
+function openVacancyStatusChange() {
+  const select = document.getElementById('vacStatusChangeSelect');
+  select.innerHTML = (window._dict.vacancyStatuses || []).map((s) => `<option value="${escAttr(s)}" ${s === window._currentVacancyStatus ? 'selected' : ''}>${escAttr(statusLabel(s))}</option>`).join('');
+  document.getElementById('vacStatusChangeOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveVacStatusChange').onclick = async () => {
+  const status = document.getElementById('vacStatusChangeSelect').value;
+  const resp = await apiFetch('/api/vacancies/' + currentVacancyId + '/status', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити статус'); return; }
+  closeOverlay('vacStatusChangeOverlay');
+  showToast('Статус змінено');
+  renderVacancyDetail();
+};
 
 // Побажання по ЗП — вільний текст ("25000", "20-25 тис", "від 20000 грн"
 // тощо), тож рахуємо середнє/медіану толерантно: витягуємо число(-а) з
@@ -5788,7 +5854,7 @@ function toggleRejectionFields() {
   if (isRejected) {
     const reasons = status === 'Rejected by Company' ? window._dict.rejectionReasonsCompany : window._dict.rejectionReasonsCandidate;
     const current = document.getElementById('appRejectionReason').value;
-    document.getElementById('appRejectionReason').innerHTML = reasons.map((s) => `<option value="${s}">${s}</option>`).join('');
+    document.getElementById('appRejectionReason').innerHTML = reasons.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
     if (reasons.includes(current)) document.getElementById('appRejectionReason').value = current;
   }
 
