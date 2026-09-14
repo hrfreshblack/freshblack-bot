@@ -671,7 +671,14 @@
   </div>
 
   <div id="viewTimesheet" style="display:none;">
-    <p style="color: var(--muted); font-size: 12px; margin: 0 0 16px;">Початок/кінець робочого дня — автоматично з відміток у телеграм-боті. Відпустки та лікарняні, погоджені через бота, позначаються автоматично. Норма робочих днів на місяць береться із законодавчого виробничого календаря — вносьте її вручну щомісяця (буде взято до уваги при розрахунку норми годин).</p>
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 8px;">Початок/кінець робочого дня — автоматично з відміток у телеграм-боті. Відпустки та лікарняні, погоджені через бота, позначаються автоматично. Клік по клітинці дня (HRD) — вручну виправити початок/кінець. Норма робочих днів на місяць береться із законодавчого виробничого календаря — вносьте її вручну щомісяця.</p>
+    <p style="font-size: 12px; margin: 0 0 16px; display:flex; gap:16px; flex-wrap:wrap;">
+      <span><span style="display:inline-block; width:12px; height:12px; border-radius:2px; background:rgba(70,130,220,0.6); vertical-align:middle;"></span> відпустка</span>
+      <span><span style="display:inline-block; width:12px; height:12px; border-radius:2px; background:rgba(230,200,40,0.6); vertical-align:middle;"></span> лікарняний</span>
+      <span><span style="display:inline-block; width:12px; height:12px; border-radius:2px; background:rgba(150,100,200,0.6); vertical-align:middle;"></span> за свій рахунок (ВСР)</span>
+      <span><span style="display:inline-block; width:12px; height:12px; border-radius:2px; background:rgba(60,180,100,0.6); vertical-align:middle;"></span> віддалено</span>
+      <span><span style="display:inline-block; width:12px; height:12px; border-radius:2px; background:rgba(230,140,40,0.7); vertical-align:middle;"></span> не закрив(ла) зміну</span>
+    </p>
     <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
       <input type="month" id="tsMonth">
       <button onclick="loadTimesheetView()">Показати</button>
@@ -690,12 +697,7 @@
   </div>
 
   <div id="viewPeopleDashboard" style="display:none;">
-    <p style="color: var(--muted); font-size: 12px; margin: 0 0 16px;">Видно лише HRD. Цілі/результати — за обраний рік, окремо по кожному місяцю; редагуються прямо в таблиці.</p>
-    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
-      <label style="font-size:12px; color:var(--muted);">Рік:</label>
-      <input type="number" id="pdYear" style="width:90px;">
-      <button onclick="loadPeopleDashboard()">Показати</button>
-    </div>
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 16px;">Видно лише HRD. Клік по рядку відкриває картку співробітника — там і зміна посади/керівника, і цілі по місяцях (вкладка "Ефективність"), і все інше редагується.</p>
     <div class="tableWrap"><table id="pdTable"><thead></thead><tbody></tbody></table></div>
   </div>
 
@@ -726,6 +728,21 @@
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('accountPasswordOverlay')">Скасувати</button>
       <button id="btnSaveAccountPassword">Зберегти</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: ручне виправлення дня в табелі -->
+<div class="overlay" id="tsEditOverlay">
+  <div class="modal">
+    <h2 id="tsEditTitle">Виправити день</h2>
+    <input type="hidden" id="tsEditEmployeeId">
+    <input type="hidden" id="tsEditDate">
+    <div class="field"><label>Початок</label><input type="time" id="tsEditStart"></div>
+    <div class="field"><label>Кінець <span class="ⓘ" title="Якщо залишити порожнім, а початок є — для минулого дня автоматично підставиться 18:00 і клітинка підсвітиться помаранчевим.">ⓘ</span></label><input type="time" id="tsEditEnd"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('tsEditOverlay')">Скасувати</button>
+      <button id="btnSaveTsEdit">Зберегти</button>
     </div>
   </div>
 </div>
@@ -1875,7 +1892,10 @@ async function toggleAccountActive(username, active) {
 
 // ---- Табель обліку робочого часу ----
 
-const ABSENCE_DAY_LABEL = { 'Vacation': 'В', 'Sick Leave': 'Л', 'Unpaid Leave': 'ЗР' };
+const ABSENCE_DAY_LABEL = { 'Vacation': 'В', 'Sick Leave': 'Л', 'Unpaid Leave': 'ВСР' };
+const ABSENCE_DAY_COLOR = { 'Vacation': 'rgba(70,130,220,0.28)', 'Sick Leave': 'rgba(230,200,40,0.28)', 'Unpaid Leave': 'rgba(150,100,200,0.28)' };
+const REMOTE_DAY_COLOR = 'rgba(60,180,100,0.22)';
+const FORGOT_CHECKOUT_COLOR = 'rgba(230,140,40,0.3)';
 
 function currentMonthStr() {
   const d = new Date();
@@ -1925,6 +1945,7 @@ async function loadTimesheetView() {
       <th rowspan="3" style="min-width:120px;">Оформлення</th>
       ${dayInfo.map((di) => `<th colspan="3" style="text-align:center; ${di.weekend ? weekendBg : ''}">${di.weekdayName}</th>`).join('')}
       <th rowspan="3">Відпрац., год</th><th rowspan="3">Норма, год</th><th rowspan="3">+/-</th>
+      <th rowspan="3">Дн. факт</th><th rowspan="3">Дн. план</th>
     </tr>
     <tr>
       ${dayInfo.map((di) => `<th colspan="3" style="text-align:center; ${di.weekend ? weekendBg : ''}">${String(di.d).padStart(2, '0')}.${String(m).padStart(2, '0')}</th>`).join('')}
@@ -1934,7 +1955,13 @@ async function loadTimesheetView() {
     </tr>
   `;
 
-  const totalCols = 2 + daysInMonth * 3 + 3;
+  // Employee/day дані потрібні в editTimesheetDay() при кліку на клітинку
+  // (щоб не пропихати ім'я/значення через onclick-атрибут з екрануванням
+  // лапок у ПІБ) — тримаємо останній завантажений табель у window.
+  window._tsData = ts;
+
+  const canEdit = window._me.role === 'HRD';
+  const totalCols = 2 + daysInMonth * 3 + 5;
   let lastDept = null;
   const rowsHtml = [];
   for (const e of ts.employees) {
@@ -1944,18 +1971,24 @@ async function loadTimesheetView() {
     }
     const cells = e.days.map((d, i) => {
       const weekend = dayInfo[i].weekend;
-      const bg = weekend ? weekendBg : '';
+      let bg = weekend ? weekendBg : '';
+      if (d.absence_type) bg = ABSENCE_DAY_COLOR[d.absence_type] ? `background:${ABSENCE_DAY_COLOR[d.absence_type]};` : bg;
+      else if (d.auto_end) bg = `background:${FORGOT_CHECKOUT_COLOR};`;
+      else if (d.is_remote) bg = `background:${REMOTE_DAY_COLOR};`;
+
       if (d.absence_type) {
         return `<td colspan="2" style="text-align:center; color:var(--muted); ${bg}" title="${d.date}">${ABSENCE_DAY_LABEL[d.absence_type] || '—'}</td><td style="text-align:center; ${bg}">0:00</td>`;
       }
-      if (d.hours != null) {
-        return `<td style="text-align:center; ${bg}">${d.start || '—'}</td><td style="text-align:center; ${bg}">${d.end || '—'}</td><td style="text-align:center; ${bg}">${hoursToHM(d.hours)}</td>`;
-      }
-      return `<td style="text-align:center; color:var(--muted); ${bg}">—</td><td style="text-align:center; color:var(--muted); ${bg}">—</td><td style="text-align:center; color:var(--muted); ${bg}">0:00</td>`;
+      const title = d.auto_end ? `${d.date}: не закрив(ла) зміну — 18:00 підставлено автоматично` : d.is_remote ? `${d.date}: віддалено` : d.date;
+      const muted = d.hours == null ? 'color:var(--muted);' : '';
+      const cellStyle = `text-align:center; ${muted} ${bg} ${canEdit ? 'cursor:pointer;' : ''}`;
+      const clickAttr = canEdit ? ` onclick="editTimesheetDay(${e.employee_id},'${d.date}')"` : '';
+      const td = (content) => `<td style="${cellStyle}" title="${title}"${clickAttr}>${content}</td>`;
+      return td(d.start || '—') + td(d.end || '—') + td(d.hours != null ? hoursToHM(d.hours) : '0:00');
     }).join('');
     const diff = norm ? Math.round((e.worked_hours - norm.norm_hours) * 100) / 100 : null;
     const diffColor = diff != null && diff < 0 ? '#c0392b' : diff != null && diff > 0 ? '#2e7d32' : 'inherit';
-    rowsHtml.push(`<tr><td>${e.full_name}</td><td>${e.employment_type || '—'}</td>${cells}<td>${hoursToHM(e.worked_hours)}</td><td>${norm ? norm.norm_hours : '—'}</td><td style="color:${diffColor}">${diff != null ? (diff > 0 ? '+' : '') + hoursToHM(diff) : '—'}</td></tr>`);
+    rowsHtml.push(`<tr><td>${e.full_name}</td><td>${e.employment_type || '—'}</td>${cells}<td>${hoursToHM(e.worked_hours)}</td><td>${norm ? norm.norm_hours : '—'}</td><td style="color:${diffColor}">${diff != null ? (diff > 0 ? '+' : '') + hoursToHM(diff) : '—'}</td><td>${e.worked_days}</td><td>${norm ? norm.working_days : '—'}</td></tr>`);
   }
   document.querySelector('#tsTable tbody').innerHTML = rowsHtml.length ? rowsHtml.join('') : `<tr><td colspan="${totalCols}" class="empty">Немає активних співробітників з табельним номером</td></tr>`;
 
@@ -1976,6 +2009,38 @@ async function loadTimesheetView() {
   }
 }
 
+// Ручне виправлення дня (Тетяна: "люди інколи забувають закривати
+// робочий день, і я вношу дані вручну, або пізніше відкривають і треба
+// відредагувати"). employee_id/date шукаємо у вже завантаженому
+// window._tsData, а не тягнемо через onclick-атрибут, щоб не морочитись
+// з екрануванням ПІБ.
+function editTimesheetDay(employeeId, date) {
+  const emp = (window._tsData?.employees || []).find((e) => e.employee_id === employeeId);
+  const day = emp?.days.find((d) => d.date === date);
+  document.getElementById('tsEditEmployeeId').value = employeeId;
+  document.getElementById('tsEditDate').value = date;
+  document.getElementById('tsEditTitle').textContent = `${emp?.full_name || ''} — ${date}`;
+  document.getElementById('tsEditStart').value = day?.start && day.start !== '—' ? day.start : '';
+  document.getElementById('tsEditEnd').value = (day?.end && day.end !== '—' && !day.auto_end) ? day.end : '';
+  document.getElementById('tsEditOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveTsEdit').onclick = async () => {
+  const employee_id = Number(document.getElementById('tsEditEmployeeId').value);
+  const date = document.getElementById('tsEditDate').value;
+  const start_time = document.getElementById('tsEditStart').value || null;
+  const end_time = document.getElementById('tsEditEnd').value || null;
+  const resp = await apiFetch('/api/timesheet/override', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ employee_id, date, start_time, end_time })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('tsEditOverlay');
+  showToast('Час виправлено');
+  loadTimesheetView();
+};
+
 document.getElementById('btnSaveTsNorm').onclick = async () => {
   const month = document.getElementById('tsMonth').value || currentMonthStr();
   const working_days = document.getElementById('tsNormDays').value;
@@ -1993,50 +2058,38 @@ document.getElementById('btnSaveTsNorm').onclick = async () => {
 
 const MONTH_NAMES_UK = ['Січень', 'Лютий', 'Березень', 'Квітень', 'Травень', 'Червень', 'Липень', 'Серпень', 'Вересень', 'Жовтень', 'Листопад', 'Грудень'];
 
+// Тетяна побачила першу версію (одна таблиця на 38 колонок) і попросила
+// спростити: просто перелік, клік — і відкривається картка співробітника,
+// де все і так редагується (зміна посади/керівника вже є на вкладці
+// "Працевлаштування", цілі/результати по місяцях — тепер на вкладці
+// "Ефективність"). Дашборд лишає собі лише те, чого немає на звичайному
+// списку "Співробітники": ставку, файл офферу, дату закінчення
+// випробувального — і все це видно тільки HRD.
 async function loadPeopleDashboard() {
-  const yearInput = document.getElementById('pdYear');
-  if (!yearInput.value) yearInput.value = new Date().getFullYear();
-  const year = Number(yearInput.value);
-
-  const resp = await apiFetch('/api/people-dashboard?year=' + year);
+  const resp = await apiFetch('/api/people-dashboard');
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося завантажити People Dashboard'); return; }
 
-  const headCols = ['ПІБ', 'Посада', 'Керівник', 'Дата прийому', 'Дата закінчення ВТ', 'Формат роботи', 'Файл офферу',
-    'Профіль посади', 'Ставка', 'КРІ на випробувальний', 'Перегляд зп', 'Статус', '1:1 з HR', '1:1 з керівником'];
-  const monthCols = MONTH_NAMES_UK.flatMap((n) => [n + ' ціль', n + ' результат']);
-  document.querySelector('#pdTable thead').innerHTML = '<tr>' +
-    [...headCols, ...monthCols].map((c) => `<th style="white-space:nowrap;">${c}</th>`).join('') + '</tr>';
+  const headCols = ['ПІБ', 'Посада', 'Керівник', 'Статус', 'Дата прийому', 'Дата закінчення ВТ', 'Формат роботи', 'Ставка', 'Файл офферу'];
+  document.querySelector('#pdTable thead').innerHTML = '<tr>' + headCols.map((c) => `<th style="white-space:nowrap;">${c}</th>`).join('') + '</tr>';
 
   document.querySelector('#pdTable tbody').innerHTML = (data.rows.length ? data.rows.map((r) => {
     const rate = r.compensation ? `${Number(r.compensation.fixed_salary || 0).toLocaleString('uk-UA')} ${r.compensation.currency || 'UAH'}` : '—';
     const offerCell = r.offer_file
-      ? `<a href="/api/offer-files/${r.offer_file.id}/download" target="_blank">${r.offer_file.filename}</a>`
+      ? `<a href="/api/offer-files/${r.offer_file.id}/download" target="_blank" onclick="event.stopPropagation();">${r.offer_file.filename}</a>`
       : '<span style="color:var(--muted);">немає</span>';
-    const monthCells = MONTH_NAMES_UK.map((_, i) => {
-      const month = i + 1;
-      const g = r.monthly_goals[month] || { goal: '', result: '' };
-      return `<td><textarea rows="1" style="min-width:120px;" onchange="savePeopleGoal(${r.id},${year},${month},'goal',this.value)">${g.goal}</textarea></td>` +
-             `<td><textarea rows="1" style="min-width:120px;" onchange="savePeopleGoal(${r.id},${year},${month},'result',this.value)">${g.result}</textarea></td>`;
-    }).join('');
-    return `<tr>
-      <td style="white-space:nowrap;"><a href="#" onclick="openEmployeeProfile(${r.id}); return false;">${r.full_name}</a></td>
+    return `<tr class="clickable" onclick="openEmployeeProfile(${r.id})">
+      <td style="white-space:nowrap;">${r.full_name}</td>
       <td>${r.position_title || '—'}</td>
       <td>${r.manager_name || '—'}</td>
+      <td>${employeeStatusTag(r.status)}</td>
       <td>${r.employment_start_date ? new Date(r.employment_start_date).toLocaleDateString('uk-UA') : '—'}</td>
       <td>${r.probation_end_date ? new Date(r.probation_end_date).toLocaleDateString('uk-UA') : '—'}</td>
       <td>${r.employment_format ? statusLabel(r.employment_format) : '—'}</td>
-      <td>${offerCell}</td>
-      <td>${r.position_purpose || '—'}</td>
       <td>${rate}</td>
-      <td>${r.probation_goals || '—'}</td>
-      <td><a href="#" onclick="openEmployeeProfile(${r.id}); return false;">Переглянути</a></td>
-      <td>${employeeStatusTag(r.status)}</td>
-      <td>${r.last_hr_1on1 || '—'}</td>
-      <td>${r.last_manager_1on1 || '—'}</td>
-      ${monthCells}
+      <td>${offerCell}</td>
     </tr>`;
-  }).join('') : `<tr><td colspan="${headCols.length + monthCols.length}" class="empty">Немає активних співробітників</td></tr>`);
+  }).join('') : `<tr><td colspan="${headCols.length}" class="empty">Немає активних співробітників</td></tr>`);
 }
 
 async function savePeopleGoal(employee_id, year, month, field, value) {
@@ -3531,6 +3584,34 @@ async function renderPerformanceTab(e) {
         </div>
       `).join('') || '<p style="color:var(--muted);">Ще немає цілей розвитку.</p>'}
     </div>
+
+    ${window._me.role === 'HRD' ? `
+      <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Цілі/результати по місяцях (видно лише HRD)</h3>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <label style="font-size:12px; color:var(--muted);">Рік:</label>
+        <input type="number" id="mgYear" style="width:90px;" value="${new Date().getFullYear()}" onchange="loadMonthlyGoalsSection()">
+      </div>
+      <div id="monthlyGoalsBlock"><p style="color:var(--muted);">Завантаження…</p></div>
+    ` : ''}
+  `;
+  if (window._me.role === 'HRD') loadMonthlyGoalsSection();
+}
+
+async function loadMonthlyGoalsSection() {
+  const year = Number(document.getElementById('mgYear').value) || new Date().getFullYear();
+  const resp = await apiFetch(`/api/employees/${currentEmployeeId}/monthly-goals?year=${year}`);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити цілі'); return; }
+  document.getElementById('monthlyGoalsBlock').innerHTML = `
+    <div class="tableWrap"><table><thead><tr><th>Місяць</th><th>Ціль</th><th>Результат</th></tr></thead><tbody>
+      ${data.goals.map((g) => `
+        <tr>
+          <td style="white-space:nowrap;">${MONTH_NAMES_UK[g.month - 1]}</td>
+          <td><textarea rows="1" style="min-width:220px;" onchange="savePeopleGoal(${currentEmployeeId},${year},${g.month},'goal',this.value)">${g.goal}</textarea></td>
+          <td><textarea rows="1" style="min-width:220px;" onchange="savePeopleGoal(${currentEmployeeId},${year},${g.month},'result',this.value)">${g.result}</textarea></td>
+        </tr>
+      `).join('')}
+    </tbody></table></div>
   `;
 }
 

@@ -1025,6 +1025,21 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Ручні виправлення початку/кінця робочого дня (Тетяна: "люди інколи
+    -- забувають закривати робочий день, і я вношу дані вручну"). Коли
+    -- заповнено — має пріоритет над тим, що прийшло з checkins бота, для
+    -- цього конкретного дня цього співробітника. NULL у полі — те, що
+    -- бот записав (чи не записав), лишається як є для цього поля.
+    CREATE TABLE IF NOT EXISTS hr_timesheet_overrides (
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      date DATE NOT NULL,
+      start_time TIME,
+      end_time TIME,
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (employee_id, date)
+    );
+
     -- Джоб-офери на картці співробітника (People Dashboard п. "Файл
     -- офферу") — доступ лише HRD, перевіряється на рівні routes
     -- (requireRole() без аргументів = тільки HRD).
@@ -5201,11 +5216,37 @@ function fmtKyivTime(ts) {
 // жодного окремого кроку.
 const TIMESHEET_TRACKED_STATUSES = ['Active', 'Probation', 'Part-time', 'Leaving'];
 
+function hmToMinutes(hm) {
+  if (!hm) return null;
+  const [h, mnt] = hm.split(':').map(Number);
+  return h * 60 + mnt;
+}
+
+// "Днів, за які людина закрила робочий день, ще не настав": порівнюємо
+// з сьогоднішньою датою у Києві (сервер може бути в іншому часовому
+// поясі) — не позначаємо "забув закрити", поки день ще триває.
+function todayKyivStr() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' });
+}
+
+async function upsertTimesheetOverride({ employee_id, date, start_time, end_time }, actor) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_timesheet_overrides (employee_id, date, start_time, end_time, updated_by, updated_at)
+     VALUES ($1,$2,$3,$4,$5,now())
+     ON CONFLICT (employee_id, date) DO UPDATE SET
+       start_time = $3, end_time = $4, updated_by = $5, updated_at = now()
+     RETURNING *`,
+    [employee_id, date, start_time || null, end_time || null, actor || '']
+  );
+  return rows[0];
+}
+
 async function getTimesheet(month) {
   const [y, m] = month.split('-').map(Number);
   const monthStart = `${month}-01`;
   const daysInMonth = new Date(y, m, 0).getDate();
   const monthEnd = `${month}-${String(daysInMonth).padStart(2, '0')}`;
+  const today = todayKyivStr();
 
   const { rows: employees } = await pool.query(`
     SELECT e.id, e.employee_number, per.full_name,
@@ -5222,7 +5263,7 @@ async function getTimesheet(month) {
   let checkinRows = [];
   try {
     const { rows } = await pool.query(`
-      SELECT employee_id, kyiv_date, type, created_at
+      SELECT employee_id, kyiv_date, type, created_at, work_format
       FROM checkins
       WHERE kyiv_date >= $1 AND kyiv_date <= $2
       ORDER BY employee_id, kyiv_date, created_at
@@ -5237,10 +5278,16 @@ async function getTimesheet(month) {
   for (const row of checkinRows) {
     const key = row.employee_id + '|' + dateKey(row.kyiv_date);
     let entry = byEmpDate.get(key);
-    if (!entry) { entry = { start: null, end: null }; byEmpDate.set(key, entry); }
-    if (row.type === 'in' && !entry.start) entry.start = row.created_at;
+    if (!entry) { entry = { start: null, end: null, workFormat: '' }; byEmpDate.set(key, entry); }
+    if (row.type === 'in' && !entry.start) { entry.start = row.created_at; entry.workFormat = row.work_format || ''; }
     if (row.type === 'out') entry.end = row.created_at;
   }
+
+  const { rows: overrideRows } = await pool.query(
+    `SELECT * FROM hr_timesheet_overrides WHERE date >= $1 AND date <= $2`,
+    [monthStart, monthEnd]
+  );
+  const overridesByKey = new Map(overrideRows.map((o) => [o.employee_id + '|' + dateKey(o.date), o]));
 
   const absences = await listAbsences({ from: monthStart, to: monthEnd });
   const approvedAbsences = absences.filter((a) => a.status === 'Approved');
@@ -5253,25 +5300,53 @@ async function getTimesheet(month) {
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = `${month}-${String(d).padStart(2, '0')}`;
       const entry = byEmpDate.get(emp.employee_number + '|' + dateStr);
+      const override = overridesByKey.get(emp.id + '|' + dateStr);
       const absence = approvedAbsences.find((a) =>
         a.hr_employee_id === emp.id && dateKey(a.start_date) <= dateStr && dateKey(a.end_date) >= dateStr);
-      let hours = null;
-      if (entry?.start && entry?.end) {
-        hours = Math.round(((new Date(entry.end) - new Date(entry.start)) / 3600000) * 100) / 100;
+
+      const botStart = fmtKyivTime(entry?.start);
+      const botEnd = fmtKyivTime(entry?.end);
+      const effStart = override?.start_time ? override.start_time.slice(0, 5) : botStart;
+      let effEnd = override?.end_time ? override.end_time.slice(0, 5) : botEnd;
+
+      // Забула закрити зміну (Тетяна вносить це вручну зараз) — для дня,
+      // що вже минув, ставимо технічні 18:00 для розрахунку годин, але
+      // позначаємо auto_end, щоб на екрані було видно "забув(ла) закрити".
+      let autoEnd = false;
+      if (effStart && !effEnd && dateStr < today) {
+        effEnd = '18:00';
+        autoEnd = true;
       }
+
+      let hours = null;
+      if (effStart && effEnd) {
+        hours = Math.round(((hmToMinutes(effEnd) - hmToMinutes(effStart)) / 60) * 100) / 100;
+      }
+
       days.push({
         date: dateStr,
-        start: fmtKyivTime(entry?.start),
-        end: fmtKyivTime(entry?.end),
+        start: effStart,
+        end: effEnd,
         hours,
-        absence_type: absence ? absence.type : null
+        absence_type: absence ? absence.type : null,
+        is_remote: entry?.workFormat === 'remote',
+        auto_end: autoEnd,
+        has_override: !!override
       });
     }
     const worked_hours = Math.round(days.reduce((sum, d) => sum + (d.hours || 0), 0) * 100) / 100;
+    // Норма робочих днів рахує відпустку й лікарняний як відпрацьований
+    // день (Тетяна: "відпустка щорічна та лікарняний входять в кількість
+    // відпрацьованих днів"), відпустку за свій рахунок — ні.
+    const worked_days = days.reduce((count, d) => {
+      if (d.absence_type === 'Vacation' || d.absence_type === 'Sick Leave') return count + 1;
+      if (d.absence_type === 'Unpaid Leave') return count;
+      return d.hours != null ? count + 1 : count;
+    }, 0);
     return {
       employee_id: emp.id, employee_number: emp.employee_number, full_name: emp.full_name,
       employment_type: emp.employment_type || '', department_id: emp.department_id, department_name: emp.department_name,
-      days, worked_hours
+      days, worked_hours, worked_days
     };
   });
 
@@ -5389,6 +5464,19 @@ async function listPeopleDashboard(year) {
 // goal/result можуть прийти по одному (клітинки в People Dashboard
 // зберігаються окремо при onchange) — COALESCE проти вже збереженого
 // значення, щоб редагування цілі не затирало вже введений результат.
+async function getMonthlyGoalsForEmployee(employeeId, year) {
+  const { rows } = await pool.query(
+    `SELECT month, goal, result FROM hr_monthly_goals WHERE employee_id = $1 AND year = $2`,
+    [employeeId, year]
+  );
+  const byMonth = new Map(rows.map((r) => [r.month, r]));
+  return Array.from({ length: 12 }, (_, i) => {
+    const month = i + 1;
+    const r = byMonth.get(month);
+    return { month, goal: r?.goal || '', result: r?.result || '' };
+  });
+}
+
 async function upsertMonthlyGoal({ employee_id, year, month, goal, result }, actor) {
   const { rows } = await pool.query(
     `INSERT INTO hr_monthly_goals (employee_id, year, month, goal, result, updated_by, updated_at)
@@ -5559,11 +5647,13 @@ export default {
   listTimesheetNorms,
   upsertTimesheetNorm,
   getTimesheet,
+  upsertTimesheetOverride,
   addOfferFileToEmployee,
   listOfferFilesForEmployee,
   getOfferFile,
   deleteOfferFile,
   listPeopleDashboard,
+  getMonthlyGoalsForEmployee,
   upsertMonthlyGoal,
   getRecruitmentCost,
   upsertRecruitmentCost,
