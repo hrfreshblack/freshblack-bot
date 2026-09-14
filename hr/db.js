@@ -5126,6 +5126,15 @@ function fmtKyivTime(ts) {
 }
 
 // month у форматі 'YYYY-MM'.
+// Табель веде облік лише для тих, хто фактично зараз працює й відмічається
+// в боті — Тетяна: "нащо мені там співробітники, які звільнені або
+// мобілізовані, якщо по ним облік не ведеться". Future Employee свідомо
+// не показуємо теж: людина ще не вийшла на роботу, відміток нема; щойно її
+// статус міняють на Active/Probation (стандартний крок "оформлення" при
+// виході) — вона сама з'являється в табелі з наступного запиту, без
+// жодного окремого кроку.
+const TIMESHEET_TRACKED_STATUSES = ['Active', 'Probation', 'Part-time', 'Leaving'];
+
 async function getTimesheet(month) {
   const [y, m] = month.split('-').map(Number);
   const monthStart = `${month}-01`;
@@ -5133,12 +5142,16 @@ async function getTimesheet(month) {
   const monthEnd = `${month}-${String(daysInMonth).padStart(2, '0')}`;
 
   const { rows: employees } = await pool.query(`
-    SELECT e.id, e.employee_number, per.full_name
+    SELECT e.id, e.employee_number, per.full_name,
+      ep.employment_type,
+      COALESCE(dep.id, 0) AS department_id, COALESCE(dep.name, 'Без відділу') AS department_name
     FROM hr_employees e
     JOIN hr_persons per ON per.id = e.person_id
-    WHERE e.active = true AND e.employee_number <> ''
-    ORDER BY lower(per.full_name)
-  `);
+    LEFT JOIN hr_employment_periods ep ON ep.employee_id = e.id AND ep.end_date IS NULL
+    LEFT JOIN hr_departments dep ON dep.id = ep.department_id
+    WHERE e.active = true AND e.employee_number <> '' AND e.status = ANY($1::text[])
+    ORDER BY COALESCE(dep.id, 999999), lower(per.full_name)
+  `, [TIMESHEET_TRACKED_STATUSES]);
 
   let checkinRows = [];
   try {
@@ -5189,7 +5202,11 @@ async function getTimesheet(month) {
       });
     }
     const worked_hours = Math.round(days.reduce((sum, d) => sum + (d.hours || 0), 0) * 100) / 100;
-    return { employee_id: emp.id, employee_number: emp.employee_number, full_name: emp.full_name, days, worked_hours };
+    return {
+      employee_id: emp.id, employee_number: emp.employee_number, full_name: emp.full_name,
+      employment_type: emp.employment_type || '', department_id: emp.department_id, department_name: emp.department_name,
+      days, worked_hours
+    };
   });
 
   return { month, norm, employees: employeeRows };
