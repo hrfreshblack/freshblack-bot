@@ -1505,6 +1505,63 @@ async function seedOrgImport(departmentDefs, positionDefs) {
   return { imported, skipped };
 }
 
+// Разове оновлення особистих даних з реального переліку співробітників
+// (seed-employee-roster-2026-09.js) — накладається на людей, яких уже
+// завела seedOrgImport. Ідемпотентно й обережно:
+//   - усі звичайні поля (телефон/пошта/день народження/ФОП-оформлення/
+//     employee_number) заповнюються лише якщо зараз порожні — нічого не
+//     перезаписує;
+//   - telegram заповнюється, якщо зараз порожній АБО там лежить чисто
+//     цифровий telegram_user_id (з попереднього імпорту) — тоді
+//     підставляється зрозуміліший @handle з нового файлу;
+//   - first_hire_date — єдине поле, яке ніколи не буває порожнім (завжди
+//     стоїть технічна дата-заглушка з seedOrgImport), тож для нього інший
+//     запобіжник: перезаписується лише якщо created_at рівно дорівнює
+//     updated_at — тобто картку співробітника ще ЖОДНОГО разу не
+//     редагували після створення. Якщо Тетяна вже щось поправляла в картці
+//     (байдуже що саме) — дата прийому лишається як є, не займаємо.
+// Людина з файлу, якої ще нема в базі (за full_name), заводиться як гола
+// картка-заглушка (лише ПІБ) — решту полів для неї у файлі й не було.
+async function seedEmployeeRosterUpdate(rows) {
+  const summary = { matched: 0, created: 0, notFound: 0 };
+
+  for (const row of rows) {
+    const fullName = String(row.full_name || '').trim();
+    if (!fullName) continue;
+
+    const { rows: personRows } = await pool.query('SELECT id FROM hr_persons WHERE full_name = $1', [fullName]);
+    if (!personRows.length) {
+      await createEmployee({ full_name: fullName, status: 'Active', created_by: 'seed-employee-roster-2026-09' });
+      summary.created++;
+      continue;
+    }
+
+    await pool.query(
+      `UPDATE hr_persons per SET
+         phone = CASE WHEN per.phone = '' AND $2::text IS NOT NULL THEN $2 ELSE per.phone END,
+         telegram = CASE WHEN (per.telegram = '' OR per.telegram ~ '^[0-9]+$') AND $3::text IS NOT NULL THEN $3 ELSE per.telegram END,
+         birth_date = CASE WHEN per.birth_date IS NULL AND $4::date IS NOT NULL THEN $4::date ELSE per.birth_date END,
+         updated_at = now()
+       WHERE per.id = $1`,
+      [personRows[0].id, row.phone || null, row.telegram || null, row.birth_date || null]
+    );
+
+    await pool.query(
+      `UPDATE hr_employees emp SET
+         employee_number = CASE WHEN (emp.employee_number IS NULL OR emp.employee_number = '') AND $2::text IS NOT NULL THEN $2 ELSE emp.employee_number END,
+         corporate_email = CASE WHEN emp.corporate_email = '' AND $3::text IS NOT NULL THEN $3 ELSE emp.corporate_email END,
+         employed_under = CASE WHEN emp.employed_under = '' AND $4::text IS NOT NULL THEN $4 ELSE emp.employed_under END,
+         first_hire_date = CASE WHEN emp.created_at = emp.updated_at AND $5::date IS NOT NULL THEN $5::date ELSE emp.first_hire_date END,
+         updated_at = now()
+       WHERE emp.person_id = $1`,
+      [personRows[0].id, row.employee_number || null, row.corporate_email || null, row.employed_under || null, row.first_hire_date || null]
+    );
+    summary.matched++;
+  }
+
+  return summary;
+}
+
 async function updatePersonFields(personId, fields) {
   const { full_name, birth_date, gender, phone, personal_email, telegram, city, emergency_contact, photo_url, about_me } = fields;
   if (about_me != null && about_me.replace(/\s/g, '').length > 10000) {
@@ -4874,6 +4931,7 @@ export default {
   createEmployee,
   importEmployeesFromRows,
   seedOrgImport,
+  seedEmployeeRosterUpdate,
   seedOnboardingLibrary,
   parseVacancyRequestFieldsFromText,
   parseVacancyFieldsFromText,

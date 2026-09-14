@@ -7,6 +7,7 @@ import db from './db.js';
 import seedAccounts from './seed-accounts.js';
 import { DEPARTMENTS as SEED_DEPARTMENTS, POSITIONS as SEED_POSITIONS, LEGACY_TOP_LEVEL_DEPARTMENTS } from './seed-org-import.js';
 import { ONBOARDING_LIBRARY as SEED_ONBOARDING_LIBRARY } from './seed-onboarding-library.js';
+import { EMPLOYEE_ROSTER_UPDATE as SEED_EMPLOYEE_ROSTER_UPDATE } from './seed-employee-roster-2026-09.js';
 import { signSsoToken, verifySsoToken } from './sso.js';
 import { parseEmployeesFile } from './parse-employees-file.js';
 
@@ -2294,6 +2295,9 @@ app.get('/api/resumes/:id/view', async (req, res) => {
 
     const onboardingLibraryResult = await db.seedOnboardingLibrary(SEED_ONBOARDING_LIBRARY);
     console.log(`Onboarding library import: ${onboardingLibraryResult.imported} imported, ${onboardingLibraryResult.skipped} already existed`);
+
+    const rosterUpdateResult = await db.seedEmployeeRosterUpdate(SEED_EMPLOYEE_ROSTER_UPDATE);
+    console.log(`Employee roster update: ${rosterUpdateResult.matched} matched, ${rosterUpdateResult.created} created new`);
   } catch (error) {
     console.error('Startup DB init ERROR:', error?.stack || error?.message || error);
     process.exit(1);
