@@ -1520,6 +1520,15 @@ async function seedOrgImport(departmentDefs, positionDefs) {
 //     updated_at — тобто картку співробітника ще ЖОДНОГО разу не
 //     редагували після створення. Якщо Тетяна вже щось поправляла в картці
 //     (байдуже що саме) — дата прийому лишається як є, не займаємо.
+//   - стаж на картці рахується НЕ від first_hire_date, а від start_date
+//     поточного періоду працевлаштування (hr_employment_periods) — той
+//     теж отримав технічну дату-заглушку від seedOrgImport, тож без
+//     окремого виправлення стаж показував би "0 міс." для всіх, кому
+//     щойно підставили реальну first_hire_date. Оновлюється так само
+//     обережно: лише поточний період (end_date IS NULL) і лише якщо його
+//     створила сама seedOrgImport (created_by = 'seed-org-import') — якщо
+//     Тетяна вже змінювала посаду/департамент (а це заводить новий
+//     період), цей період чіпати не можна.
 // Людина з файлу, якої ще нема в базі (за full_name), заводиться як гола
 // картка-заглушка (лише ПІБ) — решту полів для неї у файлі й не було.
 async function seedEmployeeRosterUpdate(rows) {
@@ -1556,6 +1565,17 @@ async function seedEmployeeRosterUpdate(rows) {
        WHERE emp.person_id = $1`,
       [personRows[0].id, row.employee_number || null, row.corporate_email || null, row.employed_under || null, row.first_hire_date || null]
     );
+
+    if (row.first_hire_date) {
+      const { rows: empIdRows } = await pool.query('SELECT id FROM hr_employees WHERE person_id = $1', [personRows[0].id]);
+      if (empIdRows.length) {
+        await pool.query(
+          `UPDATE hr_employment_periods SET start_date = $2::date
+           WHERE employee_id = $1 AND end_date IS NULL AND created_by = 'seed-org-import'`,
+          [empIdRows[0].id, row.first_hire_date]
+        );
+      }
+    }
     summary.matched++;
   }
 
