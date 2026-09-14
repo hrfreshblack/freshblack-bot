@@ -707,6 +707,17 @@ app.post('/api/people-dashboard/goals', requireRole(), async (req, res) => {
   }
 });
 
+app.get('/api/employees/:id/monthly-goals', requireRole(), async (req, res) => {
+  try {
+    const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
+    const goals = await db.getMonthlyGoalsForEmployee(Number(req.params.id), year);
+    res.json({ ok: true, goals, year });
+  } catch (error) {
+    console.error('GET /api/employees/:id/monthly-goals ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати цілі' });
+  }
+});
+
 // ---- Табель обліку робочого часу ----
 
 app.get('/api/timesheet', async (req, res) => {
@@ -741,6 +752,18 @@ app.post('/api/timesheet-norms', requireRole(), async (req, res) => {
   } catch (error) {
     console.error('POST /api/timesheet-norms ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти норму' });
+  }
+});
+
+// Ручне виправлення початку/кінця робочого дня — коли людина забула
+// відмітитись у боті чи відмітку треба скоригувати заднім числом.
+app.post('/api/timesheet/override', requireRole(), async (req, res) => {
+  try {
+    const override = await db.upsertTimesheetOverride(req.body || {}, req.account.username);
+    res.json({ ok: true, override });
+  } catch (error) {
+    console.error('POST /api/timesheet/override ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти виправлення' });
   }
 });
 
