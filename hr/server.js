@@ -174,6 +174,53 @@ app.get('/api/me', (req, res) => {
   res.json({ ok: true, account: { username, role, display_name } });
 });
 
+// Самообслуговування акаунтів (HRD-only) — вкладка "Доступи": Тетяна сама
+// заводить логіни новим людям і призначає роль, без втручання розробника.
+app.get('/api/accounts', requireRole(), async (req, res) => {
+  try {
+    const accounts = await db.listAccounts();
+    res.json({ ok: true, accounts, roles: db.ACCOUNT_ROLES });
+  } catch (error) {
+    console.error('GET /api/accounts ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося завантажити акаунти' });
+  }
+});
+
+app.post('/api/accounts', requireRole(), async (req, res) => {
+  try {
+    const { username, password, role, display_name } = req.body || {};
+    const account = await db.createAccount({ username, password, role, display_name });
+    res.json({ ok: true, account });
+  } catch (error) {
+    console.error('POST /api/accounts ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося створити акаунт' });
+  }
+});
+
+app.post('/api/accounts/:username/password', requireRole(), async (req, res) => {
+  try {
+    const { password } = req.body || {};
+    const rowCount = await db.updateAccountPassword(req.params.username, password);
+    if (!rowCount) { res.status(404).json({ ok: false, error: 'Акаунт не знайдено' }); return; }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/accounts/:username/password ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити пароль' });
+  }
+});
+
+app.post('/api/accounts/:username/active', requireRole(), async (req, res) => {
+  try {
+    const { active } = req.body || {};
+    const account = await db.setAccountActive(req.params.username, active);
+    if (!account) { res.status(404).json({ ok: false, error: 'Акаунт не знайдено' }); return; }
+    res.json({ ok: true, account });
+  } catch (error) {
+    console.error('POST /api/accounts/:username/active ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося змінити акаунт' });
+  }
+});
+
 app.get('/api/dictionaries', (req, res) => {
   res.json({
     ok: true,

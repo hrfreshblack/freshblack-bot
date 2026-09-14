@@ -250,6 +250,7 @@
     <button id="tabAbsences" onclick="showTab('absences')">Відсутності</button>
     <button id="tabOffboarding" onclick="showTab('offboarding')">Звільнення</button>
     <button id="tabRecruitmentMetrics" onclick="showTab('recruitmentMetrics')">Метрики найму</button>
+    <button id="tabAccounts" onclick="showTab('accounts')" style="display:none;">Доступи</button>
   </nav>
   <div class="sidebarFooter">
     <a class="workspaceSwitch" href="#" onclick="switchWorkspace('https://splendid-tenderness-production-f002.up.railway.app'); return false;" title="Перейти у Виробництво (ERP)">📦 Виробництво</a>
@@ -636,7 +637,41 @@
     <div class="breakdownGrid" id="rmAttentionLists"></div>
   </div>
 
+  <div id="viewAccounts" style="display:none;">
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 16px;">Акаунти для входу в HR CRM. HRD має повний доступ завжди. Recruiter додатково може редагувати розділ рекрутингу. Manager/Employee поки лише переглядають — жоден маршрут не дає їм права на запис, це свідомо нижчий рівень доступу для тих, кому потрібно лише бачити дані.</p>
+    <button id="btnAddAccount">+ Акаунт</button>
+    <div class="tableWrap" style="margin-top:12px;"><table><thead><tr><th>Логін</th><th>Ім'я</th><th>Роль</th><th>Статус</th><th>Створено</th><th></th></tr></thead><tbody id="accountsBody"></tbody></table></div>
+  </div>
+
 </main>
+</div>
+
+<!-- Модалка: новий акаунт -->
+<div class="overlay" id="accountOverlay">
+  <div class="modal">
+    <h2>Новий акаунт</h2>
+    <div class="field"><label>Логін</label><input type="text" id="accUsername" autocomplete="off"></div>
+    <div class="field"><label>Ім'я для відображення</label><input type="text" id="accDisplayName"></div>
+    <div class="field"><label>Пароль</label><input type="password" id="accPassword" autocomplete="new-password"></div>
+    <div class="field"><label>Роль</label><select id="accRole"></select></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('accountOverlay')">Скасувати</button>
+      <button id="btnSaveAccount">Створити</button>
+    </div>
+  </div>
+</div>
+
+<!-- Модалка: новий пароль -->
+<div class="overlay" id="accountPasswordOverlay">
+  <div class="modal">
+    <h2>Новий пароль</h2>
+    <input type="hidden" id="accPwUsername">
+    <div class="field"><label>Пароль</label><input type="password" id="accNewPassword" autocomplete="new-password"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('accountPasswordOverlay')">Скасувати</button>
+      <button id="btnSaveAccountPassword">Зберегти</button>
+    </div>
+  </div>
 </div>
 
 <!-- Модалка: новий/редагування департамент -->
@@ -1462,6 +1497,7 @@ async function initApp() {
   document.getElementById('loginScreen').classList.remove('open');
   document.getElementById('appShell').style.display = '';
   document.getElementById('currentUserLabel').textContent = window._me.display_name || window._me.username;
+  document.getElementById('tabAccounts').style.display = window._me.role === 'HRD' ? '' : 'none';
 
   await loadDictionaries();
   showTab('dashboard');
@@ -1621,6 +1657,7 @@ function showTab(tab) {
   document.getElementById('viewOffboarding').style.display = tab === 'offboarding' ? '' : 'none';
   document.getElementById('viewOffboardingCaseDetail').style.display = 'none';
   document.getElementById('viewRecruitmentMetrics').style.display = tab === 'recruitmentMetrics' ? '' : 'none';
+  document.getElementById('viewAccounts').style.display = tab === 'accounts' ? '' : 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabTasks').classList.toggle('active', tab === 'tasks');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
@@ -1633,6 +1670,7 @@ function showTab(tab) {
   document.getElementById('tabAbsences').classList.toggle('active', tab === 'absences');
   document.getElementById('tabOffboarding').classList.toggle('active', tab === 'offboarding');
   document.getElementById('tabRecruitmentMetrics').classList.toggle('active', tab === 'recruitmentMetrics');
+  document.getElementById('tabAccounts').classList.toggle('active', tab === 'accounts');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'tasks') showTasksSubTab(window._tasksSubTab || 'board');
   if (tab === 'people') loadPeople();
@@ -1645,6 +1683,85 @@ function showTab(tab) {
   if (tab === 'absences') loadAbsencesView();
   if (tab === 'offboarding') loadOffboardingView();
   if (tab === 'recruitmentMetrics') loadRecruitmentMetrics();
+  if (tab === 'accounts') loadAccountsView();
+}
+
+// ---- Доступи (акаунти) ----
+
+const ACCOUNT_ROLE_LABELS = { HRD: 'HRD', Recruiter: 'Рекрутер', Manager: 'Керівник (перегляд)', Employee: 'Співробітник (перегляд)' };
+function accountRoleLabel(role) { return ACCOUNT_ROLE_LABELS[role] || role; }
+
+async function loadAccountsView() {
+  const resp = await apiFetch('/api/accounts');
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити акаунти'); return; }
+  window._accountRoles = data.roles;
+  document.getElementById('accountsBody').innerHTML = data.accounts.map((a) => `
+    <tr>
+      <td>${escAttr(a.username)}</td>
+      <td>${escAttr(a.display_name || '—')}</td>
+      <td>${escAttr(accountRoleLabel(a.role))}</td>
+      <td>${a.active ? '<span class="tag ok">Активний</span>' : '<span class="tag neutral">Вимкнений</span>'}</td>
+      <td>${new Date(a.created_at).toLocaleDateString('uk-UA')}</td>
+      <td style="white-space:nowrap;">
+        <button class="secondary" style="font-size:11px; padding:3px 7px;" onclick="openAccountPasswordModal('${escAttr(a.username)}')">Пароль</button>
+        <button class="secondary" style="font-size:11px; padding:3px 7px;" onclick="toggleAccountActive('${escAttr(a.username)}', ${!a.active})">${a.active ? 'Вимкнути' : 'Увімкнути'}</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" class="empty">Ще немає акаунтів.</td></tr>';
+}
+
+document.getElementById('btnAddAccount').onclick = () => {
+  document.getElementById('accUsername').value = '';
+  document.getElementById('accDisplayName').value = '';
+  document.getElementById('accPassword').value = '';
+  document.getElementById('accRole').innerHTML = (window._accountRoles || []).map((r) => `<option value="${r}">${escAttr(accountRoleLabel(r))}</option>`).join('');
+  document.getElementById('accountOverlay').classList.add('open');
+};
+
+document.getElementById('btnSaveAccount').onclick = async () => {
+  const body = {
+    username: document.getElementById('accUsername').value.trim(),
+    display_name: document.getElementById('accDisplayName').value.trim(),
+    password: document.getElementById('accPassword').value,
+    role: document.getElementById('accRole').value
+  };
+  const resp = await apiFetch('/api/accounts', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося створити акаунт'); return; }
+  closeOverlay('accountOverlay');
+  showToast('Акаунт створено');
+  loadAccountsView();
+};
+
+function openAccountPasswordModal(username) {
+  document.getElementById('accPwUsername').value = username;
+  document.getElementById('accNewPassword').value = '';
+  document.getElementById('accountPasswordOverlay').classList.add('open');
+}
+
+document.getElementById('btnSaveAccountPassword').onclick = async () => {
+  const username = document.getElementById('accPwUsername').value;
+  const password = document.getElementById('accNewPassword').value;
+  const resp = await apiFetch('/api/accounts/' + encodeURIComponent(username) + '/password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити пароль'); return; }
+  closeOverlay('accountPasswordOverlay');
+  showToast('Пароль змінено');
+};
+
+async function toggleAccountActive(username, active) {
+  const resp = await apiFetch('/api/accounts/' + encodeURIComponent(username) + '/active', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося змінити акаунт'); return; }
+  showToast(active ? 'Акаунт увімкнено' : 'Акаунт вимкнено');
+  loadAccountsView();
 }
 
 // ---- Dashboard ----
