@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fresh Black HR CRM</title>
+<script src="/vendor/chart.js"></script>
 <style>
   :root {
     --bg: #0f1115;
@@ -114,6 +115,16 @@
   .metricBarTrack { flex: 1; background: rgba(255,255,255,0.06); border-radius: 4px; height: 10px; overflow: hidden; margin-top: 3px; }
   .metricBarFill { background: var(--accent); height: 100%; border-radius: 4px; }
   .metricBarValue { width: 28px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; margin-top: 1px; }
+
+  .chartGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 4px; }
+  .chartCard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .chartCard .chartTitle { font-size: 12px; font-weight: 700; margin-bottom: 10px; color: var(--text); }
+  .chartCard .chartWrap { position: relative; height: 220px; }
+  .kpiCard.kpiAccent1 { border-top: 3px solid #c9a24b; }
+  .kpiCard.kpiAccent2 { border-top: 3px solid #4f9d8f; }
+  .kpiCard.kpiAccent3 { border-top: 3px solid #b56a5c; }
+  .kpiCard.kpiAccent4 { border-top: 3px solid #5c7fb5; }
+  .kpiCard.kpiAccent5 { border-top: 3px solid #8a6cb5; }
 
   .cardsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
   .personCard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer; }
@@ -270,11 +281,37 @@
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Найм</h3>
     <div class="kpiRow" id="dashboardRecruitmentKpis"></div>
-    <div class="breakdownGrid" id="dashboardFunnel"></div>
+    <div class="chartGrid">
+      <div class="chartCard" style="grid-column: span 2;">
+        <div class="chartTitle">Воронка найму <span class="ⓘ" title="Кількість активних заявок кандидатів на кожному етапі воронки: Новий/Відгук → Сорсинг/Первинний розгляд → Первинне інтерв'ю → Основне інтерв'ю → Тестове завдання → Надіслано офер → Офер прийнято → Ознайомчий день → Стажувальний тиждень.">ⓘ</span></div>
+        <div class="chartWrap"><canvas id="chartFunnel"></canvas></div>
+      </div>
+    </div>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Персонал</h3>
     <div class="kpiRow" id="dashboardPeopleKpis"></div>
-    <div class="breakdownGrid" id="dashboardBreakdowns"></div>
+    <div class="chartGrid">
+      <div class="chartCard">
+        <div class="chartTitle">Плинність за типом (12 міс) <span class="ⓘ" title="За власним бажанням — з ініціативи співробітника/за згодою сторін. Зі сторони компанії — з ініціативи компанії/закінчення контракту. Випробувальний термін — не пройшов випробувальний термін.">ⓘ</span></div>
+        <div class="chartWrap"><canvas id="chartTurnover"></canvas></div>
+      </div>
+      <div class="chartCard">
+        <div class="chartTitle">Стать (активні) <span class="ⓘ" title="Розподіл активних співробітників за полем «Стать» у вкладці «Особисте».">ⓘ</span></div>
+        <div class="chartWrap"><canvas id="chartGender"></canvas></div>
+      </div>
+      <div class="chartCard">
+        <div class="chartTitle">Департаменти (активні)</div>
+        <div class="chartWrap"><canvas id="chartDepartments"></canvas></div>
+      </div>
+      <div class="chartCard">
+        <div class="chartTitle">Стаж (активні) <span class="ⓘ" title="Розподіл активних співробітників за стажем: <3міс, 3-6міс, 6-12міс, 1-2р, 2-3р, 3+р.">ⓘ</span></div>
+        <div class="chartWrap"><canvas id="chartTenure"></canvas></div>
+      </div>
+      <div class="chartCard">
+        <div class="chartTitle">Випробувальний термін (усього) <span class="ⓘ" title="Кількість зафіксованих рішень по кожному типу за весь час.">ⓘ</span></div>
+        <div class="chartWrap"><canvas id="chartProbation"></canvas></div>
+      </div>
+    </div>
 
     <p style="color: var(--muted); font-size: 12px; margin-top: 20px;">Це базові HR-метрики зі стандартними формулами (наведи курсор на ⓘ, щоб побачити, як саме рахується) — не повноцінна аналітика з ТЗ розділу 29, яку свідомо відкладено до стабілізації даних.</p>
   </div>
@@ -2103,8 +2140,58 @@ async function savePeopleGoal(employee_id, year, month, field, value) {
 
 // ---- Dashboard ----
 
-function kpiCardHtml(value, label, formula) {
-  return `<div class="kpiCard"><div class="kpiValue">${value}</div><div class="kpiLabel">${escAttr(label)}${formula ? ' <span class="ⓘ" title="' + escAttr(formula) + '">ⓘ</span>' : ''}</div></div>`;
+function kpiCardHtml(value, label, formula, accent) {
+  return `<div class="kpiCard${accent ? ' ' + accent : ''}"><div class="kpiValue">${value}</div><div class="kpiLabel">${escAttr(label)}${formula ? ' <span class="ⓘ" title="' + escAttr(formula) + '">ⓘ</span>' : ''}</div></div>`;
+}
+
+// Палітра графіків — на основі золотого акценту застосунку, підібрана
+// для темної теми (без чистого чорного/білого, щоб не "різало" очі).
+const CHART_PALETTE = ['#c9a24b', '#4f9d8f', '#b56a5c', '#5c7fb5', '#8a6cb5', '#7fa650', '#c77d3f', '#5c9bb5'];
+
+// Один Chart.js-інстанс на canvas — при повторному завантаженні дашборду
+// (loadDashboard викликається щоразу при переході на вкладку) старий
+// інстанс на тому ж canvas треба знищити, інакше Chart.js падає з
+// "Canvas is already in use".
+window._chartInstances = window._chartInstances || {};
+function renderChart(canvasId, type, dataObj, opts) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  if (window._chartInstances[canvasId]) window._chartInstances[canvasId].destroy();
+  const labels = Object.keys(dataObj);
+  const values = Object.values(dataObj);
+  const isBar = type === 'bar' || type === 'horizontalBar';
+  window._chartInstances[canvasId] = new Chart(canvas, {
+    type: type === 'horizontalBar' ? 'bar' : type,
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: labels.map((_, i) => CHART_PALETTE[i % CHART_PALETTE.length]),
+        borderColor: 'transparent',
+        borderRadius: isBar ? 4 : 0,
+        borderWidth: type === 'doughnut' || type === 'pie' ? 2 : 0,
+        hoverOffset: 4
+      }]
+    },
+    options: {
+      indexAxis: type === 'horizontalBar' ? 'y' : 'x',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: type === 'doughnut' || type === 'pie',
+          position: 'right',
+          labels: { color: '#9aa0ab', boxWidth: 12, font: { size: 11 } }
+        },
+        tooltip: { titleFont: { size: 12 }, bodyFont: { size: 12 } }
+      },
+      scales: isBar ? {
+        x: { ticks: { color: '#9aa0ab', font: { size: 11 }, precision: 0 }, grid: { color: 'rgba(255,255,255,0.06)' }, beginAtZero: true },
+        y: { ticks: { color: '#9aa0ab', font: { size: 11 }, precision: 0 }, grid: { color: 'rgba(255,255,255,0.06)' }, beginAtZero: true }
+      } : undefined,
+      ...opts
+    }
+  });
 }
 
 function breakdownCardHtml(title, formula, dataObj, opts = {}) {
@@ -2422,11 +2509,11 @@ async function loadDashboard() {
   const departments = orgData.departments.length;
 
   document.getElementById('dashboardKpis').innerHTML = [
-    kpiCardHtml(active.length, 'Активна чисельність', 'Співробітники зі статусом Активний, Випробувальний термін або Часткова зайнятість.'),
-    kpiCardHtml(probation.length, 'На випробувальному', 'Співробітники зі статусом Випробувальний термін.'),
-    kpiCardHtml(vacant.length, 'Вакантні посади', 'Посади зі статусом Вакантна або Йде підбір.'),
-    kpiCardHtml(departments, 'Департаментів', ''),
-    kpiCardHtml(employees.length, 'Усього в системі', 'Усі картки, включно з Майбутній співробітник та Колишній співробітник.')
+    kpiCardHtml(active.length, 'Активна чисельність', 'Співробітники зі статусом Активний, Випробувальний термін або Часткова зайнятість.', 'kpiAccent1'),
+    kpiCardHtml(probation.length, 'На випробувальному', 'Співробітники зі статусом Випробувальний термін.', 'kpiAccent2'),
+    kpiCardHtml(vacant.length, 'Вакантні посади', 'Посади зі статусом Вакантна або Йде підбір.', 'kpiAccent3'),
+    kpiCardHtml(departments, 'Департаментів', '', 'kpiAccent4'),
+    kpiCardHtml(employees.length, 'Усього в системі', 'Усі картки, включно з Майбутній співробітник та Колишній співробітник.', 'kpiAccent5')
   ].join('');
 
   if (!metricsData.ok) return;
@@ -2445,11 +2532,7 @@ async function loadDashboard() {
     )
   ].join('');
 
-  document.getElementById('dashboardFunnel').innerHTML = breakdownCardHtml(
-    'Воронка найму',
-    'Кількість активних заявок кандидатів на кожному етапі воронки: Новий/Відгук → Сорсинг/Первинний розгляд → Первинне інтерв\'ю → Основне інтерв\'ю → Тестове завдання → Надіслано офер → Офер прийнято → Ознайомчий день → Стажувальний тиждень.',
-    m.funnel, { scaleByMax: true }
-  );
+  renderChart('chartFunnel', 'horizontalBar', m.funnel, { plugins: { legend: { display: false } } });
 
   document.getElementById('dashboardPeopleKpis').innerHTML = [
     kpiCardHtml(
@@ -2469,12 +2552,20 @@ async function loadDashboard() {
     )
   ].join('');
 
-  document.getElementById('dashboardBreakdowns').innerHTML = [
-    breakdownCardHtml('Плинність за типом (12 міс)', "За власним бажанням — з ініціативи співробітника/за згодою сторін. Зі сторони компанії — з ініціативи компанії/закінчення контракту. Випробувальний термін — не пройшов випробувальний термін.", translateKeys(m.turnoverBreakdown)),
-    breakdownCardHtml('Стать (активні)', 'Розподіл активних співробітників за полем «Стать» у вкладці «Особисте».', translateKeys(m.genderBreakdown)),
-    breakdownCardHtml('Стаж (активні)', 'Розподіл активних співробітників за стажем: <3міс, 3-6міс, 6-12міс, 1-2р, 2-3р, 3+р.', m.tenureBuckets),
-    breakdownCardHtml('Випробувальний термін (усього)', 'Кількість зафіксованих рішень по кожному типу за весь час.', translateKeys(m.probationCounts))
-  ].join('');
+  renderChart('chartTurnover', 'doughnut', translateKeys(m.turnoverBreakdown));
+  renderChart('chartGender', 'doughnut', translateKeys(m.genderBreakdown));
+  renderChart('chartTenure', 'bar', m.tenureBuckets, { plugins: { legend: { display: false } } });
+  renderChart('chartProbation', 'doughnut', translateKeys(m.probationCounts));
+
+  // Департаменти по активних співробітниках — не було на дашборді
+  // взагалі, порахуємо на льоту з уже завантаженого списку співробітників
+  // (той самий "active", що й для верхньої KPI-плитки), без нового API.
+  const deptCounts = {};
+  active.forEach((e) => {
+    const name = e.department_name || 'Без відділу';
+    deptCounts[name] = (deptCounts[name] || 0) + 1;
+  });
+  renderChart('chartDepartments', 'pie', deptCounts);
 }
 
 // ---- Recruitment Metrics (ТЗ розділ 30 — Recruiter Quality & Progress Dashboard) ----
