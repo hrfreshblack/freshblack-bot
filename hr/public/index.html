@@ -248,9 +248,11 @@
     <button id="tabKnowledge" onclick="showTab('knowledge')">Знання</button>
     <button id="tabSurveys" onclick="showTab('surveys')">Опитування</button>
     <button id="tabAbsences" onclick="showTab('absences')">Відсутності</button>
+    <button id="tabTimesheet" onclick="showTab('timesheet')">Табель</button>
     <button id="tabOffboarding" onclick="showTab('offboarding')">Звільнення</button>
     <button id="tabRecruitmentMetrics" onclick="showTab('recruitmentMetrics')">Метрики найму</button>
     <button id="tabAccounts" onclick="showTab('accounts')" style="display:none;">Доступи</button>
+    <button id="tabPeopleDashboard" onclick="showTab('peopleDashboard')" style="display:none;">People Dashboard</button>
   </nav>
   <div class="sidebarFooter">
     <a class="workspaceSwitch" href="#" onclick="switchWorkspace('https://splendid-tenderness-production-f002.up.railway.app'); return false;" title="Перейти у Виробництво (ERP)">📦 Виробництво</a>
@@ -434,6 +436,27 @@
     </div>
     <div id="vacancyDetailFields" style="margin-bottom:16px;"></div>
     <div id="vacSalarySummary" style="color:var(--muted); font-size:13px; margin-bottom:12px;"></div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Вартість найму (Cost per Hire)</h3>
+    <div class="fieldGrid">
+      <div class="fieldItem"><label>Вартість розміщення вакансій, грн</label><input type="number" id="rcAdCost" step="0.01"></div>
+      <div class="fieldItem"><label>Скільки разів розміщували</label><input type="number" id="rcPostings" step="1"></div>
+      <div class="fieldItem"><label>Час рекрутера, год</label><input type="number" id="rcRecruiterHours" step="0.5"></div>
+      <div class="fieldItem"><label>Ставка рекрутера, грн/год</label><input type="number" id="rcRecruiterRate" step="1"></div>
+      <div class="fieldItem"><label>Час HRD, год</label><input type="number" id="rcHrdHours" step="0.5"></div>
+      <div class="fieldItem"><label>Ставка HRD, грн/год</label><input type="number" id="rcHrdRate" step="1"></div>
+      <div class="fieldItem"><label>Час керівника, год</label><input type="number" id="rcManagerHours" step="0.5"></div>
+      <div class="fieldItem"><label>Ставка керівника, грн/год</label><input type="number" id="rcManagerRate" step="1"></div>
+      <div class="fieldItem"><label>Адаптація, грн</label><input type="number" id="rcAdaptation" step="0.01"></div>
+      <div class="fieldItem"><label>Ознайомчий день, грн</label><input type="number" id="rcOnboardingDay" step="0.01"></div>
+      <div class="fieldItem"><label>Інше, грн</label><input type="number" id="rcOther" step="0.01"></div>
+      <div class="fieldItem"><label>Коментар до "Інше"</label><input type="text" id="rcOtherComment"></div>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px; margin:10px 0;">
+      <button onclick="saveRecruitmentCost()">Зберегти вартість найму</button>
+      <span id="rcTotal" style="font-weight:700;"></span>
+    </div>
+
     <div class="tableWrap"><table><thead><tr><th>Кандидат</th><th>Телефон</th><th>Етап</th><th>Статус</th><th>Побажання по ЗП</th><th>Нотатка</th><th>Подано</th></tr></thead><tbody id="vacApplicationsBody"></tbody></table></div>
     <div class="empty" id="vacApplicationsEmpty" style="display:none;">Заявок на цю вакансію ще немає.</div>
   </div>
@@ -621,6 +644,9 @@
     <div class="kpiRow" id="rmCandidateKpis"></div>
     <div class="breakdownGrid" id="rmFunnelBreakdowns"></div>
 
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Вартість найму (Cost per Hire)</h3>
+    <div class="kpiRow" id="rmCostPerHire"></div>
+
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Швидкість (Time to…)</h3>
     <div class="kpiRow" id="rmTimeKpis"></div>
 
@@ -642,6 +668,35 @@
     <p style="color: var(--muted); font-size: 12px; margin: 0 0 16px;">Акаунти для входу в HR CRM. HRD має повний доступ завжди. Recruiter додатково може редагувати розділ рекрутингу. Manager/Employee поки лише переглядають — жоден маршрут не дає їм права на запис, це свідомо нижчий рівень доступу для тих, кому потрібно лише бачити дані.</p>
     <button id="btnAddAccount">+ Акаунт</button>
     <div class="tableWrap" style="margin-top:12px;"><table><thead><tr><th>Логін</th><th>Ім'я</th><th>Роль</th><th>Статус</th><th>Створено</th><th></th></tr></thead><tbody id="accountsBody"></tbody></table></div>
+  </div>
+
+  <div id="viewTimesheet" style="display:none;">
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 16px;">Початок/кінець робочого дня — автоматично з відміток у телеграм-боті. Відпустки та лікарняні, погоджені через бота, позначаються автоматично. Норма робочих днів на місяць береться із законодавчого виробничого календаря — вносьте її вручну щомісяця (буде взято до уваги при розрахунку норми годин).</p>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+      <input type="month" id="tsMonth">
+      <button onclick="loadTimesheetView()">Показати</button>
+      <span id="tsNormLabel" style="color:var(--muted); font-size:13px;"></span>
+    </div>
+    <div id="tsNormEditor" style="display:none; margin-bottom:16px; padding:12px; background:var(--surface); border-radius:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      <label style="font-size:12px; color:var(--muted);">Робочих днів за законодавством у цьому місяці:</label>
+      <input type="number" id="tsNormDays" min="0" step="1" style="width:80px;">
+      <button id="btnSaveTsNorm">Зберегти норму</button>
+      <span style="font-size:12px; color:var(--muted);">Норма годин = дні × 9 (робочий день включно з обідом) — рахується автоматично.</span>
+    </div>
+    <div class="tableWrap"><table id="tsTable"><thead></thead><tbody></tbody></table></div>
+
+    <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Лікарняні, відпустки, відпустки за свій рахунок — за місяць</h3>
+    <div class="tableWrap"><table><thead><tr><th>Співробітник</th><th>Тип</th><th>З</th><th>По</th><th>Днів</th><th>Статус</th><th>Коментар</th></tr></thead><tbody id="tsAbsencesBody"></tbody></table></div>
+  </div>
+
+  <div id="viewPeopleDashboard" style="display:none;">
+    <p style="color: var(--muted); font-size: 12px; margin: 0 0 16px;">Видно лише HRD. Цілі/результати — за обраний рік, окремо по кожному місяцю; редагуються прямо в таблиці.</p>
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+      <label style="font-size:12px; color:var(--muted);">Рік:</label>
+      <input type="number" id="pdYear" style="width:90px;">
+      <button onclick="loadPeopleDashboard()">Показати</button>
+    </div>
+    <div class="tableWrap"><table id="pdTable"><thead></thead><tbody></tbody></table></div>
   </div>
 
 </main>
@@ -1544,6 +1599,7 @@ async function initApp() {
   document.getElementById('appShell').style.display = '';
   document.getElementById('currentUserLabel').textContent = window._me.display_name || window._me.username;
   document.getElementById('tabAccounts').style.display = window._me.role === 'HRD' ? '' : 'none';
+  document.getElementById('tabPeopleDashboard').style.display = window._me.role === 'HRD' ? '' : 'none';
 
   await loadDictionaries();
   showTab('dashboard');
@@ -1700,10 +1756,12 @@ function showTab(tab) {
   document.getElementById('viewSurveys').style.display = tab === 'surveys' ? '' : 'none';
   document.getElementById('viewSurveyDetail').style.display = 'none';
   document.getElementById('viewAbsences').style.display = tab === 'absences' ? '' : 'none';
+  document.getElementById('viewTimesheet').style.display = tab === 'timesheet' ? '' : 'none';
   document.getElementById('viewOffboarding').style.display = tab === 'offboarding' ? '' : 'none';
   document.getElementById('viewOffboardingCaseDetail').style.display = 'none';
   document.getElementById('viewRecruitmentMetrics').style.display = tab === 'recruitmentMetrics' ? '' : 'none';
   document.getElementById('viewAccounts').style.display = tab === 'accounts' ? '' : 'none';
+  document.getElementById('viewPeopleDashboard').style.display = tab === 'peopleDashboard' ? '' : 'none';
   document.getElementById('tabDashboard').classList.toggle('active', tab === 'dashboard');
   document.getElementById('tabTasks').classList.toggle('active', tab === 'tasks');
   document.getElementById('tabPeople').classList.toggle('active', tab === 'people');
@@ -1714,9 +1772,11 @@ function showTab(tab) {
   document.getElementById('tabKnowledge').classList.toggle('active', tab === 'knowledge');
   document.getElementById('tabSurveys').classList.toggle('active', tab === 'surveys');
   document.getElementById('tabAbsences').classList.toggle('active', tab === 'absences');
+  document.getElementById('tabTimesheet').classList.toggle('active', tab === 'timesheet');
   document.getElementById('tabOffboarding').classList.toggle('active', tab === 'offboarding');
   document.getElementById('tabRecruitmentMetrics').classList.toggle('active', tab === 'recruitmentMetrics');
   document.getElementById('tabAccounts').classList.toggle('active', tab === 'accounts');
+  document.getElementById('tabPeopleDashboard').classList.toggle('active', tab === 'peopleDashboard');
   if (tab === 'dashboard') loadDashboard();
   if (tab === 'tasks') showTasksSubTab(window._tasksSubTab || 'board');
   if (tab === 'people') loadPeople();
@@ -1730,6 +1790,8 @@ function showTab(tab) {
   if (tab === 'offboarding') loadOffboardingView();
   if (tab === 'recruitmentMetrics') loadRecruitmentMetrics();
   if (tab === 'accounts') loadAccountsView();
+  if (tab === 'timesheet') loadTimesheetView();
+  if (tab === 'peopleDashboard') loadPeopleDashboard();
 }
 
 // ---- Доступи (акаунти) ----
@@ -1808,6 +1870,139 @@ async function toggleAccountActive(username, active) {
   if (!data.ok) { showToast(data.error || 'Не вдалося змінити акаунт'); return; }
   showToast(active ? 'Акаунт увімкнено' : 'Акаунт вимкнено');
   loadAccountsView();
+}
+
+// ---- Табель обліку робочого часу ----
+
+const ABSENCE_DAY_LABEL = { 'Vacation': 'В', 'Sick Leave': 'Л', 'Unpaid Leave': 'ЗР' };
+
+function currentMonthStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+async function loadTimesheetView() {
+  const monthInput = document.getElementById('tsMonth');
+  if (!monthInput.value) monthInput.value = currentMonthStr();
+  const month = monthInput.value;
+  const [y, m] = month.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+
+  const resp = await apiFetch('/api/timesheet?month=' + month);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити табель'); return; }
+  const ts = data.timesheet;
+  const norm = ts.norm;
+
+  document.getElementById('tsNormDays').value = norm ? norm.working_days : '';
+  document.getElementById('tsNormLabel').textContent = norm
+    ? `Норма: ${norm.working_days} роб. днів × 9 год = ${norm.norm_hours} год.`
+    : 'Норму на цей місяць ще не внесено.';
+  document.getElementById('tsNormEditor').style.display = window._me.role === 'HRD' ? 'flex' : 'none';
+
+  const dayNumbers = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+  document.querySelector('#tsTable thead').innerHTML = '<tr><th>ПІБ</th>' +
+    dayNumbers.map((d) => `<th style="min-width:34px; text-align:center;">${d}</th>`).join('') +
+    '<th>Відпрац., год</th><th>Норма, год</th><th>+/-</th></tr>';
+
+  document.querySelector('#tsTable tbody').innerHTML = (ts.employees.length ? ts.employees.map((e) => {
+    const cells = e.days.map((d) => {
+      if (d.absence_type) return `<td style="text-align:center; color:var(--muted);" title="${d.date}">${ABSENCE_DAY_LABEL[d.absence_type] || '—'}</td>`;
+      if (d.hours != null) return `<td style="text-align:center;" title="${d.date}: ${d.start || ''}–${d.end || ''}">${d.hours}</td>`;
+      return `<td style="text-align:center; color:var(--muted);">—</td>`;
+    }).join('');
+    const diff = norm ? Math.round((e.worked_hours - norm.norm_hours) * 100) / 100 : null;
+    const diffColor = diff != null && diff < 0 ? '#c0392b' : diff != null && diff > 0 ? '#2e7d32' : 'inherit';
+    return `<tr><td>${e.full_name}</td>${cells}<td>${e.worked_hours}</td><td>${norm ? norm.norm_hours : '—'}</td><td style="color:${diffColor}">${diff != null ? (diff > 0 ? '+' : '') + diff : '—'}</td></tr>`;
+  }).join('') : `<tr><td colspan="${daysInMonth + 4}" class="empty">Немає активних співробітників з табельним номером</td></tr>`);
+
+  const absResp = await apiFetch(`/api/absences?from=${month}-01&to=${month}-${String(daysInMonth).padStart(2, '0')}`);
+  const absData = await absResp.json();
+  if (absData.ok) {
+    document.getElementById('tsAbsencesBody').innerHTML = absData.absences.length ? absData.absences.map((a) => `
+      <tr>
+        <td>${a.employee_name || ''}</td>
+        <td>${statusLabel(a.type)}</td>
+        <td>${a.start_date || ''}</td>
+        <td>${a.end_date || ''}</td>
+        <td>${a.workdays ?? ''}</td>
+        <td>${absenceStatusTag(a.status)}</td>
+        <td>${a.comment || ''}</td>
+      </tr>
+    `).join('') : '<tr><td colspan="7" class="empty">Немає записів за цей місяць</td></tr>';
+  }
+}
+
+document.getElementById('btnSaveTsNorm').onclick = async () => {
+  const month = document.getElementById('tsMonth').value || currentMonthStr();
+  const working_days = document.getElementById('tsNormDays').value;
+  const resp = await apiFetch('/api/timesheet-norms', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month: month + '-01', working_days })
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти норму'); return; }
+  showToast('Норму збережено');
+  loadTimesheetView();
+};
+
+// ---- People Dashboard ----
+
+const MONTH_NAMES_UK = ['Січень', 'Лютий', 'Березень', 'Квітень', 'Травень', 'Червень', 'Липень', 'Серпень', 'Вересень', 'Жовтень', 'Листопад', 'Грудень'];
+
+async function loadPeopleDashboard() {
+  const yearInput = document.getElementById('pdYear');
+  if (!yearInput.value) yearInput.value = new Date().getFullYear();
+  const year = Number(yearInput.value);
+
+  const resp = await apiFetch('/api/people-dashboard?year=' + year);
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити People Dashboard'); return; }
+
+  const headCols = ['ПІБ', 'Посада', 'Керівник', 'Дата прийому', 'Дата закінчення ВТ', 'Формат роботи', 'Файл офферу',
+    'Профіль посади', 'Ставка', 'КРІ на випробувальний', 'Перегляд зп', 'Статус', '1:1 з HR', '1:1 з керівником'];
+  const monthCols = MONTH_NAMES_UK.flatMap((n) => [n + ' ціль', n + ' результат']);
+  document.querySelector('#pdTable thead').innerHTML = '<tr>' +
+    [...headCols, ...monthCols].map((c) => `<th style="white-space:nowrap;">${c}</th>`).join('') + '</tr>';
+
+  document.querySelector('#pdTable tbody').innerHTML = (data.rows.length ? data.rows.map((r) => {
+    const rate = r.compensation ? `${Number(r.compensation.fixed_salary || 0).toLocaleString('uk-UA')} ${r.compensation.currency || 'UAH'}` : '—';
+    const offerCell = r.offer_file
+      ? `<a href="/api/offer-files/${r.offer_file.id}/download" target="_blank">${r.offer_file.filename}</a>`
+      : '<span style="color:var(--muted);">немає</span>';
+    const monthCells = MONTH_NAMES_UK.map((_, i) => {
+      const month = i + 1;
+      const g = r.monthly_goals[month] || { goal: '', result: '' };
+      return `<td><textarea rows="1" style="min-width:120px;" onchange="savePeopleGoal(${r.id},${year},${month},'goal',this.value)">${g.goal}</textarea></td>` +
+             `<td><textarea rows="1" style="min-width:120px;" onchange="savePeopleGoal(${r.id},${year},${month},'result',this.value)">${g.result}</textarea></td>`;
+    }).join('');
+    return `<tr>
+      <td style="white-space:nowrap;"><a href="#" onclick="openEmployeeProfile(${r.id}); return false;">${r.full_name}</a></td>
+      <td>${r.position_title || '—'}</td>
+      <td>${r.manager_name || '—'}</td>
+      <td>${r.employment_start_date ? new Date(r.employment_start_date).toLocaleDateString('uk-UA') : '—'}</td>
+      <td>${r.probation_end_date ? new Date(r.probation_end_date).toLocaleDateString('uk-UA') : '—'}</td>
+      <td>${r.employment_format ? statusLabel(r.employment_format) : '—'}</td>
+      <td>${offerCell}</td>
+      <td>${r.position_purpose || '—'}</td>
+      <td>${rate}</td>
+      <td>${r.probation_goals || '—'}</td>
+      <td><a href="#" onclick="openEmployeeProfile(${r.id}); return false;">Переглянути</a></td>
+      <td>${employeeStatusTag(r.status)}</td>
+      <td>${r.last_hr_1on1 || '—'}</td>
+      <td>${r.last_manager_1on1 || '—'}</td>
+      ${monthCells}
+    </tr>`;
+  }).join('') : `<tr><td colspan="${headCols.length + monthCols.length}" class="empty">Немає активних співробітників</td></tr>`);
+}
+
+async function savePeopleGoal(employee_id, year, month, field, value) {
+  const resp = await apiFetch('/api/people-dashboard/goals', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ employee_id, year, month, [field]: value })
+  });
+  const data = await resp.json();
+  if (!data.ok) showToast(data.error || 'Не вдалося зберегти');
 }
 
 // ---- Dashboard ----
@@ -2226,6 +2421,20 @@ async function loadRecruitmentMetrics() {
     kpiCardHtml(m.overallConversionPct != null ? m.overallConversionPct + '%' : '—', 'Загальна конверсія в найм', 'Наймів / Кандидатів × 100%.')
   ].join('');
 
+  const cphResp = await apiFetch('/api/cost-per-hire-summary');
+  const cphData = await cphResp.json();
+  if (cphData.ok) {
+    const s = cphData.summary;
+    document.getElementById('rmCostPerHire').innerHTML = [
+      kpiCardHtml(fmt(s.average) + ' грн', 'Середня вартість найму', 'Сума (розміщення + час рекрутера/HRD/керівника × ставка + адаптація + ознайомчий день + інше) по закритих вакансіях, де внесено дані, поділена на їх кількість.'),
+      kpiCardHtml(`${s.filled_with_cost_data} / ${s.filled_count}`, 'Заповнено даними', 'Скільки закритих вакансій мають внесену вартість найму, з усіх закритих.')
+    ].join('') + `
+      <div class="tableWrap" style="grid-column:1/-1; margin-top:8px;"><table><thead><tr><th>Вакансія</th><th>Департамент</th><th>Вартість найму</th></tr></thead><tbody>
+        ${s.items.map((i) => `<tr><td>${escAttr(i.title)}</td><td>${escAttr(i.department_name || '—')}</td><td>${i.record ? fmt(i.total) + ' грн' : '<span style=\"color:var(--muted);\">не заповнено</span>'}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">Немає закритих вакансій</td></tr>'}
+      </tbody></table></div>
+    `;
+  }
+
   document.getElementById('rmFunnelBreakdowns').innerHTML = [
     breakdownCardHtml('Інтерв\'ю за типом', 'Кількість проведених інтерв\'ю кожного типу.', translateKeys(m.interviewsByType)),
     breakdownCardHtml('Офери за статусом', 'Поточний статус усіх оферів.', translateKeys(m.offersByStatus))
@@ -2438,6 +2647,7 @@ async function openEmployeeProfile(id) {
   document.getElementById('viewDashboard').style.display = 'none';
   document.getElementById('viewPeople').style.display = 'none';
   document.getElementById('viewOrg').style.display = 'none';
+  document.getElementById('viewPeopleDashboard').style.display = 'none';
   document.getElementById('viewEmployeeProfile').style.display = '';
   await renderEmployeeProfile();
 }
@@ -2711,7 +2921,7 @@ document.getElementById('btnSaveEmploymentChange').onclick = async () => {
   renderEmployeeProfile();
 };
 
-function renderCompensationTab(e) {
+async function renderCompensationTab(e) {
   document.getElementById('profileCompensation').innerHTML = `
     <button onclick="openCompensationModal()">+ Нова компенсація</button>
     <div style="margin-top:14px;">
@@ -2723,7 +2933,26 @@ function renderCompensationTab(e) {
         </div>
       `).join('') || '<p style="color:var(--muted);">Ще немає записів компенсації.</p>'}
     </div>
+    ${window._me.role === 'HRD' ? `
+      <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Джоб-офер (видно лише HRD)</h3>
+      <div id="offerFilesBlock"><p style="color:var(--muted);">Завантаження…</p></div>
+      <input type="file" id="offerFileInput" style="display:none;" onchange="uploadOfferFile()">
+      <button class="secondary" onclick="document.getElementById('offerFileInput').click()">+ Завантажити файл офферу</button>
+
+      <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Вкладено / принесено (видно лише HRD)</h3>
+      <div id="roiBlock"><p style="color:var(--muted);">Завантаження…</p></div>
+      <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; margin:10px 0;">
+        <div class="fieldItem"><label>Рік</label><input type="number" id="revYear" style="width:90px;" value="${new Date().getFullYear()}"></div>
+        <div class="fieldItem"><label>Місяць</label>
+          <select id="revMonth">${MONTH_NAMES_UK.map((n, i) => `<option value="${i + 1}">${n}</option>`).join('')}</select>
+        </div>
+        <div class="fieldItem"><label>Виручка, грн</label><input type="number" id="revAmount" step="0.01" style="width:140px;"></div>
+        <button onclick="saveEmployeeRevenue()">Зберегти</button>
+      </div>
+      <div id="revenueHistory"></div>
+    ` : ''}
   `;
+  if (window._me.role === 'HRD') loadOfferFilesAndRoi(e.id);
 }
 
 function openCompensationModal() {
@@ -2755,6 +2984,84 @@ document.getElementById('btnSaveCompensation').onclick = async () => {
   showToast('Збережено');
   renderEmployeeProfile();
 };
+
+// ---- Джоб-офер + ROI на картці співробітника (HRD-only) ----
+
+async function loadOfferFilesAndRoi(employeeId) {
+  const [filesResp, roiResp, revResp] = await Promise.all([
+    apiFetch('/api/employees/' + employeeId + '/offer-files'),
+    apiFetch('/api/employees/' + employeeId + '/roi'),
+    apiFetch('/api/employees/' + employeeId + '/revenue')
+  ]);
+  const filesData = await filesResp.json();
+  const roiData = await roiResp.json();
+  const revData = await revResp.json();
+
+  document.getElementById('offerFilesBlock').innerHTML = (filesData.ok && filesData.files.length) ? filesData.files.map((f) => `
+    <div class="historyCard">
+      <div class="historyTitle"><a href="/api/offer-files/${f.id}/download" target="_blank">${f.filename}</a></div>
+      <div class="historyMeta">${new Date(f.created_at).toLocaleDateString('uk-UA')}${f.uploaded_by ? ' · ' + f.uploaded_by : ''}
+        · <a href="#" onclick="deleteOfferFileAction(${f.id}); return false;">видалити</a></div>
+    </div>
+  `).join('') : '<p style="color:var(--muted);">Файлів офферу ще немає.</p>';
+
+  if (roiData.ok) {
+    const r = roiData.roi;
+    document.getElementById('roiBlock').innerHTML = `
+      <div class="fieldGrid">
+        <div class="fieldItem"><label>Вартість найму (вакансія)</label>${fmt(r.cost_per_hire)} грн</div>
+        <div class="fieldItem"><label>Виплачена компенсація</label>${fmt(r.compensation_paid)} грн</div>
+        <div class="fieldItem"><label>Всього вкладено</label><b>${fmt(r.invested)} грн</b></div>
+        ${r.has_revenue_data ? `
+          <div class="fieldItem"><label>Принесено (виручка)</label>${fmt(r.returned)} грн</div>
+          <div class="fieldItem"><label>Чиста цінність</label><b style="color:${r.net >= 0 ? '#2e7d32' : '#c0392b'}">${fmt(r.net)} грн</b></div>
+        ` : `<div class="fieldItem"><label>Принесено</label><span style="color:var(--muted);">даних по виручці ще нема — заповніть нижче (актуально для продажів)</span></div>`}
+      </div>
+    `;
+  }
+
+  document.getElementById('revenueHistory').innerHTML = (revData.ok && revData.entries.length) ? `
+    <div class="tableWrap" style="margin-top:8px;"><table><thead><tr><th>Рік</th><th>Місяць</th><th>Виручка, грн</th></tr></thead><tbody>
+      ${revData.entries.map((e) => `<tr><td>${e.year}</td><td>${MONTH_NAMES_UK[e.month - 1]}</td><td>${fmt(e.revenue)}</td></tr>`).join('')}
+    </tbody></table></div>
+  ` : '';
+}
+
+async function uploadOfferFile() {
+  const input = document.getElementById('offerFileInput');
+  if (!input.files[0]) return;
+  const formData = new FormData();
+  formData.append('file', input.files[0]);
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/offer-files', { method: 'POST', body: formData });
+  const data = await resp.json();
+  input.value = '';
+  if (!data.ok) { showToast(data.error || 'Не вдалося завантажити файл'); return; }
+  showToast('Файл офферу завантажено');
+  loadOfferFilesAndRoi(currentEmployeeId);
+}
+
+async function deleteOfferFileAction(id) {
+  const resp = await apiFetch('/api/offer-files/' + id + '/delete', { method: 'POST' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  loadOfferFilesAndRoi(currentEmployeeId);
+}
+
+async function saveEmployeeRevenue() {
+  const body = {
+    year: Number(document.getElementById('revYear').value),
+    month: Number(document.getElementById('revMonth').value),
+    revenue: document.getElementById('revAmount').value || 0
+  };
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/revenue', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Виручку збережено');
+  document.getElementById('revAmount').value = '';
+  loadOfferFilesAndRoi(currentEmployeeId);
+}
 
 function probationDecisionTag(decision) {
   const cls = decision === 'Passed' ? 'ok' : decision === 'Failed' ? 'bad' : decision === 'Extended' ? 'warn' : 'neutral';
@@ -5438,6 +5745,51 @@ async function renderVacancyDetail() {
       <td>${new Date(a.applied_date).toLocaleDateString('uk-UA')}</td>
     </tr>
   `).join('');
+  loadRecruitmentCost();
+}
+
+async function loadRecruitmentCost() {
+  const resp = await apiFetch('/api/vacancies/' + currentVacancyId + '/cost');
+  const data = await resp.json();
+  if (!data.ok) return;
+  const c = data.cost.record || {};
+  document.getElementById('rcAdCost').value = c.job_ad_cost || '';
+  document.getElementById('rcPostings').value = c.postings_count || '';
+  document.getElementById('rcRecruiterHours').value = c.recruiter_hours || '';
+  document.getElementById('rcRecruiterRate').value = c.recruiter_hourly_rate || '';
+  document.getElementById('rcHrdHours').value = c.hrd_hours || '';
+  document.getElementById('rcHrdRate').value = c.hrd_hourly_rate || '';
+  document.getElementById('rcManagerHours').value = c.manager_hours || '';
+  document.getElementById('rcManagerRate').value = c.manager_hourly_rate || '';
+  document.getElementById('rcAdaptation').value = c.adaptation_cost || '';
+  document.getElementById('rcOnboardingDay').value = c.onboarding_day_cost || '';
+  document.getElementById('rcOther').value = c.other_cost || '';
+  document.getElementById('rcOtherComment').value = c.other_cost_comment || '';
+  document.getElementById('rcTotal').textContent = 'Разом: ' + fmt(data.cost.total) + ' грн';
+}
+
+async function saveRecruitmentCost() {
+  const body = {
+    job_ad_cost: document.getElementById('rcAdCost').value,
+    postings_count: document.getElementById('rcPostings').value,
+    recruiter_hours: document.getElementById('rcRecruiterHours').value,
+    recruiter_hourly_rate: document.getElementById('rcRecruiterRate').value,
+    hrd_hours: document.getElementById('rcHrdHours').value,
+    hrd_hourly_rate: document.getElementById('rcHrdRate').value,
+    manager_hours: document.getElementById('rcManagerHours').value,
+    manager_hourly_rate: document.getElementById('rcManagerRate').value,
+    adaptation_cost: document.getElementById('rcAdaptation').value,
+    onboarding_day_cost: document.getElementById('rcOnboardingDay').value,
+    other_cost: document.getElementById('rcOther').value,
+    other_cost_comment: document.getElementById('rcOtherComment').value
+  };
+  const resp = await apiFetch('/api/vacancies/' + currentVacancyId + '/cost', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  showToast('Вартість найму збережено');
+  document.getElementById('rcTotal').textContent = 'Разом: ' + fmt(data.cost.total) + ' грн';
 }
 
 function openVacancyStatusChange() {
