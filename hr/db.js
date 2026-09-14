@@ -1040,6 +1040,65 @@ async function verifyAccountPassword(account, password) {
   return bcrypt.compare(password, account.password_hash);
 }
 
+// Самообслуговування доступів (HRD-only, вкладка "Доступи") — щоб нові
+// логіни заводились без втручання розробника. Ролі — той самий
+// ACCOUNT_ROLES, що й вище: HRD (повний доступ), Recruiter (додатково
+// пише в рекрутинг), Manager/Employee (поки лише перегляд — жоден
+// маршрут у server.js не дає їм права на запис; це свідомо "нижчий"
+// рівень доступу для тих, кому потрібно бачити дані, не редагувати).
+async function listAccounts() {
+  const { rows } = await pool.query(
+    'SELECT username, role, display_name, active, created_at FROM hr_accounts ORDER BY role ASC, username ASC'
+  );
+  return rows;
+}
+
+async function createAccount({ username, password, role, display_name }) {
+  if (!ACCOUNT_ROLES.includes(role)) throw new Error(`Невідома роль: ${role}`);
+  if (!username || !username.trim()) throw new Error('Логін обов’язковий');
+  if (!password || password.length < 6) throw new Error('Пароль має бути не менше 6 символів');
+  const passwordHash = await bcrypt.hash(password, 10);
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO hr_accounts (username, password_hash, role, display_name)
+       VALUES ($1,$2,$3,$4) RETURNING username, role, display_name, active, created_at`,
+      [username.trim(), passwordHash, role, display_name || '']
+    );
+    return rows[0];
+  } catch (error) {
+    if (error.code === '23505') throw new Error(`Логін «${username}» вже зайнятий`);
+    throw error;
+  }
+}
+
+async function updateAccountPassword(username, newPassword) {
+  if (!newPassword || newPassword.length < 6) throw new Error('Пароль має бути не менше 6 символів');
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  const { rowCount } = await pool.query(
+    'UPDATE hr_accounts SET password_hash = $2, updated_at = now() WHERE username = $1',
+    [username, passwordHash]
+  );
+  return rowCount;
+}
+
+async function setAccountActive(username, active) {
+  if (!active) {
+    const { rows: hrdCount } = await pool.query(
+      `SELECT COUNT(*) FROM hr_accounts WHERE role = 'HRD' AND active = true AND username != $1`,
+      [username]
+    );
+    const { rows: target } = await pool.query('SELECT role FROM hr_accounts WHERE username = $1', [username]);
+    if (target[0]?.role === 'HRD' && Number(hrdCount[0].count) === 0) {
+      throw new Error('Не можна вимкнути останній активний акаунт HRD');
+    }
+  }
+  const { rows } = await pool.query(
+    'UPDATE hr_accounts SET active = $2, updated_at = now() WHERE username = $1 RETURNING username, role, display_name, active, created_at',
+    [username, !!active]
+  );
+  return rows[0] || null;
+}
+
 async function createSession(username) {
   const token = crypto.randomBytes(32).toString('hex');
   await pool.query('INSERT INTO hr_sessions (token, username) VALUES ($1, $2)', [token, username]);
@@ -4954,6 +5013,7 @@ async function getTaskCompletionStats({ from = null, to = null } = {}) {
 export default {
   initSchema,
   EMPLOYEE_STATUSES,
+  ACCOUNT_ROLES,
   POSITION_STATUSES,
   RESERVATION_STATUSES,
   VACANCY_REQUEST_STATUSES,
@@ -4967,6 +5027,10 @@ export default {
   INTERVIEW_TYPES,
   INTERVIEW_STATUSES,
   createAccountIfMissingWithHash,
+  listAccounts,
+  createAccount,
+  updateAccountPassword,
+  setAccountActive,
   findAccountByUsername,
   verifyAccountPassword,
   createSession,
