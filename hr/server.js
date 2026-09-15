@@ -599,6 +599,73 @@ app.post('/api/employees/:id/compensation', requireRole(), async (req, res) => {
   }
 });
 
+// Пряме виправлення вже створеного періоду/запису компенсації — на
+// відміну від POST-маршрутів вище (ті завжди йдуть через ланцюжок
+// закриття попереднього), ці для помилково внесених даних.
+app.post('/api/employment-periods/:id', requireRole(), async (req, res) => {
+  try {
+    const period = await db.updateEmploymentPeriod(Number(req.params.id), req.body || {}, req.account.username);
+    if (!period) { res.status(404).json({ ok: false, error: 'Період не знайдено' }); return; }
+    res.json({ ok: true, period });
+  } catch (error) {
+    console.error('POST /api/employment-periods/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти зміни' });
+  }
+});
+
+app.post('/api/employment-periods/:id/delete', requireRole(), async (req, res) => {
+  try {
+    const ok = await db.deleteEmploymentPeriod(Number(req.params.id), req.account.username);
+    if (!ok) { res.status(404).json({ ok: false, error: 'Період не знайдено' }); return; }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/employment-periods/:id/delete ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити' });
+  }
+});
+
+app.post('/api/compensation-records/:id', requireRole(), async (req, res) => {
+  try {
+    const record = await db.updateCompensationRecord(Number(req.params.id), req.body || {}, req.account.username);
+    if (!record) { res.status(404).json({ ok: false, error: 'Запис не знайдено' }); return; }
+    res.json({ ok: true, record });
+  } catch (error) {
+    console.error('POST /api/compensation-records/:id ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти зміни' });
+  }
+});
+
+app.post('/api/compensation-records/:id/delete', requireRole(), async (req, res) => {
+  try {
+    const ok = await db.deleteCompensationRecord(Number(req.params.id), req.account.username);
+    if (!ok) { res.status(404).json({ ok: false, error: 'Запис не знайдено' }); return; }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/compensation-records/:id/delete ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити' });
+  }
+});
+
+app.post('/api/compensation-records/:id/bonuses', requireRole(), async (req, res) => {
+  try {
+    const bonus = await db.addCompensationBonus(Number(req.params.id), req.body || {});
+    res.json({ ok: true, bonus });
+  } catch (error) {
+    console.error('POST /api/compensation-records/:id/bonuses ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося додати бонус' });
+  }
+});
+
+app.post('/api/compensation-bonuses/:id/delete', requireRole(), async (req, res) => {
+  try {
+    await db.deleteCompensationBonus(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/compensation-bonuses/:id/delete ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити бонус' });
+  }
+});
+
 // Джоб-офери на картці співробітника — доступ лише HRD (requireRole() без
 // аргументів), як і решта чутливих даних.
 app.get('/api/employees/:id/offer-files', requireRole(), async (req, res) => {
@@ -1463,6 +1530,37 @@ app.post('/api/employees/:id/probation', requireRole(), async (req, res) => {
     res.json({ ok: true, employee });
   } catch (error) {
     console.error('POST /api/employees/:id/probation ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.get('/api/employees/:id/probation-month-goals', async (req, res) => {
+  try {
+    const goals = await db.getProbationMonthGoals(Number(req.params.id));
+    res.json({ ok: true, goals });
+  } catch (error) {
+    console.error('GET /api/employees/:id/probation-month-goals ERROR:', error?.message || error);
+    res.status(500).json({ ok: false, error: 'Не вдалося отримати цілі' });
+  }
+});
+
+app.post('/api/employees/:id/probation-month-goals/:month', requireRole(), async (req, res) => {
+  try {
+    const goal = await db.upsertProbationMonthGoal(Number(req.params.id), Number(req.params.month), req.body || {}, req.account.username);
+    res.json({ ok: true, goal });
+  } catch (error) {
+    console.error('POST /api/employees/:id/probation-month-goals/:month ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
+  }
+});
+
+app.post('/api/employees/:id/probation-success-criteria', requireRole(), async (req, res) => {
+  try {
+    const employee = await db.updateProbationSuccessCriteria(Number(req.params.id), (req.body || {}).text, req.account.username);
+    if (!employee) { res.status(404).json({ ok: false, error: 'Співробітника не знайдено' }); return; }
+    res.json({ ok: true, employee });
+  } catch (error) {
+    console.error('POST /api/employees/:id/probation-success-criteria ERROR:', error?.message || error);
     res.status(400).json({ ok: false, error: error?.message || 'Не вдалося зберегти' });
   }
 });

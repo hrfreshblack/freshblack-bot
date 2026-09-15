@@ -312,6 +312,43 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_compensation_employee ON hr_compensation_records(employee_id);
+    -- Позначка, до якого періоду відноситься запис (Тетяна: не могла
+    -- зрозуміти, яка ставка "на випробувальний", яка "після" — раніше
+    -- ставки різнились лише датою effective_from без явного підпису).
+    -- Вільний текст, а не enum — крім "на ВТ"/"після ВТ" бувають підвищення,
+    -- перегляд по OKR тощо.
+    ALTER TABLE hr_compensation_records ADD COLUMN IF NOT EXISTS period_label TEXT NOT NULL DEFAULT '';
+
+    -- Бонуси окремими сумами (замість одного текстового поля) — "якщо 4
+    -- бонуси і кожен з окремою ставкою".
+    CREATE TABLE IF NOT EXISTS hr_compensation_bonuses (
+      id SERIAL PRIMARY KEY,
+      compensation_record_id INTEGER NOT NULL REFERENCES hr_compensation_records(id),
+      label TEXT NOT NULL DEFAULT '',
+      amount NUMERIC NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_hr_comp_bonuses_record ON hr_compensation_bonuses(compensation_record_id);
+
+    -- Цілі випробувального терміну розписані по місяцях (1/2/3), з вагою й
+    -- сумою оплати за кожну — витягнуто з джоб-офера вручну (Тетяна: "мало
+    -- витягнути окремо цілі 1 місяць, другий місяць, 3 місяць... по
+    -- кожній цілі поруч має стояти її вага і сума оплати"). Окремо від
+    -- hr_employees.probation_goals (той лишається як був — короткий підсумок
+    -- з офера при найманні).
+    CREATE TABLE IF NOT EXISTS hr_probation_month_goals (
+      employee_id INTEGER NOT NULL REFERENCES hr_employees(id),
+      month_number INTEGER NOT NULL CHECK (month_number IN (1,2,3)),
+      goal TEXT NOT NULL DEFAULT '',
+      weight_pct NUMERIC,
+      payment_amount NUMERIC,
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (employee_id, month_number)
+    );
+
+    -- Критерії успішного проходження випробувального терміну — окремий
+    -- текст від помісячних цілей вище.
+    ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS probation_success_criteria TEXT NOT NULL DEFAULT '';
 
     -- ==================== Recruitment / ATS (ТЗ розділи 9-19) ====================
 
@@ -1442,6 +1479,18 @@ async function getEmployee(id) {
   const { rows: compensation } = await pool.query(`
     SELECT * FROM hr_compensation_records WHERE employee_id = $1 ORDER BY effective_from DESC, id DESC
   `, [id]);
+  if (compensation.length) {
+    const { rows: bonusRows } = await pool.query(
+      `SELECT * FROM hr_compensation_bonuses WHERE compensation_record_id = ANY($1::int[]) ORDER BY id`,
+      [compensation.map((c) => c.id)]
+    );
+    const bonusesByRecord = new Map();
+    for (const b of bonusRows) {
+      if (!bonusesByRecord.has(b.compensation_record_id)) bonusesByRecord.set(b.compensation_record_id, []);
+      bonusesByRecord.get(b.compensation_record_id).push(b);
+    }
+    compensation.forEach((c) => { c.bonuses = bonusesByRecord.get(c.id) || []; });
+  }
 
   const current = periods.find((p) => !p.end_date) || null;
 
@@ -1996,12 +2045,78 @@ async function changeEmployment(employeeId, { position_id, department_id, manage
   }
 }
 
+// Пряме редагування вже створеного періоду (без ланцюжка закриття
+// попереднього, на відміну від changeEmployment) — Тетяна: "додано зміни,
+// а видалити їх не можна, якщо не вірно додано... неможливо відредагувати
+// те що вже є". Для виправлення помилки, а не для повноцінної зміни
+// працевлаштування (та йде через changeEmployment).
+async function updateEmploymentPeriod(periodId, { position_id, department_id, manager_employee_id, start_date,
+  end_date, employment_type, employment_format, location, change_reason }, actor) {
+  const { rows } = await pool.query(
+    `UPDATE hr_employment_periods SET
+       position_id = COALESCE($2, position_id),
+       department_id = COALESCE($3, department_id),
+       manager_employee_id = $4,
+       start_date = COALESCE($5, start_date),
+       end_date = $6,
+       employment_type = COALESCE($7, employment_type),
+       employment_format = COALESCE($8, employment_format),
+       location = COALESCE($9, location),
+       change_reason = COALESCE($10, change_reason)
+     WHERE id = $1 RETURNING *`,
+    [periodId, position_id || null, department_id || null, manager_employee_id ?? null, start_date || null,
+      end_date || null, employment_type ?? null, employment_format ?? null, location ?? null, change_reason ?? null]
+  );
+  if (rows[0]) await writeAudit({ actor, action: 'employment_period_update', entity_type: 'employee', entity_id: rows[0].employee_id, new_value: rows[0] });
+  return rows[0] || null;
+}
+
+// Видалення періоду: якщо це був поточний (end_date IS NULL), найближчий
+// попередній період того самого співробітника знову стає поточним
+// (end_date -> NULL), щоб історія не лишилась зовсім без активного
+// періоду. Посада, яку більше ніхто не займає після видалення, звільняється.
+async function deleteEmploymentPeriod(periodId, actor) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: periodRows } = await client.query('SELECT * FROM hr_employment_periods WHERE id = $1 FOR UPDATE', [periodId]);
+    const period = periodRows[0];
+    if (!period) { await client.query('ROLLBACK'); return false; }
+
+    await client.query('DELETE FROM hr_employment_periods WHERE id = $1', [periodId]);
+
+    if (period.end_date === null) {
+      const { rows: prevRows } = await client.query(
+        `SELECT id FROM hr_employment_periods WHERE employee_id = $1 ORDER BY start_date DESC LIMIT 1`,
+        [period.employee_id]
+      );
+      if (prevRows[0]) await client.query('UPDATE hr_employment_periods SET end_date = NULL WHERE id = $1', [prevRows[0].id]);
+    }
+
+    const { rows: stillFilled } = await client.query(
+      'SELECT 1 FROM hr_employment_periods WHERE position_id = $1 AND end_date IS NULL', [period.position_id]
+    );
+    if (stillFilled.length === 0) {
+      await client.query(`UPDATE hr_positions SET status = 'Vacant', updated_at = now() WHERE id = $1`, [period.position_id]);
+    }
+
+    await client.query('COMMIT');
+    await writeAudit({ actor, action: 'employment_period_delete', entity_type: 'employee', entity_id: period.employee_id, old_value: period });
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // ---------------------------------------------------------------------
 // Compensation
 // ---------------------------------------------------------------------
 
-async function addCompensationRecord({ employee_id, effective_from, fixed_salary, currency, bonus_type,
-  bonus_formula, kpi_bonus, additional_payments, reason, comment, document_url, created_by, approved_by }) {
+async function addCompensationRecord({ employee_id, effective_from, fixed_salary, currency, period_label, bonus_type,
+  bonus_formula, kpi_bonus, additional_payments, reason, comment, document_url, created_by, approved_by, bonuses }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -2019,11 +2134,20 @@ async function addCompensationRecord({ employee_id, effective_from, fixed_salary
     }
 
     const { rows } = await client.query(
-      `INSERT INTO hr_compensation_records (employee_id, effective_from, fixed_salary, currency, bonus_type, bonus_formula, kpi_bonus, additional_payments, reason, comment, document_url, created_by, approved_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-      [employee_id, effective_from, fixed_salary || null, currency || 'UAH', bonus_type || '', bonus_formula || '',
+      `INSERT INTO hr_compensation_records (employee_id, effective_from, fixed_salary, currency, period_label, bonus_type, bonus_formula, kpi_bonus, additional_payments, reason, comment, document_url, created_by, approved_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+      [employee_id, effective_from, fixed_salary || null, currency || 'UAH', period_label || '', bonus_type || '', bonus_formula || '',
         kpi_bonus || '', additional_payments || '', reason || '', comment || '', document_url || '', created_by || '', approved_by || '']
     );
+    if (Array.isArray(bonuses)) {
+      for (const b of bonuses) {
+        if (!b || (!b.label && !b.amount)) continue;
+        await client.query(
+          `INSERT INTO hr_compensation_bonuses (compensation_record_id, label, amount) VALUES ($1,$2,$3)`,
+          [rows[0].id, b.label || '', Number(b.amount) || 0]
+        );
+      }
+    }
     await client.query('COMMIT');
     await writeAudit({ actor: created_by, action: 'compensation_change', entity_type: 'employee', entity_id: employee_id, new_value: { fixed_salary, reason, effective_from } });
     return rows[0];
@@ -2033,6 +2157,90 @@ async function addCompensationRecord({ employee_id, effective_from, fixed_salary
   } finally {
     client.release();
   }
+}
+
+// Пряме редагування вже створеного запису компенсації (без ланцюжка
+// перезакриття попереднього) — та сама причина, що й для employment
+// period: виправити помилково внесений запис, не змінюючи всю історію.
+async function updateCompensationRecord(recordId, { effective_from, effective_to, fixed_salary, currency,
+  period_label, bonus_type, bonus_formula, kpi_bonus, additional_payments, reason, comment, document_url }, actor) {
+  const { rows } = await pool.query(
+    `UPDATE hr_compensation_records SET
+       effective_from = COALESCE($2, effective_from),
+       effective_to = $3,
+       fixed_salary = COALESCE($4, fixed_salary),
+       currency = COALESCE($5, currency),
+       period_label = COALESCE($6, period_label),
+       bonus_type = COALESCE($7, bonus_type),
+       bonus_formula = COALESCE($8, bonus_formula),
+       kpi_bonus = COALESCE($9, kpi_bonus),
+       additional_payments = COALESCE($10, additional_payments),
+       reason = COALESCE($11, reason),
+       comment = COALESCE($12, comment),
+       document_url = COALESCE($13, document_url)
+     WHERE id = $1 RETURNING *`,
+    [recordId, effective_from || null, effective_to || null, fixed_salary ?? null, currency || null,
+      period_label ?? null, bonus_type ?? null, bonus_formula ?? null, kpi_bonus ?? null, additional_payments ?? null,
+      reason ?? null, comment ?? null, document_url ?? null]
+  );
+  if (rows[0]) await writeAudit({ actor, action: 'compensation_update', entity_type: 'employee', entity_id: rows[0].employee_id, new_value: rows[0] });
+  return rows[0] || null;
+}
+
+// Видалення запису компенсації: якщо це був поточний (effective_to IS
+// NULL), найближчий попередній запис знову стає поточним.
+async function deleteCompensationRecord(recordId, actor) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: recRows } = await client.query('SELECT * FROM hr_compensation_records WHERE id = $1 FOR UPDATE', [recordId]);
+    const record = recRows[0];
+    if (!record) { await client.query('ROLLBACK'); return false; }
+
+    await client.query('DELETE FROM hr_compensation_bonuses WHERE compensation_record_id = $1', [recordId]);
+    await client.query('DELETE FROM hr_compensation_records WHERE id = $1', [recordId]);
+
+    if (record.effective_to === null) {
+      const { rows: prevRows } = await client.query(
+        `SELECT id FROM hr_compensation_records WHERE employee_id = $1 ORDER BY effective_from DESC LIMIT 1`,
+        [record.employee_id]
+      );
+      if (prevRows[0]) await client.query('UPDATE hr_compensation_records SET effective_to = NULL WHERE id = $1', [prevRows[0].id]);
+    }
+
+    await client.query('COMMIT');
+    await writeAudit({ actor, action: 'compensation_delete', entity_type: 'employee', entity_id: record.employee_id, old_value: record });
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Бонуси випробувального терміну (чи будь-якого періоду компенсації) —
+// довільна кількість окремих сум з підписом (Тетяна: "якщо 4 бонуси і
+// кожен з окремою ставкою — можливість додати поле"), а не один текстовий
+// рядок kpi_bonus.
+async function listCompensationBonuses(compensationRecordId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM hr_compensation_bonuses WHERE compensation_record_id = $1 ORDER BY id`,
+    [compensationRecordId]
+  );
+  return rows;
+}
+
+async function addCompensationBonus(compensationRecordId, { label, amount }) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_compensation_bonuses (compensation_record_id, label, amount) VALUES ($1,$2,$3) RETURNING *`,
+    [compensationRecordId, label || '', Number(amount) || 0]
+  );
+  return rows[0];
+}
+
+async function deleteCompensationBonus(bonusId) {
+  await pool.query('DELETE FROM hr_compensation_bonuses WHERE id = $1', [bonusId]);
 }
 
 // ---------------------------------------------------------------------
@@ -3252,6 +3460,44 @@ async function setProbation(employeeId, { probation_period_days, probation_goals
        updated_at = now()
      WHERE id = $1 RETURNING *`,
     [employeeId, periodDays, endDate, probation_goals ?? null]
+  );
+  return rows[0] || null;
+}
+
+async function getProbationMonthGoals(employeeId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM hr_probation_month_goals WHERE employee_id = $1 ORDER BY month_number`,
+    [employeeId]
+  );
+  const byMonth = new Map(rows.map((r) => [r.month_number, r]));
+  return [1, 2, 3].map((month_number) => byMonth.get(month_number) || {
+    employee_id: employeeId, month_number, goal: '', weight_pct: null, payment_amount: null
+  });
+}
+
+// Фронтенд зберігає по одному полю за раз (goal / weight_pct /
+// payment_amount окремо, кожне зі свого onchange) — тому кожен апдейт
+// має чіпати лише те поле, яке прийшло, а решту лишати як є (той самий
+// принцип, що й у upsertMonthlyGoal вище).
+async function upsertProbationMonthGoal(employeeId, monthNumber, { goal, weight_pct, payment_amount }, actor) {
+  const { rows } = await pool.query(
+    `INSERT INTO hr_probation_month_goals (employee_id, month_number, goal, weight_pct, payment_amount, updated_by, updated_at)
+     VALUES ($1,$2,COALESCE($3,''),$4,$5,$6,now())
+     ON CONFLICT (employee_id, month_number) DO UPDATE SET
+       goal = COALESCE($3, hr_probation_month_goals.goal),
+       weight_pct = COALESCE($4, hr_probation_month_goals.weight_pct),
+       payment_amount = COALESCE($5, hr_probation_month_goals.payment_amount),
+       updated_by = $6, updated_at = now()
+     RETURNING *`,
+    [employeeId, monthNumber, goal ?? null, weight_pct ?? null, payment_amount ?? null, actor || '']
+  );
+  return rows[0];
+}
+
+async function updateProbationSuccessCriteria(employeeId, text, actor) {
+  const { rows } = await pool.query(
+    `UPDATE hr_employees SET probation_success_criteria = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [employeeId, text || '']
   );
   return rows[0] || null;
 }
@@ -5334,19 +5580,27 @@ async function getTimesheet(month) {
         has_override: !!override
       });
     }
+    // Відпрацьовані години й дні — рахуються ЛИШЕ зі стовпця "Різн."
+    // (d.hours), тобто фактичних відміток. Відпустка/лікарняний НЕ входять
+    // сюди — раніше рахувались як відпрацьований день, і на діапазоні
+    // відпустки, що зачіпає вихідні (типовий випадок — тиждень відпустки),
+    // це рахувало календарні вихідні дні теж, тож "факт" міг перевищити
+    // "план" (Тетяна: "як може бути фактично відпрацьовано 23 дні, якщо
+    // всього в місяці 22 дні робочі?"). Відсутності тепер рахуються
+    // окремо (absenceDayCounts нижче), не змішуючись із фактом виходів.
     const worked_hours = Math.round(days.reduce((sum, d) => sum + (d.hours || 0), 0) * 100) / 100;
-    // Норма робочих днів рахує відпустку й лікарняний як відпрацьований
-    // день (Тетяна: "відпустка щорічна та лікарняний входять в кількість
-    // відпрацьованих днів"), відпустку за свій рахунок — ні.
-    const worked_days = days.reduce((count, d) => {
-      if (d.absence_type === 'Vacation' || d.absence_type === 'Sick Leave') return count + 1;
-      if (d.absence_type === 'Unpaid Leave') return count;
-      return d.hours != null ? count + 1 : count;
-    }, 0);
+    const worked_days = days.filter((d) => d.hours != null).length;
+    const absenceDayCounts = { Vacation: 0, 'Sick Leave': 0, 'Unpaid Leave': 0 };
+    days.forEach((d) => { if (d.absence_type) absenceDayCounts[d.absence_type] = (absenceDayCounts[d.absence_type] || 0) + 1; });
+    const absenceSummary = [
+      absenceDayCounts.Vacation ? `В: ${absenceDayCounts.Vacation}` : '',
+      absenceDayCounts['Sick Leave'] ? `Л: ${absenceDayCounts['Sick Leave']}` : '',
+      absenceDayCounts['Unpaid Leave'] ? `ВСР: ${absenceDayCounts['Unpaid Leave']}` : ''
+    ].filter(Boolean).join(', ');
     return {
       employee_id: emp.id, employee_number: emp.employee_number, full_name: emp.full_name,
       employment_type: emp.employment_type || '', department_id: emp.department_id, department_name: emp.department_name,
-      days, worked_hours, worked_days
+      days, worked_hours, worked_days, absence_summary: absenceSummary
     };
   });
 
@@ -5596,20 +5850,39 @@ async function getEmployeeROI(employeeId) {
   }
 
   const { rows: compRows } = await pool.query(
-    `SELECT fixed_salary, effective_from, effective_to FROM hr_compensation_records WHERE employee_id = $1`,
+    `SELECT id, fixed_salary, effective_from, effective_to FROM hr_compensation_records WHERE employee_id = $1`,
     [employeeId]
   );
+  const { rows: bonusRows } = compRows.length
+    ? await pool.query(
+        `SELECT compensation_record_id, COALESCE(SUM(amount), 0) AS total FROM hr_compensation_bonuses
+         WHERE compensation_record_id = ANY($1::int[]) GROUP BY compensation_record_id`,
+        [compRows.map((c) => c.id)]
+      )
+    : { rows: [] };
+  const bonusTotalByRecord = new Map(bonusRows.map((b) => [b.compensation_record_id, Number(b.total)]));
+
   const today = new Date();
-  let compensationPaid = 0;
+  let salaryPaid = 0;
+  let bonusesPaid = 0;
+  let monthsCounted = 0;
   for (const c of compRows) {
-    if (!c.fixed_salary) continue;
-    const from = new Date(c.effective_from);
-    const to = c.effective_to ? new Date(c.effective_to) : today;
-    const months = Math.max(0, monthsBetween(from, to) + 1);
-    compensationPaid += Number(c.fixed_salary) * months;
+    if (c.fixed_salary) {
+      const from = new Date(c.effective_from);
+      const to = c.effective_to ? new Date(c.effective_to) : today;
+      const months = Math.max(0, monthsBetween(from, to) + 1);
+      salaryPaid += Number(c.fixed_salary) * months;
+      monthsCounted += months;
+    }
+    bonusesPaid += bonusTotalByRecord.get(c.id) || 0;
   }
+  const compensationPaid = salaryPaid + bonusesPaid;
 
   const invested = Math.round((costPerHire + compensationPaid) * 100) / 100;
+  // Пояснення формули прямо в даних — Тетяна: "як він рахує виплачена
+  // компенсація — мені поки не зрозуміло", щоб не ховати логіку лише в
+  // коді.
+  const explanation = `Вартість найму (${fmtUah(costPerHire)}) + ставка × кількість місяців дії кожного запису компенсації (${monthsCounted} міс. разом = ${fmtUah(salaryPaid)}) + сума всіх бонусів (${fmtUah(bonusesPaid)}) = ${fmtUah(invested)}.`;
 
   const { rows: revRows } = await pool.query(
     `SELECT COALESCE(SUM(revenue), 0) AS total, COUNT(*) AS entries FROM hr_employee_revenue WHERE employee_id = $1`,
@@ -5619,8 +5892,13 @@ async function getEmployeeROI(employeeId) {
   const returned = hasRevenueData ? Number(revRows[0].total) : null;
   const net = hasRevenueData ? Math.round((returned - invested) * 100) / 100 : null;
 
-  return { cost_per_hire: costPerHire, compensation_paid: Math.round(compensationPaid * 100) / 100, invested, returned, net, has_revenue_data: hasRevenueData };
+  return {
+    cost_per_hire: costPerHire, salary_paid: Math.round(salaryPaid * 100) / 100, bonuses_paid: Math.round(bonusesPaid * 100) / 100,
+    compensation_paid: Math.round(compensationPaid * 100) / 100, invested, returned, net, has_revenue_data: hasRevenueData, explanation
+  };
 }
+
+function fmtUah(n) { return Math.round(Number(n) || 0).toLocaleString('uk-UA') + ' грн'; }
 
 async function listEmployeeRevenue(employeeId) {
   const { rows } = await pool.query(
@@ -5711,7 +5989,14 @@ export default {
   updateEmployeeStatus,
   updateEmployeeFields,
   changeEmployment,
+  updateEmploymentPeriod,
+  deleteEmploymentPeriod,
   addCompensationRecord,
+  updateCompensationRecord,
+  deleteCompensationRecord,
+  listCompensationBonuses,
+  addCompensationBonus,
+  deleteCompensationBonus,
   getOrgTree,
   getOrgChart,
   saveOrgChart,
@@ -5761,6 +6046,9 @@ export default {
   upsertPreboardingInfo,
   buildWelcomeLetterText,
   setProbation,
+  getProbationMonthGoals,
+  upsertProbationMonthGoal,
+  updateProbationSuccessCriteria,
   recordProbationDecision,
   ONE_ON_ONE_STATUSES,
   ACTION_ITEM_STATUSES,

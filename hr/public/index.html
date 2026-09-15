@@ -116,6 +116,12 @@
   .metricBarFill { background: var(--accent); height: 100%; border-radius: 4px; }
   .metricBarValue { width: 28px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; margin-top: 1px; }
 
+  .tsTableWrap { overflow: auto; max-height: 75vh; }
+  #tsTable thead { position: sticky; top: 0; z-index: 3; }
+  #tsTable .stickyCol1 { position: sticky; left: 0; z-index: 2; background: var(--bg); }
+  #tsTable .stickyCol2 { position: sticky; left: 160px; z-index: 2; background: var(--bg); }
+  #tsTable thead .stickyCol1, #tsTable thead .stickyCol2 { z-index: 4; background: var(--bg); }
+
   .chartGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 4px; }
   .chartCard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
   .chartCard .chartTitle { font-size: 12px; font-weight: 700; margin-bottom: 10px; color: var(--text); }
@@ -679,7 +685,16 @@
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Кандидати та воронка</h3>
     <div class="kpiRow" id="rmCandidateKpis"></div>
-    <div class="breakdownGrid" id="rmFunnelBreakdowns"></div>
+    <div class="chartGrid">
+      <div class="chartCard">
+        <div class="chartTitle">Інтерв'ю за типом <span class="ⓘ" title="Кількість проведених інтерв'ю кожного типу.">ⓘ</span></div>
+        <div class="chartWrap"><canvas id="chartInterviews"></canvas></div>
+      </div>
+      <div class="chartCard">
+        <div class="chartTitle">Офери за статусом <span class="ⓘ" title="Поточний статус усіх оферів.">ⓘ</span></div>
+        <div class="chartWrap"><canvas id="chartOffers"></canvas></div>
+      </div>
+    </div>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Вартість найму (Cost per Hire)</h3>
     <div class="kpiRow" id="rmCostPerHire"></div>
@@ -691,7 +706,16 @@
     <div class="tableWrap"><table><thead><tr><th>Джерело</th><th>Кандидатів</th><th>Наймів</th><th>Конверсія</th><th>Пройшли випробувальний</th></tr></thead><tbody id="rmSourceBody"></tbody></table></div>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Причини відмов</h3>
-    <div class="breakdownGrid" id="rmRejectionBreakdowns"></div>
+    <div class="chartGrid">
+      <div class="chartCard">
+        <div class="chartTitle">Причини відмови компанії <span class="ⓘ" title="Кількість заявок з кожною причиною відмови з боку компанії (Company Rejection Reasons).">ⓘ</span></div>
+        <div class="chartWrap"><canvas id="chartCompanyRejections"></canvas></div>
+      </div>
+      <div class="chartCard">
+        <div class="chartTitle">Причини відмови кандидата <span class="ⓘ" title="Кількість заявок з кожною причиною відмови з боку кандидата (Candidate Decline Reasons).">ⓘ</span></div>
+        <div class="chartWrap"><canvas id="chartCandidateDeclines"></canvas></div>
+      </div>
+    </div>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Ефективність рекрутерів</h3>
     <div class="tableWrap"><table><thead><tr><th>Рекрутер</th><th>Активні вакансії</th><th>Найми</th><th>Сер. Time to Hire</th></tr></thead><tbody id="rmRecruiterBody"></tbody></table></div>
@@ -721,13 +745,13 @@
       <button onclick="loadTimesheetView()">Показати</button>
       <span id="tsNormLabel" style="color:var(--muted); font-size:13px;"></span>
     </div>
-    <div id="tsNormEditor" style="display:none; margin-bottom:16px; padding:12px; background:var(--surface); border-radius:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+    <div id="tsNormEditor" style="display:none; margin-bottom:16px; padding:12px; background:var(--panel); border-radius:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
       <label style="font-size:12px; color:var(--muted);">Робочих днів за законодавством у цьому місяці:</label>
       <input type="number" id="tsNormDays" min="0" step="1" style="width:80px;">
       <button id="btnSaveTsNorm">Зберегти норму</button>
       <span style="font-size:12px; color:var(--muted);">Норма годин = дні × 9 (робочий день включно з обідом) — рахується автоматично.</span>
     </div>
-    <div class="tableWrap"><table id="tsTable"><thead></thead><tbody></tbody></table></div>
+    <div class="tsTableWrap"><table id="tsTable"><thead></thead><tbody></tbody></table></div>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:24px 0 8px;">Лікарняні, відпустки, відпустки за свій рахунок — за місяць</h3>
     <div class="tableWrap"><table><thead><tr><th>Співробітник</th><th>Тип</th><th>З</th><th>По</th><th>Днів</th><th>Статус</th><th>Коментар</th></tr></thead><tbody id="tsAbsencesBody"></tbody></table></div>
@@ -891,6 +915,27 @@
   </div>
 </div>
 
+<!-- Модалка: редагування вже створеного періоду працевлаштування -->
+<div class="overlay" id="periodEditOverlay">
+  <div class="modal">
+    <h2>Редагувати період працевлаштування</h2>
+    <p style="color: var(--muted); font-size: 12px; margin: -8px 0 12px;">Пряме виправлення цього запису — попередні/наступні періоди не зачіпаються.</p>
+    <input type="hidden" id="peId">
+    <div class="field"><label>Департамент</label><select id="peDepartment"></select></div>
+    <div class="field"><label>Посада</label><select id="pePosition"></select></div>
+    <div class="field"><label>Керівник</label><select id="peManager"><option value="">— не вказано —</option></select></div>
+    <div class="field"><label>Дата з</label><input type="date" id="peStartDate"></div>
+    <div class="field"><label>Дата по <span class="ⓘ" title="Порожньо — цей період поточний (ще триває).">ⓘ</span></label><input type="date" id="peEndDate"></div>
+    <div class="field"><label>Формат</label><input type="text" id="peFormat" placeholder="офіс / віддалено / гібрид"></div>
+    <div class="field"><label>Оформлення</label><input type="text" id="peEmploymentType"></div>
+    <div class="field"><label>Причина</label><input type="text" id="peReason"></div>
+    <div class="modal-actions">
+      <button class="secondary" onclick="closeOverlay('periodEditOverlay')">Скасувати</button>
+      <button id="btnSavePeriodEdit">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <!-- Модалка: зміна статусу співробітника -->
 <div class="overlay" id="empStatusChangeOverlay">
   <div class="modal">
@@ -972,11 +1017,18 @@
 <!-- Модалка: нова компенсація -->
 <div class="overlay" id="compensationOverlay">
   <div class="modal">
-    <h2>Нова компенсація</h2>
+    <h2 id="compModalTitle">Нова компенсація</h2>
+    <input type="hidden" id="compId">
+    <div class="field"><label>Мітка періоду <span class="ⓘ" title="Наприклад: Випробувальний термін / Після ВТ / Підвищення — щоб було зрозуміло, яка ставка за який період.">ⓘ</span></label><input type="text" id="compPeriodLabel" placeholder="Випробувальний термін / Після ВТ / Підвищення"></div>
     <div class="field"><label>Діє з</label><input type="date" id="compFrom"></div>
-    <div class="field"><label>Фіксована ставка</label><input type="number" id="compFixed" step="any" min="0"></div>
+    <div class="field"><label>Діє по <span class="ⓘ" title="Порожньо — діє дотепер (поточна ставка).">ⓘ</span></label><input type="date" id="compTo"></div>
+    <div class="field"><label>Ставка</label><input type="number" id="compFixed" step="any" min="0"></div>
     <div class="field"><label>Валюта</label><input type="text" id="compCurrency" value="UAH"></div>
-    <div class="field"><label>Тип бонусу</label><input type="text" id="compBonusType" placeholder="percent/fixed/KPI/sales"></div>
+    <div class="field">
+      <label>Бонуси <span class="ⓘ" title="Кожен бонус — окрема сума з підписом, напр. 'KPI продажів' 5000 грн. Додай стільки рядків, скільки треба.">ⓘ</span></label>
+      <div id="compBonusRows"></div>
+      <button type="button" class="secondary" style="font-size:11px; padding:4px 8px; margin-top:4px;" onclick="addCompBonusRow()">+ Бонус</button>
+    </div>
     <div class="field"><label>Причина</label><input type="text" id="compReason" placeholder="probation completed / review / promotion"></div>
     <div class="field"><label>Коментар</label><input type="text" id="compComment"></div>
     <div class="modal-actions">
@@ -1978,11 +2030,12 @@ async function loadTimesheetView() {
 
   document.querySelector('#tsTable thead').innerHTML = `
     <tr>
-      <th rowspan="3" style="min-width:160px;">ПІБ</th>
-      <th rowspan="3" style="min-width:120px;">Оформлення</th>
+      <th class="stickyCol1" rowspan="3" style="min-width:160px;">ПІБ</th>
+      <th class="stickyCol2" rowspan="3" style="min-width:120px;">Оформлення</th>
       ${dayInfo.map((di) => `<th colspan="3" style="text-align:center; ${di.weekend ? weekendBg : ''}">${di.weekdayName}</th>`).join('')}
       <th rowspan="3">Відпрац., год</th><th rowspan="3">Норма, год</th><th rowspan="3">+/-</th>
       <th rowspan="3">Дн. факт</th><th rowspan="3">Дн. план</th>
+      <th rowspan="3" style="min-width:140px;">Відсутності <span class="ⓘ" title="В — відпустка, Л — лікарняний, ВСР — за свій рахунок. Кількість днів кожного типу за місяць.">ⓘ</span></th>
     </tr>
     <tr>
       ${dayInfo.map((di) => `<th colspan="3" style="text-align:center; ${di.weekend ? weekendBg : ''}">${String(di.d).padStart(2, '0')}.${String(m).padStart(2, '0')}</th>`).join('')}
@@ -1998,13 +2051,13 @@ async function loadTimesheetView() {
   window._tsData = ts;
 
   const canEdit = window._me.role === 'HRD';
-  const totalCols = 2 + daysInMonth * 3 + 5;
+  const totalCols = 2 + daysInMonth * 3 + 5 + 1;
   let lastDept = null;
   const rowsHtml = [];
   for (const e of ts.employees) {
     if (e.department_id !== lastDept) {
       lastDept = e.department_id;
-      rowsHtml.push(`<tr><td colspan="${totalCols}" style="background:var(--surface); font-weight:700; color:var(--accent, inherit);">${e.department_name}</td></tr>`);
+      rowsHtml.push(`<tr><td colspan="${totalCols}" style="background:var(--panel); font-weight:700; color:var(--accent, inherit);">${e.department_name}</td></tr>`);
     }
     const cells = e.days.map((d, i) => {
       const weekend = dayInfo[i].weekend;
@@ -2025,7 +2078,7 @@ async function loadTimesheetView() {
     }).join('');
     const diff = norm ? Math.round((e.worked_hours - norm.norm_hours) * 100) / 100 : null;
     const diffColor = diff != null && diff < 0 ? '#c0392b' : diff != null && diff > 0 ? '#2e7d32' : 'inherit';
-    rowsHtml.push(`<tr><td>${e.full_name}</td><td>${e.employment_type || '—'}</td>${cells}<td>${hoursToHM(e.worked_hours)}</td><td>${norm ? norm.norm_hours : '—'}</td><td style="color:${diffColor}">${diff != null ? (diff > 0 ? '+' : '') + hoursToHM(diff) : '—'}</td><td>${e.worked_days}</td><td>${norm ? norm.working_days : '—'}</td></tr>`);
+    rowsHtml.push(`<tr><td class="stickyCol1">${e.full_name}</td><td class="stickyCol2">${e.employment_type || '—'}</td>${cells}<td>${hoursToHM(e.worked_hours)}</td><td>${norm ? norm.norm_hours : '—'}</td><td style="color:${diffColor}">${diff != null ? (diff > 0 ? '+' : '') + hoursToHM(diff) : '—'}</td><td>${e.worked_days}</td><td>${norm ? norm.working_days : '—'}</td><td>${e.absence_summary || '—'}</td></tr>`);
   }
   document.querySelector('#tsTable tbody').innerHTML = rowsHtml.length ? rowsHtml.join('') : `<tr><td colspan="${totalCols}" class="empty">Немає активних співробітників з табельним номером</td></tr>`;
 
@@ -2622,10 +2675,8 @@ async function loadRecruitmentMetrics() {
     `;
   }
 
-  document.getElementById('rmFunnelBreakdowns').innerHTML = [
-    breakdownCardHtml('Інтерв\'ю за типом', 'Кількість проведених інтерв\'ю кожного типу.', translateKeys(m.interviewsByType)),
-    breakdownCardHtml('Офери за статусом', 'Поточний статус усіх оферів.', translateKeys(m.offersByStatus))
-  ].join('');
+  renderChart('chartInterviews', 'doughnut', translateKeys(m.interviewsByType));
+  renderChart('chartOffers', 'doughnut', translateKeys(m.offersByStatus));
 
   document.getElementById('rmTimeKpis').innerHTML = [
     kpiCardHtml(m.timeToScreeningDays != null ? m.timeToScreeningDays + ' дн.' : '—', 'Time to Screening', 'Середня к-сть днів від подання заявки кандидата до переходу етапу в Screening.'),
@@ -2645,10 +2696,8 @@ async function loadRecruitmentMetrics() {
     </tr>
   `).join('') : '<tr><td colspan="5" style="color:var(--muted);">Немає даних.</td></tr>';
 
-  document.getElementById('rmRejectionBreakdowns').innerHTML = [
-    breakdownCardHtml('Причини відмови компанії', 'Кількість заявок з кожною причиною відмови з боку компанії (Company Rejection Reasons).', m.companyRejectionReasons),
-    breakdownCardHtml('Причини відмови кандидата', 'Кількість заявок з кожною причиною відмови з боку кандидата (Candidate Decline Reasons) — наприклад, якщо значний % відмовляється через зарплату, це управлінська інформація, а не "рекрутер погано шукає".', m.candidateDeclineReasons)
-  ].join('');
+  renderChart('chartCompanyRejections', 'bar', m.companyRejectionReasons, { indexAxis: 'y', plugins: { legend: { display: false } } });
+  renderChart('chartCandidateDeclines', 'bar', m.candidateDeclineReasons, { indexAxis: 'y', plugins: { legend: { display: false } } });
 
   const recruiterBody = document.getElementById('rmRecruiterBody');
   const recruiterEmpty = document.getElementById('rmRecruiterEmpty');
@@ -3042,6 +3091,7 @@ async function saveReservationFields() {
 }
 
 function renderEmploymentTab(e) {
+  window._employmentPeriods = e.employment_periods;
   document.getElementById('profileEmployment').innerHTML = `
     <button onclick="openEmploymentChange()">+ Зміна посади/департаменту/керівника</button>
     <div style="margin-top:14px;">
@@ -3055,10 +3105,75 @@ function renderEmploymentTab(e) {
             ${p.employment_type ? ' · ' + escAttr(p.employment_type) : ''}
           </div>
           ${p.change_reason ? `<div class="historyMeta">Причина: ${escAttr(p.change_reason)}</div>` : ''}
+          <div style="margin-top:6px; display:flex; gap:6px;">
+            <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="openPeriodEdit(${p.id})">✎ Редагувати</button>
+            <button class="bad" style="font-size:11px; padding:4px 8px;" onclick="deletePeriod(${p.id})">🗑 Видалити</button>
+          </div>
         </div>
       `).join('') || '<p style="color:var(--muted);">Ще немає жодного періоду працевлаштування.</p>'}
     </div>
   `;
+}
+
+async function openPeriodEdit(periodId) {
+  const p = (window._employmentPeriods || []).find((x) => x.id === periodId);
+  if (!p) return;
+  const dResp = await apiFetch('/api/departments');
+  const dData = await dResp.json();
+  document.getElementById('peDepartment').innerHTML = (dData.ok ? dData.departments : []).map((d) => `<option value="${d.id}" ${d.id === p.department_id ? 'selected' : ''}>${escAttr(d.name)}</option>`).join('');
+  const posResp = await apiFetch('/api/positions?department_id=' + p.department_id);
+  const posData = await posResp.json();
+  document.getElementById('pePosition').innerHTML = (posData.ok ? posData.positions : []).map((pos) => `<option value="${pos.id}" ${pos.id === p.position_id ? 'selected' : ''}>${escAttr(pos.title)}</option>`).join('');
+  const eResp = await apiFetch('/api/employees');
+  const eData = await eResp.json();
+  const employees = eData.ok ? eData.employees.filter((emp) => emp.id !== currentEmployeeId) : [];
+  document.getElementById('peManager').innerHTML = '<option value="">— не вказано —</option>' + employees.map((emp) => `<option value="${emp.id}" ${emp.id === p.manager_employee_id ? 'selected' : ''}>${escAttr(emp.full_name)}</option>`).join('');
+
+  document.getElementById('peId').value = periodId;
+  document.getElementById('peStartDate').value = isoDate(new Date(p.start_date));
+  document.getElementById('peEndDate').value = p.end_date ? isoDate(new Date(p.end_date)) : '';
+  document.getElementById('peFormat').value = p.employment_format || '';
+  document.getElementById('peEmploymentType').value = p.employment_type || '';
+  document.getElementById('peReason').value = p.change_reason || '';
+  document.getElementById('periodEditOverlay').classList.add('open');
+}
+
+document.getElementById('peDepartment').addEventListener('change', async () => {
+  const departmentId = document.getElementById('peDepartment').value;
+  const resp = await apiFetch('/api/positions?department_id=' + departmentId);
+  const data = await resp.json();
+  document.getElementById('pePosition').innerHTML = (data.ok ? data.positions : []).map((p) => `<option value="${p.id}">${escAttr(p.title)}</option>`).join('');
+});
+
+document.getElementById('btnSavePeriodEdit').onclick = async () => {
+  const id = document.getElementById('peId').value;
+  const body = {
+    department_id: document.getElementById('peDepartment').value,
+    position_id: document.getElementById('pePosition').value,
+    manager_employee_id: document.getElementById('peManager').value || null,
+    start_date: document.getElementById('peStartDate').value,
+    end_date: document.getElementById('peEndDate').value || null,
+    employment_format: document.getElementById('peFormat').value.trim(),
+    employment_type: document.getElementById('peEmploymentType').value.trim(),
+    change_reason: document.getElementById('peReason').value.trim()
+  };
+  const resp = await apiFetch('/api/employment-periods/' + id, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  closeOverlay('periodEditOverlay');
+  showToast('Збережено');
+  renderEmployeeProfile();
+};
+
+async function deletePeriod(periodId) {
+  if (!confirm('Видалити цей період працевлаштування?')) return;
+  const resp = await apiFetch('/api/employment-periods/' + periodId + '/delete', { method: 'POST' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  showToast('Видалено');
+  renderEmployeeProfile();
 }
 
 async function openEmploymentChange() {
@@ -3112,14 +3227,20 @@ document.getElementById('btnSaveEmploymentChange').onclick = async () => {
 };
 
 async function renderCompensationTab(e) {
+  window._compensationRecords = e.compensation_records;
   document.getElementById('profileCompensation').innerHTML = `
     <button onclick="openCompensationModal()">+ Нова компенсація</button>
     <div style="margin-top:14px;">
       ${e.compensation_records.map((c) => `
         <div class="historyCard ${!c.effective_to ? 'current' : ''}">
-          <div class="historyTitle">${fmt(c.fixed_salary)} ${escAttr(c.currency)}${c.bonus_type ? ' + ' + escAttr(c.bonus_type) : ''}</div>
+          <div class="historyTitle">${c.period_label ? escAttr(c.period_label) + ': ' : ''}${fmt(c.fixed_salary)} ${escAttr(c.currency)}</div>
           <div class="historyMeta">${new Date(c.effective_from).toLocaleDateString('uk-UA')} — ${c.effective_to ? new Date(c.effective_to).toLocaleDateString('uk-UA') : 'дотепер'}${c.reason ? ' · ' + escAttr(c.reason) : ''}</div>
           ${c.comment ? `<div class="historyMeta">${escAttr(c.comment)}</div>` : ''}
+          ${c.bonuses && c.bonuses.length ? `<div class="historyMeta">Бонуси: ${c.bonuses.map((b) => escAttr(b.label) + ' — ' + fmt(b.amount) + ' грн').join(', ')}</div>` : ''}
+          <div style="margin-top:6px; display:flex; gap:6px;">
+            <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="openCompensationModal(${c.id})">✎ Редагувати</button>
+            <button class="bad" style="font-size:11px; padding:4px 8px;" onclick="deleteCompensationRecordAction(${c.id})">🗑 Видалити</button>
+          </div>
         </div>
       `).join('') || '<p style="color:var(--muted);">Ще немає записів компенсації.</p>'}
     </div>
@@ -3145,35 +3266,102 @@ async function renderCompensationTab(e) {
   if (window._me.role === 'HRD') loadOfferFilesAndRoi(e.id);
 }
 
-function openCompensationModal() {
-  document.getElementById('compFrom').value = isoDate(new Date());
-  document.getElementById('compFixed').value = '';
-  document.getElementById('compCurrency').value = 'UAH';
-  document.getElementById('compBonusType').value = '';
-  document.getElementById('compReason').value = '';
-  document.getElementById('compComment').value = '';
+function renderCompBonusRows() {
+  document.getElementById('compBonusRows').innerHTML = (window._compBonusRows || []).map((b, i) => `
+    <div style="display:flex; gap:6px; margin-bottom:4px;">
+      <input type="text" placeholder="Назва" value="${escAttr(b.label)}" oninput="window._compBonusRows[${i}].label=this.value" style="flex:2;">
+      <input type="number" placeholder="Сума" value="${b.amount || ''}" oninput="window._compBonusRows[${i}].amount=this.value" style="flex:1;">
+      <button type="button" class="secondary" style="padding:4px 8px;" onclick="removeCompBonusRow(${i})">✕</button>
+    </div>
+  `).join('') || '<p style="color:var(--muted); font-size:12px;">Немає бонусів.</p>';
+}
+
+function addCompBonusRow() {
+  window._compBonusRows = window._compBonusRows || [];
+  window._compBonusRows.push({ label: '', amount: '' });
+  renderCompBonusRows();
+}
+
+async function removeCompBonusRow(i) {
+  const row = window._compBonusRows[i];
+  if (row.id) {
+    const resp = await apiFetch('/api/compensation-bonuses/' + row.id + '/delete', { method: 'POST' });
+    const data = await resp.json();
+    if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  }
+  window._compBonusRows.splice(i, 1);
+  renderCompBonusRows();
+}
+
+function openCompensationModal(editId) {
+  const record = editId ? (window._compensationRecords || []).find((c) => c.id === editId) : null;
+  document.getElementById('compId').value = editId || '';
+  document.getElementById('compModalTitle').textContent = editId ? 'Редагувати компенсацію' : 'Нова компенсація';
+  document.getElementById('compPeriodLabel').value = record?.period_label || '';
+  document.getElementById('compFrom').value = record ? isoDate(new Date(record.effective_from)) : isoDate(new Date());
+  document.getElementById('compTo').value = record?.effective_to ? isoDate(new Date(record.effective_to)) : '';
+  document.getElementById('compFixed').value = record?.fixed_salary || '';
+  document.getElementById('compCurrency').value = record?.currency || 'UAH';
+  document.getElementById('compReason').value = record?.reason || '';
+  document.getElementById('compComment').value = record?.comment || '';
+  window._compBonusRows = record?.bonuses ? record.bonuses.map((b) => ({ id: b.id, label: b.label, amount: b.amount })) : [];
+  renderCompBonusRows();
   document.getElementById('compensationOverlay').classList.add('open');
 }
 
 document.getElementById('btnSaveCompensation').onclick = async () => {
-  const body = {
-    effective_from: document.getElementById('compFrom').value,
-    fixed_salary: document.getElementById('compFixed').value || null,
-    currency: document.getElementById('compCurrency').value.trim() || 'UAH',
-    bonus_type: document.getElementById('compBonusType').value.trim(),
-    reason: document.getElementById('compReason').value.trim(),
-    comment: document.getElementById('compComment').value.trim()
-  };
-  if (!body.effective_from) { showToast('Вкажи дату "Діє з"'); return; }
-  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/compensation', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-  });
-  const data = await resp.json();
-  if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  const editId = document.getElementById('compId').value;
+  const newBonuses = (window._compBonusRows || []).filter((b) => !b.id && (b.label || b.amount));
+  if (editId) {
+    const body = {
+      period_label: document.getElementById('compPeriodLabel').value.trim(),
+      effective_from: document.getElementById('compFrom').value,
+      effective_to: document.getElementById('compTo').value || null,
+      fixed_salary: document.getElementById('compFixed').value || null,
+      currency: document.getElementById('compCurrency').value.trim() || 'UAH',
+      reason: document.getElementById('compReason').value.trim(),
+      comment: document.getElementById('compComment').value.trim()
+    };
+    const resp = await apiFetch('/api/compensation-records/' + editId, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+    for (const b of newBonuses) {
+      await apiFetch('/api/compensation-records/' + editId + '/bonuses', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b)
+      });
+    }
+  } else {
+    const body = {
+      period_label: document.getElementById('compPeriodLabel').value.trim(),
+      effective_from: document.getElementById('compFrom').value,
+      fixed_salary: document.getElementById('compFixed').value || null,
+      currency: document.getElementById('compCurrency').value.trim() || 'UAH',
+      reason: document.getElementById('compReason').value.trim(),
+      comment: document.getElementById('compComment').value.trim(),
+      bonuses: newBonuses
+    };
+    if (!body.effective_from) { showToast('Вкажи дату "Діє з"'); return; }
+    const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/compensation', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
+  }
   closeOverlay('compensationOverlay');
   showToast('Збережено');
   renderEmployeeProfile();
 };
+
+async function deleteCompensationRecordAction(id) {
+  if (!confirm('Видалити цей запис компенсації?')) return;
+  const resp = await apiFetch('/api/compensation-records/' + id + '/delete', { method: 'POST' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  showToast('Видалено');
+  renderEmployeeProfile();
+}
 
 // ---- Джоб-офер + ROI на картці співробітника (HRD-only) ----
 
@@ -3200,13 +3388,15 @@ async function loadOfferFilesAndRoi(employeeId) {
     document.getElementById('roiBlock').innerHTML = `
       <div class="fieldGrid">
         <div class="fieldItem"><label>Вартість найму (вакансія)</label>${fmt(r.cost_per_hire)} грн</div>
-        <div class="fieldItem"><label>Виплачена компенсація</label>${fmt(r.compensation_paid)} грн</div>
+        <div class="fieldItem"><label>Ставка (сума за весь час)</label>${fmt(r.salary_paid)} грн</div>
+        <div class="fieldItem"><label>Бонуси (сума всіх)</label>${fmt(r.bonuses_paid)} грн</div>
         <div class="fieldItem"><label>Всього вкладено</label><b>${fmt(r.invested)} грн</b></div>
         ${r.has_revenue_data ? `
           <div class="fieldItem"><label>Принесено (виручка)</label>${fmt(r.returned)} грн</div>
           <div class="fieldItem"><label>Чиста цінність</label><b style="color:${r.net >= 0 ? '#2e7d32' : '#c0392b'}">${fmt(r.net)} грн</b></div>
         ` : `<div class="fieldItem"><label>Принесено</label><span style="color:var(--muted);">даних по виручці ще нема — заповніть нижче (актуально для продажів)</span></div>`}
       </div>
+      <p style="color:var(--muted); font-size:11px; margin-top:8px;">Як рахується "Всього вкладено": ${r.explanation}</p>
     `;
   }
 
@@ -3265,14 +3455,17 @@ function onboardingTaskStatusTag(t) {
 
 async function renderOnboardingTab(e) {
   const panel = document.getElementById('profileOnboarding');
-  const [preResp, tasksResp] = await Promise.all([
+  const [preResp, tasksResp, probGoalsResp] = await Promise.all([
     apiFetch('/api/employees/' + e.id + '/preboarding'),
-    apiFetch('/api/employees/' + e.id + '/onboarding-tasks')
+    apiFetch('/api/employees/' + e.id + '/onboarding-tasks'),
+    apiFetch('/api/employees/' + e.id + '/probation-month-goals')
   ]);
   const preData = await preResp.json();
   const tasksData = await tasksResp.json();
+  const probGoalsData = await probGoalsResp.json();
   const info = preData.ok ? preData.info : null;
   const tasks = tasksData.ok ? tasksData.tasks : [];
+  const probMonthGoals = probGoalsData.ok ? probGoalsData.goals : [{ month_number: 1 }, { month_number: 2 }, { month_number: 3 }];
 
   const grouped = {};
   tasks.forEach((t) => { (grouped[t.milestone] = grouped[t.milestone] || []).push(t); });
@@ -3297,12 +3490,27 @@ async function renderOnboardingTab(e) {
       <div class="fieldItem"><label>Дата завершення</label>${e.probation_end_date ? new Date(e.probation_end_date).toLocaleDateString('uk-UA') : '—'}</div>
       <div class="fieldItem"><label>Рішення</label>${e.probation_decision ? probationDecisionTag(e.probation_decision) : '—'}${e.probation_decision_date ? ' · ' + new Date(e.probation_decision_date).toLocaleDateString('uk-UA') : ''}</div>
     </div>
-    <div class="field"><label>Цілі на випробувальний</label><textarea id="probGoals" rows="2">${escAttr(e.probation_goals)}</textarea></div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;">
+    <div class="field"><label>Цілі на випробувальний (загальний підсумок з офера)</label><textarea id="probGoals" rows="2">${escAttr(e.probation_goals)}</textarea></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
       <button class="secondary" onclick="saveProbationSettings()">Зберегти тривалість/цілі</button>
       <button onclick="recordProbationDecisionAction('Passed')">Пройшов</button>
       <button class="secondary" onclick="recordProbationDecisionAction('Extended')">Продовжити</button>
       <button class="bad" onclick="recordProbationDecisionAction('Failed')">Не пройшов</button>
+    </div>
+
+    <div class="field"><label>Критерії успішного проходження випробувального терміну</label><textarea id="probSuccessCriteria" rows="2" onchange="saveProbationSuccessCriteria()">${escAttr(e.probation_success_criteria)}</textarea></div>
+    <div style="margin-bottom:20px;">
+      <label style="font-size:12px; color:var(--muted); display:block; margin-bottom:6px;">Цілі по місяцях випробувального терміну</label>
+      <div class="tableWrap"><table><thead><tr><th style="width:70px;">Місяць</th><th>Ціль</th><th style="width:90px;">Вага, %</th><th style="width:120px;">Сума оплати, грн</th></tr></thead><tbody>
+        ${probMonthGoals.map((g) => `
+          <tr>
+            <td>${g.month_number}</td>
+            <td><textarea rows="1" style="min-width:220px;" onchange="saveProbationMonthGoal(${g.month_number},'goal',this.value)">${escAttr(g.goal)}</textarea></td>
+            <td><input type="number" step="1" min="0" max="100" value="${g.weight_pct ?? ''}" onchange="saveProbationMonthGoal(${g.month_number},'weight_pct',this.value)" style="width:70px;"></td>
+            <td><input type="number" step="0.01" value="${g.payment_amount ?? ''}" onchange="saveProbationMonthGoal(${g.month_number},'payment_amount',this.value)" style="width:100px;"></td>
+          </tr>
+        `).join('')}
+      </tbody></table></div>
     </div>
 
     <h3 style="font-size:13px; color:var(--muted); text-transform:uppercase; margin:20px 0 8px;">Задачі адаптації</h3>
@@ -3359,6 +3567,23 @@ async function saveProbationSettings() {
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
   showToast('Збережено');
   renderEmployeeProfile();
+}
+
+async function saveProbationSuccessCriteria() {
+  const text = document.getElementById('probSuccessCriteria').value.trim();
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/probation-success-criteria', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text })
+  });
+  const data = await resp.json();
+  if (!data.ok) showToast(data.error || 'Не вдалося зберегти');
+}
+
+async function saveProbationMonthGoal(month, field, value) {
+  const resp = await apiFetch('/api/employees/' + currentEmployeeId + '/probation-month-goals/' + month, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [field]: value })
+  });
+  const data = await resp.json();
+  if (!data.ok) showToast(data.error || 'Не вдалося зберегти');
 }
 
 async function recordProbationDecisionAction(decision) {
