@@ -109,6 +109,15 @@ app.get('/vendor/chart.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'node_modules', 'chart.js', 'dist', 'chart.umd.js'));
 });
 
+// Захист від підбору пароля — не було жодного обмеження на кількість
+// спроб входу (знайдено при аналізі коду). Проста лічилка в пам'яті
+// процесу (сервіс не кластеризований, окремої БД/Redis для цього не
+// треба): 5 невдалих спроб на логін — 5 хвилин блокування цього логіна,
+// лічильник скидається при вдалому вході.
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 5 * 60 * 1000;
+const loginAttempts = new Map(); // username -> { count, lockedUntil }
+
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body || {};
@@ -116,11 +125,26 @@ app.post('/api/login', async (req, res) => {
       res.status(400).json({ ok: false, error: 'Потрібні логін і пароль' });
       return;
     }
+    const key = String(username).toLowerCase();
+    const attempt = loginAttempts.get(key);
+    if (attempt?.lockedUntil && attempt.lockedUntil > Date.now()) {
+      const minutesLeft = Math.ceil((attempt.lockedUntil - Date.now()) / 60000);
+      res.status(429).json({ ok: false, error: `Забагато невдалих спроб. Спробуйте ще раз через ${minutesLeft} хв.` });
+      return;
+    }
+
     const account = await db.findAccountByUsername(username);
     if (!account || !(await db.verifyAccountPassword(account, password))) {
+      const count = (attempt?.count || 0) + 1;
+      loginAttempts.set(key, {
+        count,
+        lockedUntil: count >= LOGIN_MAX_ATTEMPTS ? Date.now() + LOGIN_LOCKOUT_MS : null
+      });
       res.status(401).json({ ok: false, error: 'Невірний логін або пароль' });
       return;
     }
+
+    loginAttempts.delete(key);
     const token = await db.createSession(account.username);
     setSessionCookie(res, token);
     res.json({ ok: true });
