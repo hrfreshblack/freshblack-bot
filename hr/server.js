@@ -1353,6 +1353,16 @@ app.post('/api/interviews/:id', requireRole('Recruiter'), async (req, res) => {
   }
 });
 
+app.post('/api/interviews/:id/delete', requireRole('Recruiter'), async (req, res) => {
+  try {
+    await db.deleteInterview(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('POST /api/interviews/:id/delete ERROR:', error?.message || error);
+    res.status(400).json({ ok: false, error: error?.message || 'Не вдалося видалити інтерв’ю' });
+  }
+});
+
 // ---- Recruitment / ATS: Offers ----
 
 app.post('/api/applications/:id/offers', requireRole('Recruiter'), async (req, res) => {

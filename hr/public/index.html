@@ -1158,11 +1158,16 @@
 <!-- Модалка: нове інтерв'ю -->
 <div class="overlay" id="interviewOverlay">
   <div class="modal">
-    <h2>Нове інтерв'ю</h2>
+    <h2 id="interviewOverlayTitle">Нове інтерв'ю</h2>
+    <input type="hidden" id="ivId">
     <div class="field"><label>Тип</label><select id="ivType"></select></div>
-    <div class="field"><label>Дата і час</label><input type="datetime-local" id="ivScheduledAt"></div>
+    <div class="field"><label>Статус</label><select id="ivStatus"></select></div>
+    <div class="field"><label>Дата і час початку</label><input type="datetime-local" id="ivScheduledAt"></div>
+    <div class="field"><label>Тривалість</label><select id="ivDuration"></select></div>
+    <div id="ivEndTimePreview" style="color:var(--muted); font-size:12px; margin:-8px 0 12px;"></div>
     <div class="field"><label>Учасники</label><input type="text" id="ivParticipants"></div>
     <div class="field"><label>Нотатки</label><textarea id="ivNotes" rows="2"></textarea></div>
+    <div class="field"><label>Рішення</label><input type="text" id="ivDecision" placeholder="короткий підсумок, необов'язково"></div>
     <div class="modal-actions">
       <button class="secondary" onclick="closeOverlay('interviewOverlay')">Скасувати</button>
       <button id="btnSaveInterview">Зберегти</button>
@@ -1683,6 +1688,29 @@ function translateKeys(obj) { return Object.fromEntries(Object.entries(obj).map(
 function fmt(n) { return (Number(n) || 0).toLocaleString('uk-UA', { maximumFractionDigits: 2 }); }
 function isoDate(d) { return d.toISOString().slice(0, 10); }
 
+// Тривалість інтерв'ю — крок 15 хв, максимум 3 години.
+const INTERVIEW_DURATION_OPTIONS = Array.from({ length: 12 }, (_, i) => (i + 1) * 15);
+function formatDuration(min) {
+  const h = Math.floor(min / 60), m = min % 60;
+  if (h === 0) return m + ' хв';
+  if (m === 0) return h + ' год';
+  return h + ' год ' + m + ' хв';
+}
+// <input type="datetime-local"> value/Date-конвертація завжди йде через
+// локальний час браузера в обидва боки (ніколи напряму UTC-рядком) — це і є
+// весь фікс бага "поставила 12:30, а показує 15:30" (Postgres інтерпретував
+// рядок без офсету як UTC, тому Київський +3 "губився"/додавався по колу).
+function toDatetimeLocalValue(isoString) {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function localValueToISO(value) {
+  if (!value) return null;
+  return new Date(value).toISOString();
+}
+
 let toastTimer = null;
 function showToast(msg) {
   const el = document.getElementById('toast');
@@ -1822,6 +1850,8 @@ async function loadDictionaries() {
   document.getElementById('appStatusSelect').innerHTML = data.applicationStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
   document.getElementById('appRejectionReason').innerHTML = [...data.rejectionReasonsCompany, ...data.rejectionReasonsCandidate].map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
   document.getElementById('ivType').innerHTML = data.interviewTypes.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
+  document.getElementById('ivStatus').innerHTML = data.interviewStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
+  document.getElementById('ivDuration').innerHTML = INTERVIEW_DURATION_OPTIONS.map((m) => `<option value="${m}">${formatDuration(m)}</option>`).join('');
 
   document.getElementById('oooStatus').innerHTML = data.oneOnOneStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
   document.getElementById('prStatus').innerHTML = data.performanceReviewStatuses.map((s) => `<option value="${s}">${statusLabel(s)}</option>`).join('');
@@ -6689,53 +6719,103 @@ async function saveApplicationStageStatus() {
   renderApplicationDetail();
 }
 
+function ivTimeRangeLabel(iv) {
+  if (!iv.scheduled_at) return 'дата не призначена';
+  const start = new Date(iv.scheduled_at);
+  const end = new Date(start.getTime() + (iv.duration_minutes || 60) * 60000);
+  const startStr = start.toLocaleString('uk-UA');
+  const sameDay = start.toDateString() === end.toDateString();
+  const endStr = sameDay
+    ? end.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })
+    : end.toLocaleString('uk-UA');
+  return `${startStr}–${endStr} (${formatDuration(iv.duration_minutes || 60)})`;
+}
+
 function renderApplicationInterviews(interviews) {
+  window._currentInterviews = interviews;
   document.getElementById('applicationInterviews').innerHTML = interviews.length ? interviews.map((iv) => `
     <div class="historyCard">
       <div class="historyTitle">${escAttr(iv.interview_type || "Інтерв'ю")} ${ivStatusTag(iv.status)}</div>
-      <div class="historyMeta">${iv.scheduled_at ? new Date(iv.scheduled_at).toLocaleString('uk-UA') : 'дата не призначена'}${iv.participants ? ' · ' + escAttr(iv.participants) : ''}</div>
+      <div class="historyMeta">${ivTimeRangeLabel(iv)}${iv.participants ? ' · ' + escAttr(iv.participants) : ''}</div>
       ${iv.notes ? '<div class="historyMeta">' + escAttr(iv.notes) + '</div>' : ''}
       ${iv.decision ? '<div class="historyMeta">Рішення: ' + escAttr(iv.decision) + '</div>' : ''}
-      <div style="margin-top:6px;"><button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="editInterview(${iv.id})">✎ Оновити</button></div>
+      <div style="margin-top:6px; display:flex; gap:6px;">
+        <button class="secondary" style="font-size:11px; padding:4px 8px;" onclick="openEditInterview(${iv.id})">✎ Редагувати</button>
+        <button class="bad" style="font-size:11px; padding:4px 8px;" onclick="deleteInterviewCard(${iv.id})">🗑 Видалити</button>
+      </div>
     </div>
   `).join('') : "<p style=\"color:var(--muted);\">Ще немає інтерв'ю.</p>";
 }
 
+function updateIvEndTimePreview() {
+  const value = document.getElementById('ivScheduledAt').value;
+  const duration = Number(document.getElementById('ivDuration').value) || 60;
+  const el = document.getElementById('ivEndTimePreview');
+  if (!value) { el.textContent = ''; return; }
+  const start = new Date(value);
+  const end = new Date(start.getTime() + duration * 60000);
+  el.textContent = 'Закінчення: ' + end.toLocaleString('uk-UA');
+}
+document.getElementById('ivScheduledAt').addEventListener('change', updateIvEndTimePreview);
+document.getElementById('ivDuration').addEventListener('change', updateIvEndTimePreview);
+
 function openAddInterview() {
+  document.getElementById('interviewOverlayTitle').textContent = "Нове інтерв'ю";
+  document.getElementById('ivId').value = '';
   document.getElementById('ivType').value = window._dict.interviewTypes[0] || '';
+  document.getElementById('ivStatus').value = 'Scheduled';
   document.getElementById('ivScheduledAt').value = '';
+  document.getElementById('ivDuration').value = '60';
   document.getElementById('ivParticipants').value = '';
   document.getElementById('ivNotes').value = '';
+  document.getElementById('ivDecision').value = '';
+  updateIvEndTimePreview();
+  document.getElementById('interviewOverlay').classList.add('open');
+}
+
+function openEditInterview(id) {
+  const iv = (window._currentInterviews || []).find((x) => x.id === id);
+  if (!iv) return;
+  document.getElementById('interviewOverlayTitle').textContent = "Редагувати інтерв'ю";
+  document.getElementById('ivId').value = iv.id;
+  document.getElementById('ivType').value = iv.interview_type || window._dict.interviewTypes[0] || '';
+  document.getElementById('ivStatus').value = iv.status || 'Scheduled';
+  document.getElementById('ivScheduledAt').value = toDatetimeLocalValue(iv.scheduled_at);
+  document.getElementById('ivDuration').value = String(iv.duration_minutes || 60);
+  document.getElementById('ivParticipants').value = iv.participants || '';
+  document.getElementById('ivNotes').value = iv.notes || '';
+  document.getElementById('ivDecision').value = iv.decision || '';
+  updateIvEndTimePreview();
   document.getElementById('interviewOverlay').classList.add('open');
 }
 
 document.getElementById('btnSaveInterview').onclick = async () => {
+  const id = document.getElementById('ivId').value;
   const body = {
     interview_type: document.getElementById('ivType').value,
-    scheduled_at: document.getElementById('ivScheduledAt').value || null,
+    status: document.getElementById('ivStatus').value,
+    scheduled_at: localValueToISO(document.getElementById('ivScheduledAt').value),
+    duration_minutes: Number(document.getElementById('ivDuration').value) || 60,
     participants: document.getElementById('ivParticipants').value.trim(),
-    notes: document.getElementById('ivNotes').value.trim()
+    notes: document.getElementById('ivNotes').value.trim(),
+    decision: document.getElementById('ivDecision').value.trim()
   };
-  const resp = await apiFetch('/api/applications/' + currentApplicationId + '/interviews', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const url = id ? '/api/interviews/' + id : '/api/applications/' + currentApplicationId + '/interviews';
+  const resp = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await resp.json();
   if (!data.ok) { showToast(data.error || 'Не вдалося зберегти'); return; }
   closeOverlay('interviewOverlay');
-  showToast("Інтерв'ю додано");
+  showToast(id ? 'Оновлено' : "Інтерв'ю додано");
   renderApplicationDetail();
 };
 
-function editInterview(id) {
-  const input = prompt('Статус (' + window._dict.interviewStatuses.map(statusLabel).join(', ') + '):', statusLabel('Completed'));
-  if (!input) return;
-  const status = window._dict.interviewStatuses.find((s) => statusLabel(s) === input) || (window._dict.interviewStatuses.includes(input) ? input : null);
-  if (!status) { showToast('Невідомий статус'); return; }
-  const decision = prompt('Рішення (короткий текст, необов’язково):', '') || '';
-  apiFetch('/api/interviews/' + id, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status, decision }) })
-    .then((r) => r.json()).then((data) => {
-      if (!data.ok) { showToast(data.error || 'Не вдалося оновити'); return; }
-      showToast('Оновлено');
-      renderApplicationDetail();
-    });
+async function deleteInterviewCard(id) {
+  if (!confirm("Видалити це інтерв'ю?")) return;
+  const resp = await apiFetch('/api/interviews/' + id + '/delete', { method: 'POST' });
+  const data = await resp.json();
+  if (!data.ok) { showToast(data.error || 'Не вдалося видалити'); return; }
+  showToast('Видалено');
+  renderApplicationDetail();
 }
 
 function renderApplicationOffers(offers) {
