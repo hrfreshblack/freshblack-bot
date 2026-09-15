@@ -517,6 +517,9 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_hr_interviews_application ON hr_interviews(application_id);
+    -- Тривалість — за замовчуванням 60 хв (стара поведінка "точка в часі"
+    -- для вже наявних записів); UI обмежує 15-180 хв кроком по 15.
+    ALTER TABLE hr_interviews ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 60;
 
     -- Offer: Accepted створює Future Employee РІВНО ОДИН РАЗ (employee_id
     -- фіксує це — ТЗ п.37 idempotent).
@@ -3046,14 +3049,20 @@ async function hireFromApplication(applicationId, { start_date }, actor) {
 // Recruitment / ATS — Interviews
 // ---------------------------------------------------------------------
 
-async function createInterview({ application_id, interview_type, scheduled_at, participants, notes }, created_by) {
+function clampInterviewDuration(minutes) {
+  const n = Number(minutes);
+  if (!Number.isFinite(n) || n <= 0) return 60;
+  return Math.min(180, Math.max(15, Math.round(n / 15) * 15));
+}
+
+async function createInterview({ application_id, interview_type, scheduled_at, duration_minutes, participants, notes }, created_by) {
   if (interview_type && !INTERVIEW_TYPES.includes(interview_type)) {
     throw new Error(`Unknown interview type: ${interview_type}`);
   }
   const { rows } = await pool.query(
-    `INSERT INTO hr_interviews (application_id, interview_type, scheduled_at, participants, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [application_id, interview_type || '', scheduled_at || null, participants || '', notes || '', created_by || '']
+    `INSERT INTO hr_interviews (application_id, interview_type, scheduled_at, duration_minutes, participants, notes, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    [application_id, interview_type || '', scheduled_at || null, clampInterviewDuration(duration_minutes), participants || '', notes || '', created_by || '']
   );
   return rows[0];
 }
@@ -3066,21 +3075,31 @@ async function listInterviewsForApplication(applicationId) {
   return rows;
 }
 
-async function updateInterview(id, { status, notes, decision, scheduled_at, participants }) {
+async function updateInterview(id, { status, notes, decision, scheduled_at, duration_minutes, participants, interview_type }) {
   if (status && !INTERVIEW_STATUSES.includes(status)) {
     throw new Error(`Unknown interview status: ${status}`);
   }
+  if (interview_type && !INTERVIEW_TYPES.includes(interview_type)) {
+    throw new Error(`Unknown interview type: ${interview_type}`);
+  }
   const { rows } = await pool.query(
     `UPDATE hr_interviews SET
-       status = COALESCE($2, status),
-       notes = COALESCE($3, notes),
-       decision = COALESCE($4, decision),
-       scheduled_at = COALESCE($5, scheduled_at),
-       participants = COALESCE($6, participants)
+       interview_type = COALESCE($2, interview_type),
+       status = COALESCE($3, status),
+       notes = COALESCE($4, notes),
+       decision = COALESCE($5, decision),
+       scheduled_at = COALESCE($6, scheduled_at),
+       duration_minutes = COALESCE($7, duration_minutes),
+       participants = COALESCE($8, participants)
      WHERE id = $1 RETURNING *`,
-    [id, status ?? null, notes ?? null, decision ?? null, scheduled_at ?? null, participants ?? null]
+    [id, interview_type ?? null, status ?? null, notes ?? null, decision ?? null, scheduled_at ?? null,
+      duration_minutes != null ? clampInterviewDuration(duration_minutes) : null, participants ?? null]
   );
   return rows[0] || null;
+}
+
+async function deleteInterview(id) {
+  await pool.query('DELETE FROM hr_interviews WHERE id = $1', [id]);
 }
 
 // ---------------------------------------------------------------------
@@ -6037,6 +6056,7 @@ export default {
   createInterview,
   listInterviewsForApplication,
   updateInterview,
+  deleteInterview,
   createOffer,
   getOffer,
   updateOffer,
