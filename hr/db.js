@@ -4448,10 +4448,16 @@ function monthsBetween(startDate, endDate) {
 }
 
 // Нараховані дні відпустки — стандарт 24 к.д./рік, пропорційно стажу (2 дні
-// за кожен повний відпрацьований місяць від first_hire_date). Використані —
-// сума робочих днів по всіх погоджених (Approved) заявках типу Vacation,
-// незалежно від джерела (вручну внесені чи через бота — listAbsences уже їх
-// об'єднує). Без first_hire_date порахувати нема від чого — повертає null.
+// за кожен повний відпрацьований місяць від first_hire_date). Це КАЛЕНДАРНІ
+// дні (українське законодавство рахує щорічну відпустку саме в к.д.).
+// Використані раніше рахувались у РОБОЧИХ днях (той самий workdays, що
+// показується в списку відсутностей як довідкова інформація) — тобто
+// нараховано в одних одиницях, списувалось в інших, і залишок виходив
+// завищеним щоразу, коли відпустка захоплювала вихідні (реальний баг,
+// знайдений при аналізі коду; типовий тиждень відпустки — 7 календарних,
+// але лише 5 робочих днів, різниця "губилась"). Тепер used теж у
+// календарних днях (кінець − початок + 1 на кожну заявку) — узгоджено з
+// accrued. Без first_hire_date порахувати нема від чого — повертає null.
 async function getVacationBalance(employeeId) {
   const { rows } = await pool.query('SELECT first_hire_date FROM hr_employees WHERE id = $1', [employeeId]);
   if (!rows[0] || !rows[0].first_hire_date) return { accrued: null, used: 0, remaining: null };
@@ -4462,7 +4468,11 @@ async function getVacationBalance(employeeId) {
   const absences = await listAbsences({ employee_id: employeeId });
   const used = absences
     .filter((a) => a.type === 'Vacation' && a.status === 'Approved')
-    .reduce((sum, a) => sum + (a.workdays || 0), 0);
+    .reduce((sum, a) => {
+      if (!a.start_date || !a.end_date) return sum;
+      const calendarDays = Math.round((new Date(a.end_date) - new Date(a.start_date)) / 86400000) + 1;
+      return sum + Math.max(0, calendarDays);
+    }, 0);
 
   return { accrued, used, remaining: Math.round((accrued - used) * 10) / 10 };
 }
